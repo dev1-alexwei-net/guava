@@ -4,51 +4,105 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Guava file explorer</title>
+  <title>Guava · File explorer</title>
+  <link href="/static/bootstrap.min.css" rel="stylesheet">
 </head>
-<body>
-  <header>
-    <h1>Guava file explorer</h1>
-    <nav aria-label="Breadcrumb">
-      <a href="/">Root</a>
-      {{range .Breadcrumbs}} / <a href="{{.URL}}">{{.Name}}</a>{{end}}
-    </nav>
-  </header>
-  {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
-  {{if .ParentURL}}<p><a href="{{.ParentURL}}">Parent directory</a></p>{{end}}
-  <main>
-    <ul>
-      {{range .Items}}
-      <li>
-        {{if .IsDir}}<a href="{{.URL}}">{{.Name}}/</a>{{else}}<a href="{{.URL}}">{{.Name}}</a> ({{.Size}} bytes){{end}}
-        <form action="/rename" method="post">
-          <input type="hidden" name="old" value="{{.Path}}">
-          <label>Rename to <input name="new" value="{{.Name}}" required></label>
-          <button type="submit">Rename</button>
-        </form>
-        <form action="/delete" method="post">
-          <input type="hidden" name="path" value="{{.Path}}">
-          <button type="submit">Delete</button>
-        </form>
-      </li>
-      {{else}}<li>This directory is empty.</li>{{end}}
-    </ul>
-    <section aria-label="Create directory">
-      <h2>New directory</h2>
-      <form action="/mkdir" method="post">
-        <input type="hidden" name="parent" value="{{.Current}}">
-        <label>Name <input name="name" required></label>
-        <button type="submit">Create</button>
-      </form>
-    </section>
-    <section aria-label="Upload file">
-      <h2>Upload file</h2>
-      <form action="/upload" method="post" enctype="multipart/form-data">
-        <input type="hidden" name="parent" value="{{.Current}}">
-        <label>File <input type="file" name="file" required></label>
-        <button type="submit">Upload</button>
-      </form>
-    </section>
+<body class="bg-body-tertiary">
+  <nav class="navbar border-bottom bg-body">
+    <div class="container py-2">
+      <a class="navbar-brand fw-semibold" href="/">Guava</a>
+      <span class="navbar-text text-body-secondary">File explorer</span>
+    </div>
+  </nav>
+
+  <main class="container py-4 py-lg-5">
+    <div class="row justify-content-center">
+      <div class="col-12 col-xxl-10">
+        <nav aria-label="Breadcrumb">
+          <ol class="breadcrumb mb-3">
+            <li class="breadcrumb-item"><a href="/">Root</a></li>
+            {{range .Breadcrumbs}}<li class="breadcrumb-item"><a href="{{.URL}}">{{.Name}}</a></li>{{end}}
+          </ol>
+        </nav>
+
+        <header class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-end gap-3 mb-4">
+          <div>
+            <h1 class="h3 mb-1">Files</h1>
+            <p class="text-body-secondary mb-0">Browse and manage this directory.</p>
+          </div>
+          {{if .ParentURL}}<a class="btn btn-outline-secondary" href="{{.ParentURL}}">Parent directory</a>{{end}}
+        </header>
+
+        {{if .Error}}<div class="alert alert-danger" role="alert">{{.Error}}</div>{{end}}
+
+        <section class="card shadow-sm border-0 mb-4" aria-label="Directory contents">
+          <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">
+            <h2 class="h6 mb-0">Contents</h2>
+            <span class="badge rounded-pill text-bg-secondary">{{len .Items}} items</span>
+          </div>
+          <ul class="list-group list-group-flush">
+            {{range .Items}}
+            <li class="list-group-item p-3">
+              <div class="d-flex flex-column flex-xl-row justify-content-between align-items-xl-center gap-3">
+                <div class="d-flex align-items-start gap-3 flex-grow-1">
+                  <span class="badge rounded-pill {{if .IsDir}}text-bg-primary{{else}}text-bg-light border text-body-secondary{{end}} mt-1">{{if .IsDir}}Folder{{else}}File{{end}}</span>
+                  <div class="flex-grow-1">
+                    <a class="d-block link-body-emphasis fw-medium text-break" href="{{.URL}}">{{.Name}}{{if .IsDir}}/{{end}}</a>
+                    {{if not .IsDir}}<small class="text-body-secondary">{{.Size}} bytes</small>{{end}}
+                  </div>
+                </div>
+                <div class="d-flex flex-column flex-sm-row flex-wrap gap-2">
+                  <form action="/rename" method="post" class="d-flex flex-column flex-sm-row gap-2">
+                    <input type="hidden" name="old" value="{{.Path}}">
+                    <input class="form-control form-control-sm" name="new" value="{{.Name}}" aria-label="New name for {{.Name}}" required>
+                    <button class="btn btn-outline-secondary btn-sm" type="submit">Rename</button>
+                  </form>
+                  <form action="/delete" method="post">
+                    <input type="hidden" name="path" value="{{.Path}}">
+                    <button class="btn btn-outline-danger btn-sm w-100" type="submit" aria-label="Delete {{.Name}}">Delete</button>
+                  </form>
+                </div>
+              </div>
+            </li>
+            {{else}}
+            <li class="list-group-item">
+              <div class="text-center py-5">
+                <p class="h5 mb-1">This directory is empty</p>
+                <p class="text-body-secondary mb-0">Create a folder or upload a file to get started.</p>
+              </div>
+            </li>
+            {{end}}
+          </ul>
+        </section>
+
+        <div class="row g-3">
+          <div class="col-12 col-lg-6">
+            <section class="card h-100 shadow-sm border-0" aria-labelledby="mkdir-heading">
+              <div class="card-body">
+                <h2 class="h5" id="mkdir-heading">New folder</h2>
+                <form action="/mkdir" method="post" class="d-flex flex-column flex-sm-row gap-2">
+                  <input type="hidden" name="parent" value="{{.Current}}">
+                  <input class="form-control" name="name" aria-label="Folder name" required>
+                  <button class="btn btn-primary" type="submit">Create folder</button>
+                </form>
+              </div>
+            </section>
+          </div>
+          <div class="col-12 col-lg-6">
+            <section class="card h-100 shadow-sm border-0" aria-labelledby="upload-heading">
+              <div class="card-body">
+                <h2 class="h5" id="upload-heading">Upload a file</h2>
+                <form action="/upload" method="post" enctype="multipart/form-data" class="d-flex flex-column gap-2">
+                  <input type="hidden" name="parent" value="{{.Current}}">
+                  <label class="form-label mb-0">Choose a file<input class="form-control mt-1" type="file" name="file" required></label>
+                  <button class="btn btn-outline-primary align-self-sm-start" type="submit">Upload file</button>
+                </form>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
 </body>
 </html>

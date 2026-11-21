@@ -13,9 +13,14 @@ func TestHandlerListsDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	store := openTestStore(t)
+	handler, err := newHandler(root, store)
+	if err != nil {
+		t.Fatalf("newHandler: %v", err)
+	}
 
 	recorder := httptest.NewRecorder()
-	handler(root).ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))
+	handler.ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))
 
 	if recorder.Code != 200 {
 		t.Fatalf("status = %d, want 200", recorder.Code)

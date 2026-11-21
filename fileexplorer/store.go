@@ -58,12 +58,15 @@ func (s *Store) List(dirPath string) ([]Entry, error) {
 
 	if dirPath == "" || dirPath == "." {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT path, name, is_dir, size, mtime FROM files WHERE path NOT LIKE '%/%' ORDER BY name`)
+			`SELECT path, name, is_dir, size, mtime FROM files WHERE instr(path, '/') = 0 ORDER BY name`)
 	} else {
 		prefix := strings.TrimSuffix(dirPath, "/") + "/"
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT path, name, is_dir, size, mtime FROM files WHERE path LIKE ? AND path NOT LIKE ? ORDER BY name`,
-			prefix+"%", prefix+"%/%")
+			`SELECT path, name, is_dir, size, mtime FROM files
+			 WHERE substr(path, 1, length(?)) = ?
+			   AND instr(substr(path, length(?) + 1), '/') = 0
+			 ORDER BY name`,
+			prefix, prefix, prefix)
 	}
 	if err != nil {
 		return nil, err

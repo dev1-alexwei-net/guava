@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-//go:embed templates/index.html
+//go:embed templates/index.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
 var pageFiles embed.FS
 
 var pageTemplate = template.Must(template.ParseFS(pageFiles, "templates/index.html"))

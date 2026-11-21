@@ -55,6 +55,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	mux.Handle("GET /d/{$}", e.serialized(e.rootPage))
 	mux.Handle("GET /d/{path...}", e.serialized(e.directoryPage))
 	mux.Handle("GET /f/{path...}", e.serialized(e.filePage))
+	mux.HandleFunc("GET /static/bootstrap.min.css", bootstrapStylesheet)
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		mux.Handle(method+" /mkdir", e.serialized(e.mkdir))
 		mux.Handle(method+" /rename", e.serialized(e.rename))

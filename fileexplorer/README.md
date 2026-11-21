@@ -30,6 +30,12 @@ The server handles SIGINT and SIGTERM with a five-second graceful-shutdown timeo
 
 The embedded HTML page uses regular links and forms. Mutations return a newly rendered page; there are no JSON endpoints, `fetch` calls, or client-side scripts.
 
+## Responsive styling and assets
+
+The page uses Bootstrap v5.3.8 CSS from the official [`twbs/bootstrap`](https://github.com/twbs/bootstrap) project. The stylesheet is bundled at `fileexplorer/static/bootstrap.min.css`, embedded with the HTML template, and served from `GET /static/bootstrap.min.css`. The Bootstrap MIT license is included at `fileexplorer/static/BOOTSTRAP-LICENSE.txt`.
+
+The template uses Bootstrap's responsive layout classes and the standard viewport metadata. The stylesheet is served by this Go application; it is not loaded from a CDN. Bootstrap JavaScript and custom browser-side JavaScript are not included.
+
 ## Filesystem and SQLite behavior
 
 The filesystem is synchronized into SQLite before each directory page is rendered. `Store.Sync` walks the configured root, stores slash-separated paths relative to that root, skips symlinks, and atomically replaces the `files` table. The filesystem remains authoritative; the database is a queryable replica used for directory listings. Listings include direct children only, with directories before files and names sorted within each group.

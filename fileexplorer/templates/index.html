@@ -27,14 +27,47 @@
 
         <header class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-end gap-3 mb-4">
           <div>
-            <h1 class="h3 mb-1">Files</h1>
+            {{if .Editor}}<h1 class="h3 mb-1">Edit file</h1>
+            {{else if .ConfirmDelete}}<h1 class="h3 mb-1">Confirm deletion</h1>
+            {{else}}<h1 class="h3 mb-1">Files</h1>{{end}}
             <p class="text-body-secondary mb-0">Browse and manage this directory.</p>
           </div>
-          {{if .ParentURL}}<a class="btn btn-outline-secondary" href="{{.ParentURL}}">Parent directory</a>{{end}}
+          {{if .ParentURL}}<a class="btn btn-outline-secondary" href="{{.ParentURL}}">Back to directory</a>{{end}}
         </header>
 
         {{if .Error}}<div class="alert alert-danger" role="alert">{{.Error}}</div>{{end}}
 
+        {{if .Editor}}
+        {{if .Saved}}<div class="alert alert-success" role="status">File saved.</div>{{end}}
+        <section class="card shadow-sm border-0 mb-4" aria-labelledby="editor-heading">
+          <div class="card-header bg-body d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2">
+            <h2 class="h5 mb-0 text-break" id="editor-heading">{{.EditorPath}}</h2>
+            <span class="text-body-secondary small">UTF-8 text · maximum 1 MiB</span>
+          </div>
+          <div class="card-body">
+            <form action="{{.EditorURL}}" method="post">
+              <label class="form-label" for="editor-content">File contents</label>
+              <textarea class="form-control font-monospace" id="editor-content" name="content" rows="22" spellcheck="false">{{.Content}}</textarea>
+              <div class="d-flex flex-column flex-sm-row gap-2 mt-3">
+                <button class="btn btn-primary" type="submit">Save changes</button>
+                <a class="btn btn-outline-secondary" href="{{.ParentURL}}">Cancel</a>
+              </div>
+            </form>
+          </div>
+        </section>
+        {{else if .ConfirmDelete}}
+        <section class="card shadow-sm border-0 mb-4" aria-labelledby="delete-heading">
+          <div class="card-body">
+            <h2 class="h4" id="delete-heading">Delete {{.DeleteName}}?</h2>
+            <p class="text-body-secondary">This permanently removes this entry and its contents. This action cannot be undone.</p>
+            <form action="/delete" method="post" class="d-flex flex-column flex-sm-row gap-2">
+              <input type="hidden" name="path" value="{{.DeletePath}}">
+              <button class="btn btn-danger" type="submit">Confirm delete</button>
+              <a class="btn btn-outline-secondary" href="{{.ReturnURL}}">Cancel</a>
+            </form>
+          </div>
+        </section>
+        {{else}}
         <section class="card shadow-sm border-0 mb-4" aria-label="Directory contents">
           <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">
             <h2 class="h6 mb-0">Contents</h2>
@@ -52,15 +85,13 @@
                   </div>
                 </div>
                 <div class="d-flex flex-column flex-sm-row flex-wrap gap-2">
+                  {{if not .IsDir}}<a class="btn btn-outline-primary btn-sm" href="{{.EditURL}}">Edit</a><a class="btn btn-outline-secondary btn-sm" href="{{.DownloadURL}}">Download</a>{{end}}
                   <form action="/rename" method="post" class="d-flex flex-column flex-sm-row gap-2">
                     <input type="hidden" name="old" value="{{.Path}}">
                     <input class="form-control form-control-sm" name="new" value="{{.Name}}" aria-label="New name for {{.Name}}" required>
                     <button class="btn btn-outline-secondary btn-sm" type="submit">Rename</button>
                   </form>
-                  <form action="/delete" method="post">
-                    <input type="hidden" name="path" value="{{.Path}}">
-                    <button class="btn btn-outline-danger btn-sm w-100" type="submit" aria-label="Delete {{.Name}}">Delete</button>
-                  </form>
+                  <a class="btn btn-outline-danger btn-sm" href="{{.DeleteURL}}" aria-label="Delete {{.Name}}">Delete</a>
                 </div>
               </div>
             </li>
@@ -68,7 +99,7 @@
             <li class="list-group-item">
               <div class="text-center py-5">
                 <p class="h5 mb-1">This directory is empty</p>
-                <p class="text-body-secondary mb-0">Create a folder or upload a file to get started.</p>
+                <p class="text-body-secondary mb-0">Create a folder or file, or upload a file to get started.</p>
               </div>
             </li>
             {{end}}
@@ -76,11 +107,11 @@
         </section>
 
         <div class="row g-3">
-          <div class="col-12 col-lg-6">
+          <div class="col-12 col-lg-4">
             <section class="card h-100 shadow-sm border-0" aria-labelledby="mkdir-heading">
               <div class="card-body">
                 <h2 class="h5" id="mkdir-heading">New folder</h2>
-                <form action="/mkdir" method="post" class="d-flex flex-column flex-sm-row gap-2">
+                <form action="/mkdir" method="post" class="d-flex flex-column gap-2">
                   <input type="hidden" name="parent" value="{{.Current}}">
                   <input class="form-control" name="name" aria-label="Folder name" required>
                   <button class="btn btn-primary" type="submit">Create folder</button>
@@ -88,7 +119,19 @@
               </div>
             </section>
           </div>
-          <div class="col-12 col-lg-6">
+          <div class="col-12 col-lg-4">
+            <section class="card h-100 shadow-sm border-0" aria-labelledby="new-file-heading">
+              <div class="card-body">
+                <h2 class="h5" id="new-file-heading">New empty file</h2>
+                <form action="/create-file" method="post" class="d-flex flex-column gap-2">
+                  <input type="hidden" name="parent" value="{{.Current}}">
+                  <input class="form-control" name="name" aria-label="File name" required>
+                  <button class="btn btn-outline-primary" type="submit">Create file</button>
+                </form>
+              </div>
+            </section>
+          </div>
+          <div class="col-12 col-lg-4">
             <section class="card h-100 shadow-sm border-0" aria-labelledby="upload-heading">
               <div class="card-body">
                 <h2 class="h5" id="upload-heading">Upload a file</h2>
@@ -101,6 +144,7 @@
             </section>
           </div>
         </div>
+        {{end}}
       </div>
     </div>
   </main>

@@ -163,6 +163,15 @@ func TestHandlerRejectsTraversalAndSymlinkEscape(t *testing.T) {
 			want: http.StatusForbidden,
 		},
 		{
+			name: "symlink editor read",
+			run: func() *httptest.ResponseRecorder {
+				recorder := httptest.NewRecorder()
+				h.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/edit/escape/secret.txt", nil))
+				return recorder
+			},
+			want: http.StatusForbidden,
+		},
+		{
 			name: "symlink mutation",
 			run: func() *httptest.ResponseRecorder {
 				return formRequest(t, h, http.MethodPost, "/delete", url.Values{"path": {"escape/secret.txt"}})

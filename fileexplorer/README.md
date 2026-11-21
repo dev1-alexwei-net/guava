@@ -22,13 +22,18 @@ The server handles SIGINT and SIGTERM with a five-second graceful-shutdown timeo
 
 - `GET /` browses the root directory.
 - `GET /d/<path>` browses a subdirectory.
-- `GET /f/<path>` serves a file under the configured root.
+- `GET /f/<path>` serves a file under the configured root; append `?download=1` to download it.
+- `GET /edit/<path>` opens a UTF-8 text file in the built-in editor; `POST /edit/<path>` saves it.
+- `GET /confirm-delete/<path>` displays a confirmation page before a delete form is submitted.
 - `POST` or `PUT /mkdir` accepts `parent` and `name`.
+- `POST` or `PUT /create-file` accepts `parent` and `name` and creates a new empty file.
 - `POST` or `PUT /rename` accepts `old` and `new` (the new value is a single sibling name).
-- `POST` or `PUT /delete` accepts `path`.
+- `POST` or `PUT /delete` accepts `path`; the UI first asks for confirmation on `GET /confirm-delete/<path>`.
 - `POST` or `PUT /upload` accepts multipart form fields `parent` and `file`; uploads are limited to 32 MiB.
 
-The embedded HTML page uses regular links and forms. Mutations return a newly rendered page; there are no JSON endpoints, `fetch` calls, or client-side scripts.
+The editor accepts regular files containing valid UTF-8 text without NUL bytes, up to 1 MiB. Saves are written to a temporary file in the same directory and atomically replaced; the existing file's permission bits are retained. Larger files and non-text files are not editable, but can still be served or downloaded.
+
+The embedded HTML page uses regular links and forms. Directory mutations return a newly rendered page; editor saves redirect back to the editor with a success message. There are no JSON endpoints, `fetch` calls, or client-side scripts.
 
 ## Responsive styling and assets
 
@@ -38,7 +43,7 @@ The template uses Bootstrap's responsive layout classes and the standard viewpor
 
 ## Filesystem and SQLite behavior
 
-The filesystem is synchronized into SQLite before each directory page is rendered. `Store.Sync` walks the configured root, stores slash-separated paths relative to that root, skips symlinks, and atomically replaces the `files` table. The filesystem remains authoritative; the database is a queryable replica used for directory listings. Listings include direct children only, with directories before files and names sorted within each group.
+The filesystem is synchronized into SQLite before each directory page is rendered. `Store.Sync` walks the configured root, stores slash-separated paths relative to that root, skips symlinks, and atomically replaces the `files` table. The filesystem remains authoritative; the database is a queryable replica used for directory listings. Paths are validated relative to the configured root, symlink components are rejected, and filesystem mutations use Go's rooted filesystem APIs to prevent escaping the root. Listings include direct children only, with directories before files and names sorted within each group.
 
 The SQLite driver is [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite), which supports `CGO_ENABLED=0`. The service uses only the Go `database/sql` API and the SQLite driver.
 

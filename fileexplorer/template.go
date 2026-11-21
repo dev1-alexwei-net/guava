@@ -12,11 +12,20 @@ var pageFiles embed.FS
 var pageTemplate = template.Must(template.ParseFS(pageFiles, "templates/index.html"))
 
 type pageData struct {
-	Current     string
-	Breadcrumbs []breadcrumb
-	ParentURL   string
-	Items       []pageItem
-	Error       string
+	Current       string
+	Breadcrumbs   []breadcrumb
+	ParentURL     string
+	Items         []pageItem
+	Error         string
+	Editor        bool
+	EditorPath    string
+	EditorURL     string
+	Content       string
+	Saved         bool
+	ConfirmDelete bool
+	DeletePath    string
+	DeleteName    string
+	ReturnURL     string
 }
 
 type breadcrumb struct {
@@ -25,11 +34,14 @@ type breadcrumb struct {
 }
 
 type pageItem struct {
-	Name  string
-	Path  string
-	URL   string
-	IsDir bool
-	Size  int64
+	Name        string
+	Path        string
+	URL         string
+	EditURL     string
+	DownloadURL string
+	DeleteURL   string
+	IsDir       bool
+	Size        int64
 }
 
 func renderPage(w io.Writer, data pageData) error {

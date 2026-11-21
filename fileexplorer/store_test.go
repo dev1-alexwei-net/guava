@@ -152,3 +152,22 @@ func TestListIsDir(t *testing.T) {
 		t.Fatalf("unexpected dir path: %q", dir.Path)
 	}
 }
+
+func TestListTreatsWildcardCharactersLiterally(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.ReplaceAll([]Entry{
+		{Path: "literal%_/wanted.txt", Name: "wanted.txt"},
+		{Path: "literalAA/other.txt", Name: "other.txt"},
+		{Path: "literal%_/nested/hidden.txt", Name: "hidden.txt"},
+	}); err != nil {
+		t.Fatalf("ReplaceAll: %v", err)
+	}
+
+	got, err := s.List("literal%_")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "literal%_/wanted.txt" {
+		t.Fatalf("List returned unexpected entries: %+v", got)
+	}
+}

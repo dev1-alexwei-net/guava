@@ -1,4 +1,4 @@
-package fileexplorer
+package main
 
 import (
 	"net/http/httptest"
@@ -15,7 +15,7 @@ func TestHandlerListsDirectory(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	Handler(root).ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))
+	handler(root).ServeHTTP(recorder, httptest.NewRequest("GET", "/", nil))
 
 	if recorder.Code != 200 {
 		t.Fatalf("status = %d, want 200", recorder.Code)

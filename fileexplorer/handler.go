@@ -1,13 +1,13 @@
-// Package fileexplorer contains the server-rendered file explorer HTTP handler.
-package fileexplorer
+// Package main implements a minimal self-contained file explorer HTTP server.
+package main
 
 import (
 	"net/http"
 	"os"
 )
 
-// Handler serves a minimal HTML view of root for the initial workspace scaffold.
-func Handler(root string) http.Handler {
+// Handler serves a minimal HTML view of the given root directory.
+func handler(root string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		entries, err := os.ReadDir(root)
 		if err != nil {

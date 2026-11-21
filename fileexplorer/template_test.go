@@ -22,13 +22,13 @@ func TestRenderPageContainsServerRenderedControls(t *testing.T) {
 		t.Fatalf("renderPage: %v", err)
 	}
 	got := body.String()
-	for _, want := range []string{"Guava file explorer", `href="/d/docs"`, `action="/mkdir"`, `action="/upload"`, `action="/rename"`, `action="/delete"`, "notes.txt"} {
+	for _, want := range []string{"Guava · File explorer", `name="viewport"`, `href="/static/bootstrap.min.css"`, `class="container py-4 py-lg-5"`, `class="col-12 col-lg-6"`, `href="/d/docs"`, `action="/mkdir"`, `action="/upload"`, `action="/rename"`, `action="/delete"`, `aria-label="New name for notes.txt"`, "notes.txt"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rendered page does not contain %q", want)
 		}
 	}
-	if strings.Contains(got, "<script") || strings.Contains(got, "fetch(") || strings.Contains(got, "XMLHttpRequest") {
-		t.Fatal("rendered page contains client-side JavaScript")
+	if strings.Contains(got, "<script") || strings.Contains(got, "fetch(") || strings.Contains(got, "XMLHttpRequest") || strings.Contains(got, "https://") {
+		t.Fatal("rendered page contains JavaScript or a remote asset reference")
 	}
 }
 

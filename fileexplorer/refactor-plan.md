@@ -56,3 +56,9 @@ Use conventional Go source names that describe real responsibilities (for exampl
 - Keep SIGINT/SIGTERM shutdown bounded by the five-second timeout and close the SQLite store after server shutdown.
 
 The retained tests should protect these external contracts and high-risk regressions, rather than private helper structure.
+
+## #64 test-scope review
+
+At the #64 stack point, the suite is consolidated from the 9 baseline `*_test.go` files and 1,668 lines to `server_test.go`, `web_test.go`, and `store_test.go` with 1,060 lines: 36.5% fewer test lines and 66.7% fewer test files. Reproduce the current count with `wc -l fileexplorer/*_test.go`.
+
+Redundant route listing and stylesheet checks were folded into end-to-end route/render checks; repeated preview link, focus, selection, fallback, and responsive-layout assertions were merged into an accessible preview flow and state tables. Rooted path policy remains covered separately from HTTP traversal/symlink tests. Store root ordering and nested direct-child behavior now share one test, and synchronization idempotence is exercised in the add/remove flow. The one-row `Store.Upsert` and `Store.Delete` helpers had no production callers, so they and their private CRUD tests were removed; replica replacement and listing remain covered, including rollback on a failed replacement. BOM decoding, binary/size fallback, downloads, accessibility state, editor/mutation guarantees, route errors, external filesystem refresh, and symlink boundaries remain covered.

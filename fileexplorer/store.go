@@ -86,23 +86,6 @@ func (s *Store) List(dirPath string) ([]Entry, error) {
 	return entries, rows.Err()
 }
 
-// Upsert inserts or updates a single entry.
-func (s *Store) Upsert(e Entry) error {
-	ctx := context.Background()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(path) DO UPDATE SET name=excluded.name, is_dir=excluded.is_dir, size=excluded.size, mtime=excluded.mtime`,
-		e.Path, e.Name, boolToInt(e.IsDir), e.Size, e.Mtime)
-	return err
-}
-
-// Delete removes the entry with the given path.
-func (s *Store) Delete(path string) error {
-	ctx := context.Background()
-	_, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE path = ?`, path)
-	return err
-}
-
 // ReplaceAll atomically replaces all rows in the files table with the given entries.
 func (s *Store) ReplaceAll(entries []Entry) error {
 	ctx := context.Background()

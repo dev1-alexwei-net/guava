@@ -243,3 +243,53 @@ func TestHandlerRejectsTraversalAndSymlinkEscape(t *testing.T) {
 		t.Fatalf("outside file changed: contents=%q err=%v", contents, err)
 	}
 }
+
+func TestRootedFilesystemOwnsPathPolicy(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "note.txt"), []byte("note"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	filesystem, err := openRootedFS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer filesystem.Close()
+
+	for input, relative := range map[string]string{
+		".":              "",
+		"docs//note.txt": "docs/note.txt",
+		"new/deep/file":  "new/deep/file",
+	} {
+		got, err := filesystem.Resolve(input)
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", input, err)
+		}
+		want := filepath.Join(root, filepath.FromSlash(relative))
+		if got != want {
+			t.Errorf("Resolve(%q) = %q, want %q", input, got, want)
+		}
+	}
+	for _, input := range []string{"../outside", "docs/../../outside", filepath.Join(root, "docs", "note.txt")} {
+		if _, err := filesystem.Resolve(input); err != errInvalidPath {
+			t.Errorf("Resolve(%q) error = %v, want %v", input, err, errInvalidPath)
+		}
+	}
+	if _, err := filesystem.Stat("missing.txt"); !os.IsNotExist(err) {
+		t.Errorf("Stat(missing.txt) error = %v, want not-exist", err)
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Logf("symlink test skipped: %v", err)
+		return
+	}
+	if _, err := filesystem.Resolve("escape/secret.txt"); err != errForbidden {
+		t.Errorf("Resolve through symlink error = %v, want %v", err, errForbidden)
+	}
+	if _, err := filesystem.Open("escape/secret.txt"); err != errForbidden {
+		t.Errorf("Open through symlink error = %v, want %v", err, errForbidden)
+	}
+}

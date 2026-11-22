@@ -20,7 +20,7 @@ func TestEditorReadsAndSavesTextFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := makeTestHandler(t, root)
-	target := editorURL("docs/note%.txt")
+	target := newRenderer().EditorURL("docs/note%.txt")
 
 	view := httptest.NewRecorder()
 	h.ServeHTTP(view, httptest.NewRequest(http.MethodGet, target, nil))

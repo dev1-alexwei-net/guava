@@ -18,7 +18,7 @@ func TestRenderPageContainsServerRenderedControls(t *testing.T) {
 			{Name: "notes.txt", Path: "docs/notes.txt", URL: "/f/docs/notes.txt", EditURL: "/edit/docs/notes.txt", DownloadURL: "/f/docs/notes.txt?download=1", DeleteURL: "/confirm-delete/docs/notes.txt", Size: 7},
 		},
 	}
-	if err := renderPage(&body, data); err != nil {
+	if err := newRenderer().Render(&body, data); err != nil {
 		t.Fatalf("renderPage: %v", err)
 	}
 	got := body.String()
@@ -35,7 +35,7 @@ func TestRenderPageContainsServerRenderedControls(t *testing.T) {
 func TestDirectoryPageUsesResponsiveWorkspaceLayout(t *testing.T) {
 	var body bytes.Buffer
 	data := pageData{Items: []pageItem{{Name: "a.txt", Path: "a.txt", URL: "/f/a.txt", EditURL: "/edit/a.txt", DownloadURL: "/f/a.txt?download=1", DeleteURL: "/confirm-delete/a.txt", Size: 1}}}
-	if err := renderPage(&body, data); err != nil {
+	if err := newRenderer().Render(&body, data); err != nil {
 		t.Fatalf("renderPage: %v", err)
 	}
 	got := body.String()
@@ -54,7 +54,7 @@ func TestDirectoryPageUsesResponsiveWorkspaceLayout(t *testing.T) {
 func TestRenderPageEscapesEntryNames(t *testing.T) {
 	var body bytes.Buffer
 	data := pageData{Items: []pageItem{{Name: `<script>alert(1)</script>`, Path: "safe.txt", URL: "/f/safe.txt"}}}
-	if err := renderPage(&body, data); err != nil {
+	if err := newRenderer().Render(&body, data); err != nil {
 		t.Fatalf("renderPage: %v", err)
 	}
 	if strings.Contains(body.String(), `<script>alert(1)</script>`) {

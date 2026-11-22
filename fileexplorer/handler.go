@@ -27,6 +27,7 @@ type explorerHandler struct {
 	store      *Store
 	syncer     *synchronizer
 	mutations  *mutations
+	renderer   *renderer
 	mu         sync.Mutex
 }
 
@@ -39,7 +40,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &explorerHandler{filesystem: filesystem, store: store, syncer: newSynchronizer(store, filesystem), mutations: newMutations(filesystem)}
+	e := &explorerHandler{filesystem: filesystem, store: store, syncer: newSynchronizer(store, filesystem), mutations: newMutations(filesystem), renderer: newRenderer()}
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", e.serialized(e.rootPage))
 	mux.Handle("GET /d/{$}", e.serialized(e.rootPage))
@@ -49,7 +50,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	mux.Handle("POST /edit/{path...}", e.serialized(e.saveFile))
 	mux.Handle("GET /confirm-delete/{path...}", e.serialized(e.confirmDeletePage))
 	mux.Handle("GET /preview/{path...}", e.serialized(e.previewPage))
-	mux.HandleFunc("GET /static/bootstrap.min.css", bootstrapStylesheet)
+	mux.HandleFunc("GET /static/bootstrap.min.css", e.renderer.Stylesheet)
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		mux.Handle(method+" /mkdir", e.serialized(e.mkdir))
 		mux.Handle(method+" /create-file", e.serialized(e.createFile))
@@ -155,29 +156,7 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 		e.renderError(w, http.StatusInternalServerError, "Unable to list directory")
 		return
 	}
-	data := pageData{
-		Current:     current,
-		Breadcrumbs: makeBreadcrumbs(current),
-		ParentURL:   parentURL(current),
-		Items:       make([]pageItem, 0, len(entries)),
-		Error:       pageError,
-	}
-	for _, entry := range entries {
-		item := pageItem{
-			Name:        entry.Name,
-			Path:        entry.Path,
-			URL:         itemURL(entry.Path, entry.IsDir),
-			EditURL:     editorURL(entry.Path),
-			DownloadURL: itemURL(entry.Path, false) + "?download=1",
-			DeleteURL:   "/confirm-delete/" + escapedPath(entry.Path),
-			IsDir:       entry.IsDir,
-			Size:        entry.Size,
-		}
-		if !entry.IsDir {
-			item.PreviewURL = "/preview/" + escapedPath(entry.Path)
-		}
-		data.Items = append(data.Items, item)
-	}
+	data := e.renderer.Directory(current, entries, pageError)
 	e.applyPreview(&data, current, previewRel)
 	e.writePage(w, http.StatusOK, data)
 }
@@ -214,9 +193,7 @@ func (e *explorerHandler) previewPage(w http.ResponseWriter, r *http.Request) {
 	e.renderDirectory(w, parent, rel, "")
 }
 
-// applyPreview fills the preview pane for the file selected in the URL. The
-// file was already validated by previewPage; if it is missing at render time
-// the pane is left empty rather than showing stale content.
+// applyPreview reads the selected file and delegates page-model preparation to the renderer.
 func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
 	if rel == "" {
 		return
@@ -232,33 +209,31 @@ func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
 	if err != nil || !info.Mode().IsRegular() {
 		return
 	}
-	data.PreviewPath = rel
-	data.PreviewName = filepath.Base(rel)
-	data.PreviewReturnURL = itemURL(parent, true)
-	data.PreviewDownloadURL = itemURL(rel, false) + "?download=1"
 	if info.Size() > maxPreviewSize {
-		data.PreviewNote = fmt.Sprintf("This file is too large to preview (maximum %d KiB). Download it instead.", maxPreviewSize>>10)
+		e.renderer.Preview(data, current, rel, previewContent{problem: previewKnownTooLarge})
 		return
 	}
 	file, err := e.filesystem.Open(filepath.ToSlash(rel))
 	if err != nil {
+		e.renderer.Preview(data, current, rel, previewContent{})
 		return
 	}
 	defer file.Close()
 	content, err := io.ReadAll(io.LimitReader(file, maxPreviewSize+1))
 	if err != nil {
+		e.renderer.Preview(data, current, rel, previewContent{})
 		return
 	}
 	if len(content) > maxPreviewSize {
-		data.PreviewNote = "This file is too large to preview. Download it instead."
+		e.renderer.Preview(data, current, rel, previewContent{problem: previewReadTooLarge})
 		return
 	}
 	decoded, ok := decodePreviewText(content)
 	if !ok {
-		data.PreviewNote = "This file does not appear to be UTF-8 text or BOM-marked UTF-16 text, so it cannot be previewed. Download it instead."
+		e.renderer.Preview(data, current, rel, previewContent{problem: previewUnsupported})
 		return
 	}
-	data.PreviewContent = decoded
+	e.renderer.Preview(data, current, rel, previewContent{text: decoded})
 }
 
 func decodePreviewText(content []byte) (string, bool) {
@@ -398,7 +373,7 @@ func (e *explorerHandler) redirectToDirectory(w http.ResponseWriter, r *http.Req
 	if current == "." {
 		current = ""
 	}
-	target := itemURL(current, true)
+	target := e.renderer.ItemURL(current, true)
 	if current == "" {
 		target = "/"
 	}
@@ -446,7 +421,7 @@ func (e *explorerHandler) redirectMutationError(w http.ResponseWriter, r *http.R
 	}
 	target := "/"
 	if current != "" {
-		target = itemURL(current, true)
+		target = e.renderer.ItemURL(current, true)
 	}
 	query := url.Values{"error": {message}, "status": {fmt.Sprint(status)}}
 	http.Redirect(w, r, target+"?"+query.Encode(), http.StatusSeeOther)
@@ -469,52 +444,9 @@ func (e *explorerHandler) redirectMutationPathError(w http.ResponseWriter, r *ht
 }
 
 func (e *explorerHandler) renderError(w http.ResponseWriter, status int, message string) {
-	e.writePage(w, status, pageData{Error: message})
+	e.writePage(w, status, e.renderer.Error(message))
 }
 
 func (e *explorerHandler) writePage(w http.ResponseWriter, status int, data pageData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	_ = renderPage(w, data)
-}
-
-func makeBreadcrumbs(current string) []breadcrumb {
-	if current == "" {
-		return nil
-	}
-	parts := strings.Split(current, "/")
-	crumbs := make([]breadcrumb, 0, len(parts))
-	var accumulated []string
-	for _, part := range parts {
-		accumulated = append(accumulated, part)
-		crumbs = append(crumbs, breadcrumb{Name: part, URL: itemURL(strings.Join(accumulated, "/"), true)})
-	}
-	return crumbs
-}
-
-func parentURL(current string) string {
-	if current == "" {
-		return ""
-	}
-	parent := path.Dir(current)
-	if parent == "." {
-		return "/"
-	}
-	return itemURL(parent, true)
-}
-
-func escapedPath(rel string) string {
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for i, part := range parts {
-		parts[i] = url.PathEscape(part)
-	}
-	return strings.Join(parts, "/")
-}
-
-func itemURL(rel string, isDir bool) string {
-	prefix := "/f/"
-	if isDir {
-		prefix = "/d/"
-	}
-	return prefix + escapedPath(rel)
+	e.renderer.WritePage(w, status, data)
 }

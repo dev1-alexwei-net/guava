@@ -40,6 +40,43 @@ func TestPreviewPageShowsSelectedFileContent(t *testing.T) {
 	}
 }
 
+func TestFilenameLinkNavigatesToPreview(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="/preview/a.txt">a.txt</a>`) {
+		t.Fatal("file name does not link to the preview route")
+	}
+	if strings.Contains(body, `text-break" href="/f/a.txt"`) {
+		t.Fatal("file name still links to the raw file route")
+	}
+}
+
+func TestDirectoryNameLinkNavigatesIntoDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="/d/sub">sub/</a>`) {
+		t.Fatal("directory name does not navigate into the directory")
+	}
+}
+
 func TestPreviewPageBackLinkTargetsParentDirectory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {

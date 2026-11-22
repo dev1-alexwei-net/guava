@@ -44,6 +44,7 @@ type pageItem struct {
 	Name        string
 	Path        string
 	URL         string
+	PreviewURL  string
 	EditURL     string
 	DownloadURL string
 	DeleteURL   string

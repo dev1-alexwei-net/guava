@@ -5,8 +5,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
@@ -50,24 +48,7 @@ func (e *explorerHandler) editorPage(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusUnsupportedMediaType, "This file is not supported by the text editor")
 		return
 	}
-	parent := filepath.ToSlash(filepath.Dir(rel))
-	if parent == "." {
-		parent = ""
-	}
-	cancelURL := parentURL(parent)
-	if cancelURL == "" {
-		cancelURL = "/"
-	}
-	data := pageData{
-		Editor:      true,
-		EditorPath:  rel,
-		EditorURL:   editorURL(rel),
-		Content:     string(content),
-		ParentURL:   cancelURL,
-		Breadcrumbs: makeBreadcrumbs(parent),
-		Saved:       r.URL.Query().Get("saved") == "1",
-	}
-	e.writePage(w, http.StatusOK, data)
+	e.writePage(w, http.StatusOK, e.renderer.Editor(rel, string(content), r.URL.Query().Get("saved") == "1"))
 }
 
 func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
@@ -125,11 +106,7 @@ func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	http.Redirect(w, r, "/edit/"+escapedPath(rel)+"?saved=1", http.StatusSeeOther)
-}
-
-func editorURL(rel string) string {
-	return "/edit/" + escapedPath(rel)
+	http.Redirect(w, r, e.renderer.EditorURL(rel)+"?saved=1", http.StatusSeeOther)
 }
 
 func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
@@ -171,14 +148,5 @@ func (e *explorerHandler) confirmDeletePage(w http.ResponseWriter, r *http.Reque
 		e.pathError(w, errForbidden)
 		return
 	}
-	parent := path.Dir(e.filesystem.Relative(target))
-	if parent == "." {
-		parent = ""
-	}
-	e.writePage(w, http.StatusOK, pageData{
-		ConfirmDelete: true,
-		DeletePath:    filepath.ToSlash(e.filesystem.Relative(target)),
-		DeleteName:    filepath.Base(target),
-		ReturnURL:     parentURL(filepath.ToSlash(parent)),
-	})
+	e.writePage(w, http.StatusOK, e.renderer.DeleteConfirmation(e.filesystem.Relative(target)))
 }

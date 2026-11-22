@@ -45,6 +45,32 @@ func TestListRoot(t *testing.T) {
 	}
 }
 
+func TestListOrdersDirectoriesBeforeFiles(t *testing.T) {
+	s := openTestStore(t)
+	entries := []Entry{
+		{Path: "z.txt", Name: "z.txt"},
+		{Path: "z-dir", Name: "z-dir", IsDir: true},
+		{Path: "a.txt", Name: "a.txt"},
+		{Path: "a-dir", Name: "a-dir", IsDir: true},
+	}
+	if err := s.ReplaceAll(entries); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.List("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a-dir", "z-dir", "a.txt", "z.txt"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].Name != want[i] {
+			t.Fatalf("entry %d = %q, want %q", i, got[i].Name, want[i])
+		}
+	}
+}
+
 func TestListSubdir(t *testing.T) {
 	s := openTestStore(t)
 	entries := []Entry{

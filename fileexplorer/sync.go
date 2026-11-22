@@ -1,58 +1,65 @@
 package main
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
 
-// Sync mirrors root into the replica. The filesystem is opened as a rooted
-// filesystem so scanning stays confined to the configured directory.
-func (s *Store) Sync(rootPath string) (int, error) {
-	root, err := openRootedFS(rootPath)
-	if err != nil {
-		return 0, err
-	}
-	defer root.Close()
-	return s.SyncRoot(root)
+type scanner struct {
+	root *rootedFS
 }
 
-// SyncRoot atomically replaces the replica with the entries under root.
-func (s *Store) SyncRoot(root *rootedFS) (int, error) {
-	if root == nil {
-		return 0, os.ErrInvalid
+func (s *scanner) Scan() ([]Entry, error) {
+	if s == nil || s.root == nil {
+		return nil, errors.New("rooted filesystem is required")
 	}
 	entries := []Entry{}
-	walkErr := fs.WalkDir(root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(s.root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if name == "." {
-			return nil
-		}
-		if d.Type()&os.ModeSymlink != 0 {
+		if name == "." || d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		e := Entry{
-			Path:  filepath.ToSlash(name),
-			Name:  d.Name(),
-			IsDir: d.IsDir(),
+		entry := Entry{Path: filepath.ToSlash(name), Name: d.Name(), IsDir: d.IsDir()}
+		if !entry.IsDir {
+			entry.Size = info.Size()
 		}
-		if !d.IsDir() {
-			e.Size = info.Size()
-		}
-		e.Mtime = info.ModTime().Unix()
-		entries = append(entries, e)
+		entry.Mtime = info.ModTime().Unix()
+		entries = append(entries, entry)
 		return nil
 	})
-	if walkErr != nil {
-		return 0, walkErr
+	if err != nil {
+		return nil, err
 	}
-	if err := s.ReplaceAll(entries); err != nil {
+	return entries, nil
+}
+
+type synchronizer struct {
+	scanner *scanner
+	store   *Store
+}
+
+func newSynchronizer(store *Store, root *rootedFS) *synchronizer {
+	return &synchronizer{scanner: &scanner{root: root}, store: store}
+}
+
+// Sync scans the filesystem first, then atomically replaces the persisted replica.
+func (s *synchronizer) Sync() (int, error) {
+	if s == nil || s.scanner == nil || s.store == nil {
+		return 0, errors.New("synchronizer dependencies are required")
+	}
+	entries, err := s.scanner.Scan()
+	if err != nil {
+		return 0, err
+	}
+	if err := s.store.ReplaceAll(entries); err != nil {
 		return 0, err
 	}
 	return len(entries), nil

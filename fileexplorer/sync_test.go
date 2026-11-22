@@ -41,6 +41,16 @@ func countRows(t *testing.T, s *Store) int {
 	return n
 }
 
+func syncTestRoot(t *testing.T, s *Store, root string) (int, error) {
+	t.Helper()
+	filesystem, err := openRootedFS(root)
+	if err != nil {
+		return 0, err
+	}
+	defer filesystem.Close()
+	return newSynchronizer(s, filesystem).Sync()
+}
+
 func TestSync_MirrorsTree(t *testing.T) {
 	s := openTestStore(t)
 	root := t.TempDir()
@@ -51,7 +61,7 @@ func TestSync_MirrorsTree(t *testing.T) {
 	})
 
 	// Entries: a.txt, sub, sub/b.txt, sub/deep, sub/deep/c.txt
-	n, err := s.Sync(root)
+	n, err := syncTestRoot(t, s, root)
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -92,11 +102,11 @@ func TestSync_Idempotent(t *testing.T) {
 		"dir/b.txt": "two",
 	})
 
-	n1, err := s.Sync(root)
+	n1, err := syncTestRoot(t, s, root)
 	if err != nil {
 		t.Fatalf("Sync#1: %v", err)
 	}
-	n2, err := s.Sync(root)
+	n2, err := syncTestRoot(t, s, root)
 	if err != nil {
 		t.Fatalf("Sync#2: %v", err)
 	}
@@ -115,7 +125,7 @@ func TestSync_AddRemove(t *testing.T) {
 		"keep.txt": "keep",
 		"gone.txt": "gone",
 	})
-	if _, err := s.Sync(root); err != nil {
+	if _, err := syncTestRoot(t, s, root); err != nil {
 		t.Fatalf("Sync#1: %v", err)
 	}
 
@@ -126,7 +136,7 @@ func TestSync_AddRemove(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "gone.txt")); err != nil {
 		t.Fatalf("Remove gone.txt: %v", err)
 	}
-	if _, err := s.Sync(root); err != nil {
+	if _, err := syncTestRoot(t, s, root); err != nil {
 		t.Fatalf("Sync#2: %v", err)
 	}
 
@@ -154,7 +164,7 @@ func TestSync_SkipsSymlinks(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(root, "link.txt")); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
-	if _, err := s.Sync(root); err != nil {
+	if _, err := syncTestRoot(t, s, root); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -179,7 +189,7 @@ func TestSync_NonexistentRoot(t *testing.T) {
 	}
 
 	bad := filepath.Join(t.TempDir(), "does-not-exist")
-	if _, err := s.Sync(bad); err == nil {
+	if _, err := syncTestRoot(t, s, bad); err == nil {
 		t.Fatal("expected error when syncing a nonexistent root")
 	}
 

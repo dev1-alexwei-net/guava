@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -14,10 +15,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 const maxUploadSize = 32 << 20
 const maxEditorSize = 1 << 20
+const maxPreviewSize = 512 << 10
 
 var (
 	errInvalidPath = errors.New("invalid path")
@@ -25,10 +28,11 @@ var (
 )
 
 type explorerHandler struct {
-	root   string
-	rootFS *os.Root
-	store  *Store
-	mu     sync.Mutex
+	root        string
+	rootFS      *os.Root
+	store       *Store
+	mu          sync.Mutex
+	previewPath string // relative path of the file selected in the preview pane
 }
 
 // newHandler creates the file-explorer routes for an existing root and store.
@@ -72,6 +76,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 		mux.Handle(method+" /rename", e.serialized(e.rename))
 		mux.Handle(method+" /delete", e.serialized(e.delete))
 		mux.Handle(method+" /upload", e.serialized(e.upload))
+		mux.Handle(method+" /preview", e.serialized(e.preview))
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if requestHasTraversal(r.URL.Path) {
@@ -204,7 +209,101 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 			Size:        entry.Size,
 		})
 	}
+	e.applyPreview(&data, current)
 	e.writePage(w, http.StatusOK, data)
+}
+
+// preview is the toggle mutation for the preview pane. action=show selects the
+// file at path for preview and re-renders its parent directory with the pane
+// visible; action=hide clears the selection. There is no client-side state or
+// JavaScript: the server keeps the selection and every state change is a form
+// POST.
+func (e *explorerHandler) preview(w http.ResponseWriter, r *http.Request) {
+	if err := parseForm(w, r); err != nil {
+		e.renderError(w, http.StatusBadRequest, "Invalid form")
+		return
+	}
+	rel := r.FormValue("path")
+	if rel == "" {
+		e.renderError(w, http.StatusBadRequest, "A file path is required")
+		return
+	}
+	target, err := e.resolve(rel)
+	if err != nil {
+		e.pathError(w, err)
+		return
+	}
+	switch r.FormValue("action") {
+	case "hide":
+		e.previewPath = ""
+	case "show":
+		info, err := e.rootFS.Stat(e.rootName(e.relativePath(target)))
+		if err != nil {
+			e.pathError(w, err)
+			return
+		}
+		if !info.Mode().IsRegular() {
+			e.renderError(w, http.StatusBadRequest, "Preview requires a regular file")
+			return
+		}
+		e.previewPath = e.relativePath(target)
+	default:
+		e.renderError(w, http.StatusBadRequest, "Invalid preview action")
+		return
+	}
+	parent := filepath.ToSlash(filepath.Dir(rel))
+	if parent == "." {
+		parent = ""
+	}
+	e.renderDirectory(w, parent)
+}
+
+// applyPreview fills the preview pane when the selected file lives in the
+// directory being rendered. A stale selection (deleted or renamed away) is
+// cleared so the pane never shows content that no longer exists.
+func (e *explorerHandler) applyPreview(data *pageData, current string) {
+	rel := e.previewPath
+	if rel == "" {
+		return
+	}
+	parent := filepath.ToSlash(filepath.Dir(rel))
+	if parent == "." {
+		parent = ""
+	}
+	if parent != current {
+		return
+	}
+	info, err := e.rootFS.Stat(e.rootName(rel))
+	if err != nil || !info.Mode().IsRegular() {
+		e.previewPath = ""
+		return
+	}
+	data.PreviewPath = rel
+	data.PreviewName = filepath.Base(rel)
+	if info.Size() > maxPreviewSize {
+		data.PreviewNote = fmt.Sprintf("This file is too large to preview (maximum %d KiB). Download it instead.", maxPreviewSize>>10)
+		return
+	}
+	file, err := e.rootFS.Open(e.rootName(rel))
+	if err != nil {
+		e.previewPath = ""
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxPreviewSize+1))
+	if err != nil {
+		e.previewPath = ""
+		return
+	}
+	if len(content) > maxPreviewSize {
+		data.PreviewNote = "This file is too large to preview. Download it instead."
+		return
+	}
+	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		data.PreviewNote = "This file does not appear to be UTF-8 text, so it cannot be previewed. Download it instead."
+		return
+	}
+	data.PreviewContent = string(content)
 }
 
 func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {

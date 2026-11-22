@@ -30,8 +30,11 @@ The server handles SIGINT and SIGTERM with a five-second graceful-shutdown timeo
 - `POST` or `PUT /rename` accepts `old` and `new` (the new value is a single sibling name).
 - `POST` or `PUT /delete` accepts `path`; the UI first asks for confirmation on `GET /confirm-delete/<path>`.
 - `POST` or `PUT /upload` accepts multipart form fields `parent` and `file`; uploads are limited to 32 MiB.
+- `POST` or `PUT /preview` accepts `path` and `action` (`show` or `hide`) and toggles the preview pane on the directory page.
 
 The editor accepts regular files containing valid UTF-8 text without NUL bytes, up to 1 MiB. Saves are written to a temporary file in the same directory and atomically replaced; the existing file's permission bits are retained. Larger files and non-text files are not editable, but can still be served or downloaded.
+
+Directory pages include a toggleable preview pane. Each file row offers a `Preview` mutation; the selected file's contents (UTF-8 text up to 512 KiB) render in a Bootstrap card above the listing, with `Hide preview` mutations on the pane and on the row to toggle it off. Non-text and oversized files render an explanatory note with a download path instead of raw content. The selection is kept in server memory, scoped to the directory it was selected in, and clears automatically if the file is deleted or renamed away. The pane uses Bootstrap's responsive grid and utility classes, and adds no client-side scripts.
 
 The embedded HTML page uses regular links and forms. Directory mutations return a newly rendered page; editor saves redirect back to the editor with a success message. There are no JSON endpoints, `fetch` calls, or client-side scripts.
 

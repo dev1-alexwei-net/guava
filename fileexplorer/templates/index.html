@@ -68,6 +68,25 @@
           </div>
         </section>
         {{else}}
+        {{if .PreviewPath}}
+        <section class="card shadow-sm border-0 mb-4" aria-labelledby="preview-heading">
+          <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <h2 class="h6 mb-0 text-break" id="preview-heading">Preview · {{.PreviewName}}</h2>
+            <form action="/preview" method="post" class="d-flex align-items-center gap-2">
+              <input type="hidden" name="path" value="{{.PreviewPath}}">
+              <input type="hidden" name="action" value="hide">
+              <button type="submit" class="btn btn-outline-secondary btn-sm">Hide preview</button>
+            </form>
+          </div>
+          <div class="card-body">
+            {{if .PreviewNote}}
+            <div class="alert alert-secondary mb-0" role="note">{{.PreviewNote}}</div>
+            {{else}}
+            <pre class="bg-light border rounded p-3 mb-0 overflow-auto font-monospace small" style="max-height: 480px;">{{.PreviewContent}}</pre>
+            {{end}}
+          </div>
+        </section>
+        {{end}}
         <section class="card shadow-sm border-0 mb-4" aria-label="Directory contents">
           <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">
             <h2 class="h6 mb-0">Contents</h2>
@@ -85,7 +104,7 @@
                   </div>
                 </div>
                 <div class="d-flex flex-column flex-sm-row flex-wrap gap-2">
-                  {{if not .IsDir}}<a class="btn btn-outline-primary btn-sm" href="{{.EditURL}}">Edit</a><a class="btn btn-outline-secondary btn-sm" href="{{.DownloadURL}}">Download</a>{{end}}
+                  {{if not .IsDir}}<form action="/preview" method="post"><input type="hidden" name="path" value="{{.Path}}"><input type="hidden" name="action" value="{{if eq .Path $.PreviewPath}}hide{{else}}show{{end}}"><button type="submit" class="btn btn-outline-secondary btn-sm">{{if eq .Path $.PreviewPath}}Hide preview{{else}}Preview{{end}}</button></form><a class="btn btn-outline-primary btn-sm" href="{{.EditURL}}">Edit</a><a class="btn btn-outline-secondary btn-sm" href="{{.DownloadURL}}">Download</a>{{end}}
                   <form action="/rename" method="post" class="d-flex flex-column flex-sm-row gap-2">
                     <input type="hidden" name="old" value="{{.Path}}">
                     <input class="form-control form-control-sm" name="new" value="{{.Name}}" aria-label="New name for {{.Name}}" required>

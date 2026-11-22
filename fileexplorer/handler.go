@@ -308,7 +308,7 @@ func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusConflict, "Unable to create directory")
 		return
 	}
-	e.renderDirectory(w, current, "")
+	e.redirectToDirectory(w, r, current)
 }
 
 func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
@@ -358,7 +358,7 @@ func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to read directory")
 		return
 	}
-	e.renderDirectory(w, filepath.ToSlash(current), "")
+	e.redirectToDirectory(w, r, filepath.ToSlash(current))
 }
 
 func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
@@ -386,7 +386,7 @@ func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to read directory")
 		return
 	}
-	e.renderDirectory(w, filepath.ToSlash(current), "")
+	e.redirectToDirectory(w, r, filepath.ToSlash(current))
 }
 
 func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
@@ -433,7 +433,15 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to save upload")
 		return
 	}
-	e.renderDirectory(w, current, "")
+	e.redirectToDirectory(w, r, current)
+}
+
+func (e *explorerHandler) redirectToDirectory(w http.ResponseWriter, r *http.Request, current string) {
+	target := itemURL(current, true)
+	if current == "" {
+		target = "/"
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (e *explorerHandler) resolveParent(rel string) (string, string, error) {

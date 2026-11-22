@@ -64,8 +64,12 @@ func TestHandlerMutationRoutes(t *testing.T) {
 	h := makeTestHandler(t, root)
 
 	created := formRequest(t, h, http.MethodPost, "/mkdir", url.Values{"name": {"docs"}})
-	if created.Code != http.StatusOK || !strings.Contains(created.Body.String(), "docs/") {
-		t.Fatalf("mkdir response: status=%d body=%s", created.Code, created.Body.String())
+	if created.Code != http.StatusSeeOther || created.Header().Get("Location") != "/" {
+		t.Fatalf("mkdir redirect: status=%d location=%q body=%s", created.Code, created.Header().Get("Location"), created.Body.String())
+	}
+	createdDirectory := get(t, h, created.Header().Get("Location"))
+	if createdDirectory.Code != http.StatusOK || !strings.Contains(createdDirectory.Body.String(), "docs/") {
+		t.Fatalf("mkdir destination: status=%d body=%s", createdDirectory.Code, createdDirectory.Body.String())
 	}
 
 	var body bytes.Buffer
@@ -87,29 +91,29 @@ func TestHandlerMutationRoutes(t *testing.T) {
 	upload.Header.Set("Content-Type", writer.FormDataContentType())
 	uploadResponse := httptest.NewRecorder()
 	h.ServeHTTP(uploadResponse, upload)
-	if uploadResponse.Code != http.StatusOK {
-		t.Fatalf("upload status=%d body=%s", uploadResponse.Code, uploadResponse.Body.String())
+	if uploadResponse.Code != http.StatusSeeOther || uploadResponse.Header().Get("Location") != "/d/docs" {
+		t.Fatalf("upload redirect: status=%d location=%q body=%s", uploadResponse.Code, uploadResponse.Header().Get("Location"), uploadResponse.Body.String())
 	}
 
 	renamed := formRequest(t, h, http.MethodPut, "/rename", url.Values{"old": {"docs/note.txt"}, "new": {"renamed.txt"}})
-	if renamed.Code != http.StatusOK {
-		t.Fatalf("rename status=%d body=%s", renamed.Code, renamed.Body.String())
+	if renamed.Code != http.StatusSeeOther || renamed.Header().Get("Location") != "/d/docs" {
+		t.Fatalf("rename redirect: status=%d location=%q body=%s", renamed.Code, renamed.Header().Get("Location"), renamed.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "docs", "renamed.txt")); err != nil {
 		t.Fatalf("renamed file: %v", err)
 	}
 
 	deleted := formRequest(t, h, http.MethodPost, "/delete", url.Values{"path": {"docs/renamed.txt"}})
-	if deleted.Code != http.StatusOK {
-		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	if deleted.Code != http.StatusSeeOther || deleted.Header().Get("Location") != "/d/docs" {
+		t.Fatalf("delete redirect: status=%d location=%q body=%s", deleted.Code, deleted.Header().Get("Location"), deleted.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "docs", "renamed.txt")); !os.IsNotExist(err) {
 		t.Fatalf("file still exists after delete: err=%v", err)
 	}
 
 	putCreated := formRequest(t, h, http.MethodPut, "/mkdir", url.Values{"parent": {"docs"}, "name": {"via-put"}})
-	if putCreated.Code != http.StatusOK {
-		t.Fatalf("PUT mkdir status=%d body=%s", putCreated.Code, putCreated.Body.String())
+	if putCreated.Code != http.StatusSeeOther || putCreated.Header().Get("Location") != "/d/docs" {
+		t.Fatalf("PUT mkdir redirect: status=%d location=%q body=%s", putCreated.Code, putCreated.Header().Get("Location"), putCreated.Body.String())
 	}
 }
 

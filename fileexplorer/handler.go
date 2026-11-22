@@ -271,6 +271,7 @@ func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
 	data.PreviewPath = rel
 	data.PreviewName = filepath.Base(rel)
 	data.PreviewReturnURL = itemURL(parent, true)
+	data.PreviewDownloadURL = itemURL(rel, false) + "?download=1"
 	if info.Size() > maxPreviewSize {
 		data.PreviewNote = fmt.Sprintf("This file is too large to preview (maximum %d KiB). Download it instead.", maxPreviewSize>>10)
 		return

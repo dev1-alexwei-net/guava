@@ -348,3 +348,52 @@ func TestPreviewClearsWhenFileDeleted(t *testing.T) {
 		t.Fatalf("status = %d, want %d after deletion", rec.Code, http.StatusNotFound)
 	}
 }
+
+func TestPreviewHeaderOffersDirectDownload(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/preview/a.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="btn btn-outline-primary btn-sm" href="/f/a.txt?download=1">Download`) {
+		t.Fatal("preview header does not offer a direct Download action")
+	}
+}
+
+func TestUnpreviewableFileOffersDownloadFromPreviewState(t *testing.T) {
+	cases := []struct {
+		name    string
+		content []byte
+		note    string
+	}{
+		{"non-text", []byte{0x00, 0x01, 0x02, 0x03}, "does not appear to be UTF-8 text"},
+		{"oversized", make([]byte, maxPreviewSize+1), "too large to preview"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "file.bin"), tc.content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h := makeTestHandler(t, root)
+
+			rec := get(t, h, "/preview/file.bin")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, tc.note) {
+				t.Fatal("expected the explanatory preview note")
+			}
+			if !strings.Contains(body, `class="btn btn-primary" href="/f/file.bin?download=1">Download file`) {
+				t.Fatal("preview state does not offer a direct Download file action")
+			}
+		})
+	}
+}

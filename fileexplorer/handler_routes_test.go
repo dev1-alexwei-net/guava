@@ -117,6 +117,38 @@ func TestHandlerMutationRoutes(t *testing.T) {
 	}
 }
 
+func TestMutationErrorsRedirectToDirectoryWithRefreshableError(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "one.txt"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "two.txt"), []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	duplicateFolder := formRequest(t, h, http.MethodPost, "/mkdir", url.Values{"name": {"docs"}})
+	if duplicateFolder.Code != http.StatusSeeOther || !strings.HasPrefix(duplicateFolder.Header().Get("Location"), "/?error=") {
+		t.Fatalf("mkdir error redirect: status=%d location=%q body=%s", duplicateFolder.Code, duplicateFolder.Header().Get("Location"), duplicateFolder.Body.String())
+	}
+	rootPage := get(t, h, duplicateFolder.Header().Get("Location"))
+	if rootPage.Code != http.StatusOK || !strings.Contains(rootPage.Body.String(), "Unable to create directory") || !strings.Contains(rootPage.Body.String(), "docs/") {
+		t.Fatalf("mkdir error destination: status=%d body=%s", rootPage.Code, rootPage.Body.String())
+	}
+
+	renameConflict := formRequest(t, h, http.MethodPost, "/rename", url.Values{"old": {"docs/one.txt"}, "new": {"two.txt"}})
+	if renameConflict.Code != http.StatusSeeOther || !strings.HasPrefix(renameConflict.Header().Get("Location"), "/d/docs?error=") {
+		t.Fatalf("rename error redirect: status=%d location=%q body=%s", renameConflict.Code, renameConflict.Header().Get("Location"), renameConflict.Body.String())
+	}
+	docsPage := get(t, h, renameConflict.Header().Get("Location"))
+	if docsPage.Code != http.StatusOK || !strings.Contains(docsPage.Body.String(), "An entry with that name already exists") || !strings.Contains(docsPage.Body.String(), "one.txt") {
+		t.Fatalf("rename error destination: status=%d body=%s", docsPage.Code, docsPage.Body.String())
+	}
+}
+
 func TestHandlerRejectsTraversalAndSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

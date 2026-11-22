@@ -100,8 +100,12 @@ func TestCreateFileAndDeleteConfirmation(t *testing.T) {
 	h := makeTestHandler(t, root)
 
 	created := formRequest(t, h, http.MethodPost, "/create-file", url.Values{"name": {"new.txt"}})
-	if created.Code != http.StatusOK {
-		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	if created.Code != http.StatusSeeOther || created.Header().Get("Location") != "/" {
+		t.Fatalf("create redirect: status=%d location=%q body=%s", created.Code, created.Header().Get("Location"), created.Body.String())
+	}
+	createdPage := get(t, h, created.Header().Get("Location"))
+	if createdPage.Code != http.StatusOK || !strings.Contains(createdPage.Body.String(), "new.txt") {
+		t.Fatalf("create destination: status=%d body=%s", createdPage.Code, createdPage.Body.String())
 	}
 	filePath := filepath.Join(root, "new.txt")
 	if info, err := os.Stat(filePath); err != nil || !info.Mode().IsRegular() {
@@ -118,8 +122,12 @@ func TestCreateFileAndDeleteConfirmation(t *testing.T) {
 	}
 
 	deleted := formRequest(t, h, http.MethodPost, "/delete", url.Values{"path": {"new.txt"}})
-	if deleted.Code != http.StatusOK {
-		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	if deleted.Code != http.StatusSeeOther || deleted.Header().Get("Location") != "/" {
+		t.Fatalf("delete redirect: status=%d location=%q body=%s", deleted.Code, deleted.Header().Get("Location"), deleted.Body.String())
+	}
+	deletedPage := get(t, h, deleted.Header().Get("Location"))
+	if deletedPage.Code != http.StatusOK || strings.Contains(deletedPage.Body.String(), "new.txt") {
+		t.Fatalf("delete destination: status=%d body=%s", deletedPage.Code, deletedPage.Body.String())
 	}
 	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
 		t.Fatalf("file still exists after confirmation: %v", err)

@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-func (e *explorerHandler) editorPage(w http.ResponseWriter, r *http.Request) {
+func (e *application) editorPage(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)
@@ -51,7 +51,7 @@ func (e *explorerHandler) editorPage(w http.ResponseWriter, r *http.Request) {
 	e.writePage(w, http.StatusOK, e.renderer.Editor(rel, string(content), r.URL.Query().Get("saved") == "1"))
 }
 
-func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
+func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)
@@ -109,7 +109,7 @@ func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, e.renderer.EditorURL(rel)+"?saved=1", http.StatusSeeOther)
 }
 
-func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
+func (e *application) createFile(w http.ResponseWriter, r *http.Request) {
 	if err := parseForm(w, r); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
@@ -129,7 +129,7 @@ func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (e *explorerHandler) confirmDeletePage(w http.ResponseWriter, r *http.Request) {
+func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)

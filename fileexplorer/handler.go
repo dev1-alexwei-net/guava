@@ -13,7 +13,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -22,61 +21,7 @@ const maxUploadSize = 32 << 20
 const maxEditorSize = 1 << 20
 const maxPreviewSize = 512 << 10
 
-type explorerHandler struct {
-	filesystem *rootedFS
-	store      *Store
-	syncer     *synchronizer
-	mutations  *mutations
-	renderer   *renderer
-	mu         sync.Mutex
-}
-
-// newHandler creates the file-explorer routes for an existing root and store.
-func newHandler(root string, store *Store) (http.Handler, error) {
-	if store == nil {
-		return nil, errors.New("store is required")
-	}
-	filesystem, err := openRootedFS(root)
-	if err != nil {
-		return nil, err
-	}
-	e := &explorerHandler{filesystem: filesystem, store: store, syncer: newSynchronizer(store, filesystem), mutations: newMutations(filesystem), renderer: newRenderer()}
-	mux := http.NewServeMux()
-	mux.Handle("GET /{$}", e.serialized(e.rootPage))
-	mux.Handle("GET /d/{$}", e.serialized(e.rootPage))
-	mux.Handle("GET /d/{path...}", e.serialized(e.directoryPage))
-	mux.Handle("GET /f/{path...}", e.serialized(e.filePage))
-	mux.Handle("GET /edit/{path...}", e.serialized(e.editorPage))
-	mux.Handle("POST /edit/{path...}", e.serialized(e.saveFile))
-	mux.Handle("GET /confirm-delete/{path...}", e.serialized(e.confirmDeletePage))
-	mux.Handle("GET /preview/{path...}", e.serialized(e.previewPage))
-	mux.HandleFunc("GET /static/bootstrap.min.css", e.renderer.Stylesheet)
-	for _, method := range []string{http.MethodPost, http.MethodPut} {
-		mux.Handle(method+" /mkdir", e.serialized(e.mkdir))
-		mux.Handle(method+" /create-file", e.serialized(e.createFile))
-		mux.Handle(method+" /rename", e.serialized(e.rename))
-		mux.Handle(method+" /delete", e.serialized(e.delete))
-		mux.Handle(method+" /upload", e.serialized(e.upload))
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if requestHasTraversal(r.URL.Path) {
-			e.renderError(w, http.StatusBadRequest, "Invalid path")
-			return
-		}
-		mux.ServeHTTP(w, r)
-	}), nil
-}
-
-func requestHasTraversal(requestPath string) bool {
-	for _, component := range strings.Split(strings.ReplaceAll(requestPath, `\`, "/"), "/") {
-		if component == ".." {
-			return true
-		}
-	}
-	return false
-}
-
-func (e *explorerHandler) serialized(next http.HandlerFunc) http.Handler {
+func (e *application) serialized(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -84,15 +29,15 @@ func (e *explorerHandler) serialized(next http.HandlerFunc) http.Handler {
 	})
 }
 
-func (e *explorerHandler) rootPage(w http.ResponseWriter, r *http.Request) {
+func (e *application) rootPage(w http.ResponseWriter, r *http.Request) {
 	e.renderDirectory(w, "", "", r.URL.Query().Get("error"))
 }
 
-func (e *explorerHandler) directoryPage(w http.ResponseWriter, r *http.Request) {
+func (e *application) directoryPage(w http.ResponseWriter, r *http.Request) {
 	e.renderDirectory(w, r.PathValue("path"), "", r.URL.Query().Get("error"))
 }
 
-func (e *explorerHandler) filePage(w http.ResponseWriter, r *http.Request) {
+func (e *application) filePage(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)
@@ -126,7 +71,7 @@ func (e *explorerHandler) filePage(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
-func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested string, previewRel string, pageError string) {
+func (e *application) renderDirectory(w http.ResponseWriter, requested string, previewRel string, pageError string) {
 	dir, err := e.filesystem.Resolve(requested)
 	if err != nil {
 		e.pathError(w, err)
@@ -166,7 +111,7 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 // the route always matches what the page shows: the pane is visible exactly
 // when the path is /preview/{path}, and hiding it is a plain navigation back
 // to the directory. There is no client-side state or JavaScript.
-func (e *explorerHandler) previewPage(w http.ResponseWriter, r *http.Request) {
+func (e *application) previewPage(w http.ResponseWriter, r *http.Request) {
 	rel := r.PathValue("path")
 	target, err := e.filesystem.Resolve(rel)
 	if err != nil {
@@ -194,7 +139,7 @@ func (e *explorerHandler) previewPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // applyPreview reads the selected file and delegates page-model preparation to the renderer.
-func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
+func (e *application) applyPreview(data *pageData, current, rel string) {
 	if rel == "" {
 		return
 	}
@@ -274,7 +219,7 @@ func decodePreviewText(content []byte) (string, bool) {
 	return string(content), true
 }
 
-func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {
+func (e *application) mkdir(w http.ResponseWriter, r *http.Request) {
 	if err := parseForm(w, r); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
@@ -295,7 +240,7 @@ func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {
 	e.redirectToDirectory(w, r, current)
 }
 
-func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
+func (e *application) rename(w http.ResponseWriter, r *http.Request) {
 	if err := parseForm(w, r); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
@@ -317,7 +262,7 @@ func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
+func (e *application) delete(w http.ResponseWriter, r *http.Request) {
 	if err := parseForm(w, r); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
@@ -335,7 +280,7 @@ func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
+func (e *application) upload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid upload")
@@ -369,7 +314,7 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (e *explorerHandler) redirectToDirectory(w http.ResponseWriter, r *http.Request, current string) {
+func (e *application) redirectToDirectory(w http.ResponseWriter, r *http.Request, current string) {
 	if current == "." {
 		current = ""
 	}
@@ -385,7 +330,7 @@ func parseForm(w http.ResponseWriter, r *http.Request) error {
 	return r.ParseForm()
 }
 
-func (e *explorerHandler) pathError(w http.ResponseWriter, err error) {
+func (e *application) pathError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errForbidden) {
 		e.renderError(w, http.StatusForbidden, "Path is outside the configured root or contains a symbolic link")
 		return
@@ -401,7 +346,7 @@ func (e *explorerHandler) pathError(w http.ResponseWriter, err error) {
 	e.renderError(w, http.StatusBadRequest, "Invalid path")
 }
 
-func (e *explorerHandler) redirectMutationError(w http.ResponseWriter, r *http.Request, status int, message string) {
+func (e *application) redirectMutationError(w http.ResponseWriter, r *http.Request, status int, message string) {
 	parent := r.FormValue("parent")
 	if parent == "" {
 		target := r.FormValue("old")
@@ -427,7 +372,7 @@ func (e *explorerHandler) redirectMutationError(w http.ResponseWriter, r *http.R
 	http.Redirect(w, r, target+"?"+query.Encode(), http.StatusSeeOther)
 }
 
-func (e *explorerHandler) redirectMutationPathError(w http.ResponseWriter, r *http.Request, err error) {
+func (e *application) redirectMutationPathError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errForbidden) {
 		e.redirectMutationError(w, r, http.StatusForbidden, "Path is outside the configured root or contains a symbolic link")
 		return
@@ -443,10 +388,10 @@ func (e *explorerHandler) redirectMutationPathError(w http.ResponseWriter, r *ht
 	e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid path")
 }
 
-func (e *explorerHandler) renderError(w http.ResponseWriter, status int, message string) {
+func (e *application) renderError(w http.ResponseWriter, status int, message string) {
 	e.writePage(w, status, e.renderer.Error(message))
 }
 
-func (e *explorerHandler) writePage(w http.ResponseWriter, status int, data pageData) {
+func (e *application) writePage(w http.ResponseWriter, status int, data pageData) {
 	e.renderer.WritePage(w, status, data)
 }

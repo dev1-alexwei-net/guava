@@ -26,6 +26,7 @@ type explorerHandler struct {
 	filesystem *rootedFS
 	store      *Store
 	syncer     *synchronizer
+	mutations  *mutations
 	mu         sync.Mutex
 }
 
@@ -38,7 +39,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &explorerHandler{filesystem: filesystem, store: store, syncer: newSynchronizer(store, filesystem)}
+	e := &explorerHandler{filesystem: filesystem, store: store, syncer: newSynchronizer(store, filesystem), mutations: newMutations(filesystem)}
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", e.serialized(e.rootPage))
 	mux.Handle("GET /d/{$}", e.serialized(e.rootPage))
@@ -303,18 +304,17 @@ func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
 	}
-	parent, current, err := e.resolveParent(r.FormValue("parent"))
-	if err != nil {
-		e.redirectMutationPathError(w, r, err)
-		return
-	}
-	name := r.FormValue("name")
-	if !validName(name) {
+	current, err := e.mutations.MakeDirectory(r.FormValue("parent"), r.FormValue("name"))
+	if errors.Is(err, errInvalidName) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid directory name")
 		return
 	}
-	if err := e.filesystem.Mkdir(path.Join(e.filesystem.Relative(parent), name), 0o755); err != nil {
-		e.redirectMutationError(w, r, http.StatusConflict, "Unable to create directory")
+	if err != nil {
+		if errors.Is(err, errCreateDirectory) {
+			e.redirectMutationError(w, r, http.StatusConflict, "Unable to create directory")
+		} else {
+			e.redirectMutationPathError(w, r, err)
+		}
 		return
 	}
 	e.redirectToDirectory(w, r, current)
@@ -325,44 +325,21 @@ func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
 	}
-	oldRel := r.FormValue("old")
-	oldPath, err := e.filesystem.Resolve(oldRel)
-	if err != nil {
-		e.redirectMutationPathError(w, r, err)
-		return
-	}
-	if oldPath == e.filesystem.Path() {
+	current, err := e.mutations.Rename(r.FormValue("old"), r.FormValue("new"))
+	switch {
+	case errors.Is(err, errRootMutation):
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Cannot rename the root directory")
-		return
-	}
-	name := r.FormValue("new")
-	if !validName(name) {
+	case errors.Is(err, errInvalidName):
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid name")
-		return
-	}
-	oldParent := filepath.Dir(oldPath)
-	newPath := filepath.Join(oldParent, name)
-	newRel := e.filesystem.Relative(newPath)
-	if newRel == "" {
-		e.redirectMutationPathError(w, r, errForbidden)
-		return
-	}
-	if _, err := e.filesystem.Resolve(filepath.ToSlash(newRel)); err != nil {
-		e.redirectMutationPathError(w, r, err)
-		return
-	}
-	if _, err := e.filesystem.Lstat(filepath.ToSlash(newRel)); err == nil {
+	case errors.Is(err, errEntryExists):
 		e.redirectMutationError(w, r, http.StatusConflict, "An entry with that name already exists")
-		return
-	} else if !os.IsNotExist(err) {
-		e.redirectMutationPathError(w, r, err)
-		return
-	}
-	if err := e.filesystem.Rename(e.filesystem.Relative(oldPath), e.filesystem.Relative(newPath)); err != nil {
+	case errors.Is(err, errRenameEntry):
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to rename entry")
-		return
+	case err != nil:
+		e.redirectMutationPathError(w, r, err)
+	default:
+		e.redirectToDirectory(w, r, current)
 	}
-	e.redirectToDirectory(w, r, e.filesystem.Relative(oldParent))
 }
 
 func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
@@ -370,22 +347,17 @@ func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
 	}
-	rel := r.FormValue("path")
-	target, err := e.filesystem.Resolve(rel)
-	if err != nil {
-		e.redirectMutationPathError(w, r, err)
-		return
-	}
-	if target == e.filesystem.Path() {
+	current, err := e.mutations.Delete(r.FormValue("path"))
+	switch {
+	case errors.Is(err, errRootMutation):
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Cannot delete the root directory")
-		return
-	}
-	parent := filepath.Dir(target)
-	if err := e.filesystem.RemoveAll(e.filesystem.Relative(target)); err != nil {
+	case errors.Is(err, errDeleteEntry):
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to delete entry")
-		return
+	case err != nil:
+		e.redirectMutationPathError(w, r, err)
+	default:
+		e.redirectToDirectory(w, r, current)
 	}
-	e.redirectToDirectory(w, r, e.filesystem.Relative(parent))
 }
 
 func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
@@ -394,7 +366,7 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid upload")
 		return
 	}
-	parent, current, err := e.resolveParent(r.FormValue("parent"))
+	_, parent, err := e.filesystem.ResolveParent(r.FormValue("parent"))
 	if err != nil {
 		e.redirectMutationPathError(w, r, err)
 		return
@@ -405,34 +377,21 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	if !validName(header.Filename) {
+	current, err := e.mutations.Upload(parent, header.Filename, file)
+	switch {
+	case errors.Is(err, errInvalidName):
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid file name")
-		return
-	}
-	dest := filepath.Join(parent, header.Filename)
-	destRel := e.filesystem.Relative(dest)
-	if destRel == "" {
-		e.redirectMutationPathError(w, r, errForbidden)
-		return
-	}
-	if _, err := e.filesystem.Resolve(filepath.ToSlash(destRel)); err != nil {
-		e.redirectMutationPathError(w, r, err)
-		return
-	}
-	destRel = filepath.ToSlash(destRel)
-	out, err := e.filesystem.OpenFile(destRel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
+	case errors.Is(err, errOpenUpload):
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to save upload")
-		return
-	}
-	_, copyErr := io.Copy(out, io.LimitReader(file, maxUploadSize+1))
-	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil {
-		_ = e.filesystem.Remove(destRel)
+	case errors.Is(err, errUploadTooLarge):
+		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid upload")
+	case errors.Is(err, errSaveUpload):
 		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to save upload")
-		return
+	case err != nil:
+		e.redirectMutationPathError(w, r, err)
+	default:
+		e.redirectToDirectory(w, r, current)
 	}
-	e.redirectToDirectory(w, r, current)
 }
 
 func (e *explorerHandler) redirectToDirectory(w http.ResponseWriter, r *http.Request, current string) {
@@ -444,27 +403,6 @@ func (e *explorerHandler) redirectToDirectory(w http.ResponseWriter, r *http.Req
 		target = "/"
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
-}
-
-func (e *explorerHandler) resolveParent(rel string) (string, string, error) {
-	dir, err := e.filesystem.Resolve(rel)
-	if err != nil {
-		return "", "", err
-	}
-	info, err := e.filesystem.Stat(e.filesystem.Relative(dir))
-	if err != nil {
-		return "", "", err
-	}
-	if !info.IsDir() {
-		return "", "", errInvalidPath
-	}
-	current := e.filesystem.Relative(dir)
-	return dir, current, nil
-}
-
-func validName(name string) bool {
-	return name != "" && name != "." && name != ".." &&
-		!strings.ContainsAny(name, `/\`+"\x00") && !filepath.IsAbs(name)
 }
 
 func parseForm(w http.ResponseWriter, r *http.Request) error {
@@ -502,7 +440,7 @@ func (e *explorerHandler) redirectMutationError(w http.ResponseWriter, r *http.R
 			}
 		}
 	}
-	_, current, err := e.resolveParent(parent)
+	_, current, err := e.filesystem.ResolveParent(parent)
 	if err != nil {
 		current = ""
 	}

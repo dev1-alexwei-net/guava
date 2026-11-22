@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -110,55 +108,23 @@ func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	content := r.FormValue("content")
-	if len(content) > maxEditorSize {
-		e.renderError(w, http.StatusRequestEntityTooLarge, "Editor content is too large (maximum 1 MiB)")
-		return
-	}
-	if !utf8.ValidString(content) || strings.IndexByte(content, 0) >= 0 {
-		e.renderError(w, http.StatusUnsupportedMediaType, "The editor only saves UTF-8 text files")
-		return
-	}
-
-	temp, err := randomTempName(path.Dir(rel))
-	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to prepare file save")
-		return
-	}
-	out, err := e.filesystem.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
-	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to prepare file save")
-		return
-	}
-	if err := out.Chmod(info.Mode().Perm()); err != nil {
-		_ = out.Close()
-		_ = e.filesystem.Remove(temp)
-		e.renderError(w, http.StatusInternalServerError, "Unable to preserve file permissions")
-		return
-	}
-	removeTemp := true
-	defer func() {
-		_ = out.Close()
-		if removeTemp {
-			_ = e.filesystem.Remove(temp)
+	if err := e.mutations.SaveText(rel, content, info.Mode().Perm()); err != nil {
+		switch {
+		case errors.Is(err, errEditorContentTooLarge):
+			e.renderError(w, http.StatusRequestEntityTooLarge, "Editor content is too large (maximum 1 MiB)")
+		case errors.Is(err, errUnsupportedText):
+			e.renderError(w, http.StatusUnsupportedMediaType, "The editor only saves UTF-8 text files")
+		case errors.Is(err, errPrepareFileSave):
+			e.renderError(w, http.StatusInternalServerError, "Unable to prepare file save")
+		case errors.Is(err, errPreserveFileMode):
+			e.renderError(w, http.StatusInternalServerError, "Unable to preserve file permissions")
+		case errors.Is(err, errReplaceFile):
+			e.renderError(w, http.StatusInternalServerError, "Unable to replace file")
+		default:
+			e.renderError(w, http.StatusInternalServerError, "Unable to save file")
 		}
-	}()
-	if _, err := io.WriteString(out, content); err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to save file")
 		return
 	}
-	if err := out.Sync(); err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to save file")
-		return
-	}
-	if err := out.Close(); err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to save file")
-		return
-	}
-	if err := e.filesystem.Rename(temp, rel); err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to replace file")
-		return
-	}
-	removeTemp = false
 	http.Redirect(w, r, "/edit/"+escapedPath(rel)+"?saved=1", http.StatusSeeOther)
 }
 
@@ -166,45 +132,24 @@ func editorURL(rel string) string {
 	return "/edit/" + escapedPath(rel)
 }
 
-func randomTempName(parent string) (string, error) {
-	var suffix [12]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
-		return "", err
-	}
-	name := ".guava-save-" + hex.EncodeToString(suffix[:]) + ".tmp"
-	if parent == "." {
-		return name, nil
-	}
-	return path.Join(parent, name), nil
-}
-
 func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
 	if err := parseForm(w, r); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
 	}
-	parent, current, err := e.resolveParent(r.FormValue("parent"))
-	if err != nil {
-		e.redirectMutationPathError(w, r, err)
-		return
-	}
-	name := r.FormValue("name")
-	if !validName(name) {
+	current, err := e.mutations.CreateFile(r.FormValue("parent"), r.FormValue("name"))
+	switch {
+	case errors.Is(err, errInvalidName):
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid file name")
-		return
-	}
-	parentRel := e.filesystem.Relative(parent)
-	rel := path.Join(parentRel, name)
-	file, err := e.filesystem.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
+	case errors.Is(err, errCreateFile):
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to create file")
-		return
-	}
-	if err := file.Close(); err != nil {
+	case errors.Is(err, errFinishCreateFile):
 		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to finish creating file")
-		return
+	case err != nil:
+		e.redirectMutationPathError(w, r, err)
+	default:
+		e.redirectToDirectory(w, r, current)
 	}
-	e.redirectToDirectory(w, r, current)
 }
 
 func (e *explorerHandler) confirmDeletePage(w http.ResponseWriter, r *http.Request) {

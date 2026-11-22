@@ -6,42 +6,39 @@ import (
 	"path/filepath"
 )
 
-// Sync walks root and atomically replaces the replica in the files table
-// with the current directory tree under root.
-//
-// Paths are stored relative to root (slash-separated), so no path outside
-// root is ever recorded. The root directory itself is not recorded; only
-// its children and descendants are. Symlinks are skipped by default.
-//
-// If the walk fails, the previous replica is left untouched.
-func (s *Store) Sync(root string) (int, error) {
-	abs, err := filepath.Abs(root)
+// Sync mirrors root into the replica. The filesystem is opened as a rooted
+// filesystem so scanning stays confined to the configured directory.
+func (s *Store) Sync(rootPath string) (int, error) {
+	root, err := openRootedFS(rootPath)
 	if err != nil {
 		return 0, err
 	}
-	abs = filepath.Clean(abs)
+	defer root.Close()
+	return s.SyncRoot(root)
+}
 
+// SyncRoot atomically replaces the replica with the entries under root.
+func (s *Store) SyncRoot(root *rootedFS) (int, error) {
+	if root == nil {
+		return 0, os.ErrInvalid
+	}
 	entries := []Entry{}
-	walkErr := filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(root.FS(), ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if path == abs {
-			return nil // skip the root itself
+		if name == "." {
+			return nil
 		}
 		if d.Type()&os.ModeSymlink != 0 {
-			return nil // skip symlinks
+			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(abs, path)
-		if err != nil {
-			return err
-		}
 		e := Entry{
-			Path:  filepath.ToSlash(rel),
+			Path:  filepath.ToSlash(name),
 			Name:  d.Name(),
 			IsDir: d.IsDir(),
 		}
@@ -55,7 +52,6 @@ func (s *Store) Sync(root string) (int, error) {
 	if walkErr != nil {
 		return 0, walkErr
 	}
-
 	if err := s.ReplaceAll(entries); err != nil {
 		return 0, err
 	}

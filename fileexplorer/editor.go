@@ -14,13 +14,13 @@ import (
 )
 
 func (e *explorerHandler) editorPage(w http.ResponseWriter, r *http.Request) {
-	target, err := e.resolve(r.PathValue("path"))
+	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)
 		return
 	}
-	rel := e.relativePath(target)
-	file, err := e.rootFS.Open(rel)
+	rel := e.filesystem.Relative(target)
+	file, err := e.filesystem.Open(rel)
 	if err != nil {
 		e.pathError(w, err)
 		return
@@ -73,13 +73,13 @@ func (e *explorerHandler) editorPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
-	target, err := e.resolve(r.PathValue("path"))
+	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)
 		return
 	}
-	rel := e.relativePath(target)
-	file, err := e.rootFS.Open(rel)
+	rel := e.filesystem.Relative(target)
+	file, err := e.filesystem.Open(rel)
 	if err != nil {
 		e.pathError(w, err)
 		return
@@ -124,14 +124,14 @@ func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to prepare file save")
 		return
 	}
-	out, err := e.rootFS.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+	out, err := e.filesystem.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
 	if err != nil {
 		e.renderError(w, http.StatusInternalServerError, "Unable to prepare file save")
 		return
 	}
 	if err := out.Chmod(info.Mode().Perm()); err != nil {
 		_ = out.Close()
-		_ = e.rootFS.Remove(temp)
+		_ = e.filesystem.Remove(temp)
 		e.renderError(w, http.StatusInternalServerError, "Unable to preserve file permissions")
 		return
 	}
@@ -139,7 +139,7 @@ func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		_ = out.Close()
 		if removeTemp {
-			_ = e.rootFS.Remove(temp)
+			_ = e.filesystem.Remove(temp)
 		}
 	}()
 	if _, err := io.WriteString(out, content); err != nil {
@@ -154,7 +154,7 @@ func (e *explorerHandler) saveFile(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to save file")
 		return
 	}
-	if err := e.rootFS.Rename(temp, rel); err != nil {
+	if err := e.filesystem.Rename(temp, rel); err != nil {
 		e.renderError(w, http.StatusInternalServerError, "Unable to replace file")
 		return
 	}
@@ -193,9 +193,9 @@ func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid file name")
 		return
 	}
-	parentRel := e.relativePath(parent)
+	parentRel := e.filesystem.Relative(parent)
 	rel := path.Join(parentRel, name)
-	file, err := e.rootFS.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	file, err := e.filesystem.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to create file")
 		return
@@ -208,16 +208,16 @@ func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *explorerHandler) confirmDeletePage(w http.ResponseWriter, r *http.Request) {
-	target, err := e.resolve(r.PathValue("path"))
+	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)
 		return
 	}
-	if target == e.root {
+	if target == e.filesystem.Path() {
 		e.renderError(w, http.StatusBadRequest, "Cannot delete the root directory")
 		return
 	}
-	info, err := e.rootFS.Lstat(e.relativePath(target))
+	info, err := e.filesystem.Lstat(e.filesystem.Relative(target))
 	if err != nil {
 		e.pathError(w, err)
 		return
@@ -226,23 +226,14 @@ func (e *explorerHandler) confirmDeletePage(w http.ResponseWriter, r *http.Reque
 		e.pathError(w, errForbidden)
 		return
 	}
-	parent, err := filepath.Rel(e.root, filepath.Dir(target))
-	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to identify parent directory")
-		return
+	parent := path.Dir(e.filesystem.Relative(target))
+	if parent == "." {
+		parent = ""
 	}
 	e.writePage(w, http.StatusOK, pageData{
 		ConfirmDelete: true,
-		DeletePath:    filepath.ToSlash(e.relativePath(target)),
+		DeletePath:    filepath.ToSlash(e.filesystem.Relative(target)),
 		DeleteName:    filepath.Base(target),
 		ReturnURL:     parentURL(filepath.ToSlash(parent)),
 	})
-}
-
-func (e *explorerHandler) relativePath(target string) string {
-	rel, err := filepath.Rel(e.root, target)
-	if err != nil || rel == "." {
-		return ""
-	}
-	return filepath.ToSlash(rel)
 }

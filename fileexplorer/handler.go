@@ -23,16 +23,10 @@ const maxUploadSize = 32 << 20
 const maxEditorSize = 1 << 20
 const maxPreviewSize = 512 << 10
 
-var (
-	errInvalidPath = errors.New("invalid path")
-	errForbidden   = errors.New("path escapes configured root")
-)
-
 type explorerHandler struct {
-	root   string
-	rootFS *os.Root
-	store  *Store
-	mu     sync.Mutex
+	filesystem *rootedFS
+	store      *Store
+	mu         sync.Mutex
 }
 
 // newHandler creates the file-explorer routes for an existing root and store.
@@ -40,27 +34,11 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	if store == nil {
 		return nil, errors.New("store is required")
 	}
-	absRoot, err := filepath.Abs(root)
+	filesystem, err := openRootedFS(root)
 	if err != nil {
 		return nil, err
 	}
-	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return nil, fmt.Errorf("resolve root: %w", err)
-	}
-	info, err := os.Stat(resolvedRoot)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, errors.New("root must be a directory")
-	}
-
-	rootFS, err := os.OpenRoot(resolvedRoot)
-	if err != nil {
-		return nil, fmt.Errorf("open root: %w", err)
-	}
-	e := &explorerHandler{root: resolvedRoot, rootFS: rootFS, store: store}
+	e := &explorerHandler{filesystem: filesystem, store: store}
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", e.serialized(e.rootPage))
 	mux.Handle("GET /d/{$}", e.serialized(e.rootPage))
@@ -113,12 +91,12 @@ func (e *explorerHandler) directoryPage(w http.ResponseWriter, r *http.Request) 
 }
 
 func (e *explorerHandler) filePage(w http.ResponseWriter, r *http.Request) {
-	target, err := e.resolve(r.PathValue("path"))
+	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
 		e.pathError(w, err)
 		return
 	}
-	info, err := e.rootFS.Stat(e.rootName(e.relativePath(target)))
+	info, err := e.filesystem.Stat(e.filesystem.Relative(target))
 	if err != nil {
 		if os.IsNotExist(err) {
 			e.renderError(w, http.StatusNotFound, "File not found")
@@ -137,7 +115,7 @@ func (e *explorerHandler) filePage(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
 	}
-	file, err := e.rootFS.Open(e.rootName(e.relativePath(target)))
+	file, err := e.filesystem.Open(e.filesystem.Relative(target))
 	if err != nil {
 		e.renderError(w, http.StatusInternalServerError, "Unable to read file")
 		return
@@ -147,12 +125,12 @@ func (e *explorerHandler) filePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested string, previewRel string, pageError string) {
-	dir, err := e.resolve(requested)
+	dir, err := e.filesystem.Resolve(requested)
 	if err != nil {
 		e.pathError(w, err)
 		return
 	}
-	info, err := e.rootFS.Stat(e.rootName(e.relativePath(dir)))
+	info, err := e.filesystem.Stat(e.filesystem.Relative(dir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			e.renderError(w, http.StatusNotFound, "Directory not found")
@@ -165,20 +143,12 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 		e.renderError(w, http.StatusNotFound, "Directory not found")
 		return
 	}
-	if _, err := e.store.Sync(e.root); err != nil {
+	if _, err := e.store.SyncRoot(e.filesystem); err != nil {
 		e.renderError(w, http.StatusInternalServerError, "Unable to synchronize directory")
 		return
 	}
 
-	relative, err := filepath.Rel(e.root, dir)
-	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to read directory")
-		return
-	}
-	current := filepath.ToSlash(relative)
-	if current == "." {
-		current = ""
-	}
+	current := e.filesystem.Relative(dir)
 	entries, err := e.store.List(current)
 	if err != nil {
 		e.renderError(w, http.StatusInternalServerError, "Unable to list directory")
@@ -225,12 +195,12 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 // to the directory. There is no client-side state or JavaScript.
 func (e *explorerHandler) previewPage(w http.ResponseWriter, r *http.Request) {
 	rel := r.PathValue("path")
-	target, err := e.resolve(rel)
+	target, err := e.filesystem.Resolve(rel)
 	if err != nil {
 		e.pathError(w, err)
 		return
 	}
-	info, err := e.rootFS.Stat(e.rootName(e.relativePath(target)))
+	info, err := e.filesystem.Stat(e.filesystem.Relative(target))
 	if err != nil {
 		if os.IsNotExist(err) {
 			e.renderError(w, http.StatusNotFound, "File not found")
@@ -264,7 +234,7 @@ func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
 	if parent != current {
 		return
 	}
-	info, err := e.rootFS.Stat(e.rootName(rel))
+	info, err := e.filesystem.Stat(filepath.ToSlash(rel))
 	if err != nil || !info.Mode().IsRegular() {
 		return
 	}
@@ -276,7 +246,7 @@ func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
 		data.PreviewNote = fmt.Sprintf("This file is too large to preview (maximum %d KiB). Download it instead.", maxPreviewSize>>10)
 		return
 	}
-	file, err := e.rootFS.Open(e.rootName(rel))
+	file, err := e.filesystem.Open(filepath.ToSlash(rel))
 	if err != nil {
 		return
 	}
@@ -350,7 +320,7 @@ func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid directory name")
 		return
 	}
-	if err := e.rootFS.Mkdir(path.Join(e.relativePath(parent), name), 0o755); err != nil {
+	if err := e.filesystem.Mkdir(path.Join(e.filesystem.Relative(parent), name), 0o755); err != nil {
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to create directory")
 		return
 	}
@@ -363,12 +333,12 @@ func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	oldRel := r.FormValue("old")
-	oldPath, err := e.resolve(oldRel)
+	oldPath, err := e.filesystem.Resolve(oldRel)
 	if err != nil {
 		e.redirectMutationPathError(w, r, err)
 		return
 	}
-	if oldPath == e.root {
+	if oldPath == e.filesystem.Path() {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Cannot rename the root directory")
 		return
 	}
@@ -379,32 +349,27 @@ func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
 	}
 	oldParent := filepath.Dir(oldPath)
 	newPath := filepath.Join(oldParent, name)
-	newRel, err := filepath.Rel(e.root, newPath)
-	if err != nil {
+	newRel := e.filesystem.Relative(newPath)
+	if newRel == "" {
 		e.redirectMutationPathError(w, r, errForbidden)
 		return
 	}
-	if _, err := e.resolve(filepath.ToSlash(newRel)); err != nil {
+	if _, err := e.filesystem.Resolve(filepath.ToSlash(newRel)); err != nil {
 		e.redirectMutationPathError(w, r, err)
 		return
 	}
-	if _, err := e.rootFS.Lstat(filepath.ToSlash(newRel)); err == nil {
+	if _, err := e.filesystem.Lstat(filepath.ToSlash(newRel)); err == nil {
 		e.redirectMutationError(w, r, http.StatusConflict, "An entry with that name already exists")
 		return
 	} else if !os.IsNotExist(err) {
 		e.redirectMutationPathError(w, r, err)
 		return
 	}
-	if err := e.rootFS.Rename(e.rootName(e.relativePath(oldPath)), e.relativePath(newPath)); err != nil {
+	if err := e.filesystem.Rename(e.filesystem.Relative(oldPath), e.filesystem.Relative(newPath)); err != nil {
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to rename entry")
 		return
 	}
-	current, err := filepath.Rel(e.root, oldParent)
-	if err != nil {
-		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to read directory")
-		return
-	}
-	e.redirectToDirectory(w, r, filepath.ToSlash(current))
+	e.redirectToDirectory(w, r, e.filesystem.Relative(oldParent))
 }
 
 func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
@@ -413,26 +378,21 @@ func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rel := r.FormValue("path")
-	target, err := e.resolve(rel)
+	target, err := e.filesystem.Resolve(rel)
 	if err != nil {
 		e.redirectMutationPathError(w, r, err)
 		return
 	}
-	if target == e.root {
+	if target == e.filesystem.Path() {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Cannot delete the root directory")
 		return
 	}
 	parent := filepath.Dir(target)
-	if err := e.rootFS.RemoveAll(e.relativePath(target)); err != nil {
+	if err := e.filesystem.RemoveAll(e.filesystem.Relative(target)); err != nil {
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to delete entry")
 		return
 	}
-	current, err := filepath.Rel(e.root, parent)
-	if err != nil {
-		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to read directory")
-		return
-	}
-	e.redirectToDirectory(w, r, filepath.ToSlash(current))
+	e.redirectToDirectory(w, r, e.filesystem.Relative(parent))
 }
 
 func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
@@ -457,17 +417,17 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dest := filepath.Join(parent, header.Filename)
-	destRel, err := filepath.Rel(e.root, dest)
-	if err != nil {
+	destRel := e.filesystem.Relative(dest)
+	if destRel == "" {
 		e.redirectMutationPathError(w, r, errForbidden)
 		return
 	}
-	if _, err := e.resolve(filepath.ToSlash(destRel)); err != nil {
+	if _, err := e.filesystem.Resolve(filepath.ToSlash(destRel)); err != nil {
 		e.redirectMutationPathError(w, r, err)
 		return
 	}
 	destRel = filepath.ToSlash(destRel)
-	out, err := e.rootFS.OpenFile(destRel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	out, err := e.filesystem.OpenFile(destRel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		e.redirectMutationError(w, r, http.StatusConflict, "Unable to save upload")
 		return
@@ -475,7 +435,7 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 	_, copyErr := io.Copy(out, io.LimitReader(file, maxUploadSize+1))
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil {
-		_ = e.rootFS.Remove(destRel)
+		_ = e.filesystem.Remove(destRel)
 		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to save upload")
 		return
 	}
@@ -494,76 +454,19 @@ func (e *explorerHandler) redirectToDirectory(w http.ResponseWriter, r *http.Req
 }
 
 func (e *explorerHandler) resolveParent(rel string) (string, string, error) {
-	dir, err := e.resolve(rel)
+	dir, err := e.filesystem.Resolve(rel)
 	if err != nil {
 		return "", "", err
 	}
-	info, err := e.rootFS.Stat(e.rootName(e.relativePath(dir)))
+	info, err := e.filesystem.Stat(e.filesystem.Relative(dir))
 	if err != nil {
 		return "", "", err
 	}
 	if !info.IsDir() {
 		return "", "", errInvalidPath
 	}
-	current, err := filepath.Rel(e.root, dir)
-	if err != nil {
-		return "", "", errForbidden
-	}
-	current = filepath.ToSlash(current)
-	if current == "." {
-		current = ""
-	}
+	current := e.filesystem.Relative(dir)
 	return dir, current, nil
-}
-
-// resolve rejects lexical traversal and every symlink component before returning
-// the canonical absolute path used by the existing filesystem helpers.
-func (e *explorerHandler) resolve(rel string) (string, error) {
-	if strings.IndexByte(rel, 0) >= 0 || filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) {
-		return "", errInvalidPath
-	}
-	if len(rel) >= 2 && rel[1] == ':' {
-		return "", errInvalidPath
-	}
-	normalized := strings.ReplaceAll(rel, `\`, "/")
-	for _, component := range strings.Split(normalized, "/") {
-		if component == ".." {
-			return "", errInvalidPath
-		}
-	}
-	clean := path.Clean(normalized)
-	if clean == "." {
-		clean = ""
-	}
-	if clean == "" {
-		return e.root, nil
-	}
-	components := strings.Split(clean, "/")
-	current := ""
-	for i, component := range components {
-		current = path.Join(current, component)
-		info, err := e.rootFS.Lstat(current)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return "", err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", errForbidden
-		}
-		if i < len(components)-1 && !info.IsDir() {
-			return "", errInvalidPath
-		}
-	}
-	return filepath.Join(e.root, filepath.FromSlash(clean)), nil
-}
-
-func (e *explorerHandler) rootName(rel string) string {
-	if rel == "" {
-		return "."
-	}
-	return rel
 }
 
 func validName(name string) bool {

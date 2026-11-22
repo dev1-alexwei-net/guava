@@ -544,3 +544,103 @@ func TestUnpreviewableFileOffersDownloadFromPreviewState(t *testing.T) {
 		})
 	}
 }
+
+// paneWiring pins the assistive-tech contract shared by every preview state:
+// the pane region is labelled by its own heading.
+var paneWiring = []string{`aria-labelledby="preview-heading"`, `id="preview-heading"`}
+
+func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
+	t.Run("content", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h := makeTestHandler(t, root)
+
+		rec := get(t, h, "/preview/a.txt")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		body := rec.Body.String()
+		assertPaneWiring(t, body)
+		// The selected row announces itself as the current item.
+		if !strings.Contains(body, `aria-current="true"`) {
+			t.Fatal("selected row is not exposed with an aria-current state")
+		}
+		if strings.Contains(body, `<script`) {
+			t.Fatal("introduces client-side JavaScript")
+		}
+	})
+
+	t.Run("non-text note", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "blob.bin"), []byte{0x00, 0x01, 0x02}, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h := makeTestHandler(t, root)
+
+		rec := get(t, h, "/preview/blob.bin")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		assertFallbackNoteState(t, rec.Body.String())
+	})
+
+	t.Run("oversized note", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "big.txt"), make([]byte, maxPreviewSize+1), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h := makeTestHandler(t, root)
+
+		rec := get(t, h, "/preview/big.txt")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		assertFallbackNoteState(t, rec.Body.String())
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		h := makeTestHandler(t, t.TempDir())
+
+		rec := get(t, h, "/")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		body := rec.Body.String()
+		assertPaneWiring(t, body)
+		// The hint text is associated with the pane heading it belongs to.
+		if !strings.Contains(body, "No file selected") {
+			t.Fatal("empty state hint is missing")
+		}
+		if !strings.Contains(body, "Select a file from the list to preview it here") {
+			t.Fatal("empty state does not explain how to select a file")
+		}
+		if strings.Contains(body, `<script`) {
+			t.Fatal("introduces client-side JavaScript")
+		}
+	})
+}
+
+func assertPaneWiring(t *testing.T, body string) {
+	t.Helper()
+	for _, want := range paneWiring {
+		if !strings.Contains(body, want) {
+			t.Errorf("pane is missing %q", want)
+		}
+	}
+}
+
+func assertFallbackNoteState(t *testing.T, body string) {
+	t.Helper()
+	assertPaneWiring(t, body)
+	if !strings.Contains(body, `role="note"`) {
+		t.Fatal("explanatory note is not exposed with role=note")
+	}
+	if !strings.Contains(body, `>Download file</a>`) {
+		t.Fatal("fallback state does not offer a reachable Download file action")
+	}
+	if strings.Contains(body, `<script`) {
+		t.Fatal("introduces client-side JavaScript")
+	}
+}

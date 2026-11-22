@@ -6,6 +6,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Guava · File explorer</title>
   <link href="/static/bootstrap.min.css" rel="stylesheet">
+  <style>
+    /* Give the keyboard-focusable preview content a visible focus indicator. */
+    .preview-content:focus { outline: 2px solid var(--bs-primary, #0d6efd); outline-offset: 2px; }
+  </style>
 </head>
 <body class="bg-body-tertiary">
   <nav class="navbar border-bottom bg-body">
@@ -84,7 +88,7 @@
             <div class="alert alert-secondary mb-3" role="note">{{.PreviewNote}}</div>
             <a class="btn btn-primary" href="{{.PreviewDownloadURL}}">Download file</a>
             {{else}}
-            <pre class="bg-light border rounded p-3 mb-0 overflow-auto font-monospace small" style="max-height: 480px;">{{.PreviewContent}}</pre>
+            <pre class="preview-content bg-light border rounded p-3 mb-0 overflow-auto font-monospace small" style="max-height: 480px;" tabindex="0">{{.PreviewContent}}</pre>
             {{end}}
           </div>
         </section>

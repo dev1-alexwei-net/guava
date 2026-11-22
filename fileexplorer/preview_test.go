@@ -77,6 +77,34 @@ func TestDirectoryNameLinkNavigatesIntoDirectory(t *testing.T) {
 	}
 }
 
+func TestPreviewContentIsKeyboardFocusable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/preview/a.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	// The scrollable preview pane must be reachable by keyboard focus so long
+	// files can be scrolled without a mouse.
+	if !strings.Contains(body, `class="preview-content`) {
+		t.Fatal("preview content does not render with its focusable class")
+	}
+	if !strings.Contains(body, `tabindex="0"`) {
+		t.Fatal("preview content is not keyboard-focusable")
+	}
+	if !strings.Contains(body, ".preview-content:focus") {
+		t.Fatal("preview content has no visible focus indicator")
+	}
+	if strings.Contains(body, `<script`) {
+		t.Fatal("introduces client-side JavaScript")
+	}
+}
+
 func TestPreviewPageBackLinkTargetsParentDirectory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {

@@ -437,6 +437,9 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *explorerHandler) redirectToDirectory(w http.ResponseWriter, r *http.Request, current string) {
+	if current == "." {
+		current = ""
+	}
 	target := itemURL(current, true)
 	if current == "" {
 		target = "/"

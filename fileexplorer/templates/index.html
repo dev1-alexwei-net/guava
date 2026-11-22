@@ -82,6 +82,16 @@
             {{end}}
           </div>
         </section>
+        {{else}}
+        <section class="card shadow-sm border-0 mb-4" aria-labelledby="preview-heading">
+          <div class="card-header bg-body">
+            <h2 class="h6 mb-0" id="preview-heading">Preview</h2>
+          </div>
+          <div class="card-body">
+            <p class="text-body-secondary mb-1">No file selected.</p>
+            <p class="text-body-secondary mb-0">Select a file from the list to preview it here. Text files open inline; other files remain available to download.</p>
+          </div>
+        </section>
         {{end}}
         <section class="card shadow-sm border-0 mb-4" aria-label="Directory contents">
           <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">

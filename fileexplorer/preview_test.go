@@ -219,16 +219,16 @@ func TestPreviewSelectionFollowsTheURL(t *testing.T) {
 	if strings.Contains(body, "alpha content") {
 		t.Fatal("unrelated file content is rendered")
 	}
-	// b.txt is previewing, so its row offers Hide preview while a.txt keeps only
-	// the default preview link (no redundant Preview button).
+	// a.txt keeps only the default preview link (no redundant Preview button),
+	// and Hide preview is offered exactly once: in the pane header, never in a row.
 	if strings.Contains(body, `>Preview</a>`) {
-		t.Fatal("non-previewed row offers a redundant Preview button")
+		t.Fatal("row offers a redundant Preview button")
 	}
 	if !strings.Contains(body, `href="/preview/a.txt">a.txt</a>`) {
 		t.Fatal("non-previewed row lost its preview link")
 	}
-	if !strings.Contains(body, `href="/d/">Hide preview`) {
-		t.Fatal("previewed row does not offer the hide link")
+	if count := strings.Count(body, "Hide preview"); count != 1 {
+		t.Fatalf("occurrences of Hide preview = %d, want exactly 1 (pane header)", count)
 	}
 }
 

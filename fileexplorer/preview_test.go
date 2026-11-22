@@ -70,7 +70,7 @@ func TestPreviewPageBackLinkTargetsParentDirectory(t *testing.T) {
 	}
 }
 
-func TestPlainDirectoryPageHasNoPreviewPane(t *testing.T) {
+func TestPlainDirectoryPageShowsUnselectedPreviewState(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
 		t.Fatal(err)
@@ -87,11 +87,45 @@ func TestPlainDirectoryPageHasNoPreviewPane(t *testing.T) {
 		t.Fatalf("GET / status = %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, `id="preview-heading"`) {
-		t.Fatal("plain directory page renders the preview pane")
+	if !strings.Contains(body, `id="preview-heading"`) {
+		t.Fatal("plain directory page does not render the preview area")
+	}
+	if !strings.Contains(body, "No file selected") {
+		t.Fatal("plain directory page does not show the unselected preview state")
+	}
+	if !strings.Contains(body, "Select a file from the list to preview it here") {
+		t.Fatal("unselected preview state does not explain how to select a file")
+	}
+	if strings.Contains(body, "Hide preview") {
+		t.Fatal("unselected preview state offers a hide-preview action")
+	}
+	if strings.Contains(body, "previewable content") {
+		t.Fatal("unselected preview state renders a file's content")
 	}
 	if !strings.Contains(body, `href="/preview/a.txt">Preview`) {
 		t.Fatal("row does not offer the preview link")
+	}
+}
+
+func TestEmptyPreviewStateRendersForEmptyDirectory(t *testing.T) {
+	h := makeTestHandler(t, t.TempDir())
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="preview-heading"`) {
+		t.Fatal("empty directory page does not render the preview area")
+	}
+	if !strings.Contains(body, "No file selected") {
+		t.Fatal("empty directory page does not show the unselected preview state")
+	}
+	if !strings.Contains(body, "This directory is empty") {
+		t.Fatal("empty directory listing state is missing")
+	}
+	if strings.Contains(body, "Hide preview") {
+		t.Fatal("empty directory page offers a hide-preview action")
 	}
 }
 

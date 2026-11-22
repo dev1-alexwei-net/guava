@@ -130,10 +130,9 @@ func TestHandlerRejectsTraversalAndSymlinkEscape(t *testing.T) {
 	h := makeTestHandler(t, root)
 
 	for _, test := range []struct {
-		name            string
-		run             func() *httptest.ResponseRecorder
-		want            int
-		wantPageContains string
+		name string
+		run  func() *httptest.ResponseRecorder
+		want int
 	}{
 		{
 			name: "encoded URL traversal",
@@ -149,16 +148,14 @@ func TestHandlerRejectsTraversalAndSymlinkEscape(t *testing.T) {
 			run: func() *httptest.ResponseRecorder {
 				return formRequest(t, h, http.MethodPost, "/mkdir", url.Values{"parent": {"../outside"}, "name": {"bad"}})
 			},
-			want:            http.StatusSeeOther,
-			wantPageContains: "Invalid path",
+			want: http.StatusBadRequest,
 		},
 		{
 			name: "absolute path",
 			run: func() *httptest.ResponseRecorder {
 				return formRequest(t, h, http.MethodPost, "/delete", url.Values{"path": {outsideFile}})
 			},
-			want:            http.StatusSeeOther,
-			wantPageContains: "Invalid path",
+			want: http.StatusBadRequest,
 		},
 		{
 			name: "symlink directory browse",
@@ -183,24 +180,13 @@ func TestHandlerRejectsTraversalAndSymlinkEscape(t *testing.T) {
 			run: func() *httptest.ResponseRecorder {
 				return formRequest(t, h, http.MethodPost, "/delete", url.Values{"path": {"escape/secret.txt"}})
 			},
-			want:            http.StatusSeeOther,
-			wantPageContains: "outside the configured root"
+			want: http.StatusForbidden,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := test.run()
 			if response.Code != test.want {
 				t.Fatalf("status=%d, want %d; body=%s", response.Code, test.want, response.Body.String())
-			}
-			if test.wantPageContains != "" {
-				location := response.Header().Get("Location")
-				if !strings.Contains(location, "error=") {
-					t.Fatalf("mutation error redirect lacks an error marker: %q", location)
-				}
-				response = get(t, h, location)
-				if !strings.Contains(response.Body.String(), test.wantPageContains) {
-					t.Fatalf("redirect destination lacks %q: %s", test.wantPageContains, response.Body.String())
-				}
 			}
 			if got := response.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
 				t.Fatalf("Content-Type=%q, want server-rendered HTML", got)

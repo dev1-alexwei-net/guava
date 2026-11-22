@@ -105,6 +105,36 @@ func TestPreviewContentIsKeyboardFocusable(t *testing.T) {
 	}
 }
 
+func TestFocusOrderIsLogicalAndTrapFree(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/preview/a.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+
+	rowName := strings.Index(body, `href="/preview/a.txt">a.txt</a>`)
+	paneHide := strings.Index(body, `>Hide preview</a>`)
+	paneContent := strings.Index(body, `tabindex="0"`)
+	if rowName == -1 || paneHide == -1 || paneContent == -1 {
+		t.Fatalf("missing focusable elements: rowName=%d paneHide=%d paneContent=%d", rowName, paneHide, paneContent)
+	}
+	// Tab order should follow the workspace order: listing rows first, then the
+	// pane controls, then the scrollable preview content.
+	if !(rowName < paneHide && paneHide < paneContent) {
+		t.Fatalf("focus order is not logical: rowName=%d paneHide=%d paneContent=%d", rowName, paneHide, paneContent)
+	}
+	// The page is fully server-rendered, so nothing can trap keyboard focus.
+	if strings.Contains(body, `<script`) {
+		t.Fatal("introduces client-side JavaScript")
+	}
+}
+
 func TestPreviewPageBackLinkTargetsParentDirectory(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {

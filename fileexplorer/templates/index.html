@@ -73,38 +73,8 @@
         </section>
         {{else}}
         <div class="row g-4">
-          <div class="col-12 col-lg-5 order-1 order-lg-2">
-            {{if .PreviewPath}}
-            <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
-              <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <h2 class="h6 mb-0 text-break" id="preview-heading">Preview · {{.PreviewName}}</h2>
-            <div class="d-flex flex-wrap gap-2">
-              <a class="btn btn-outline-primary btn-sm" href="{{.PreviewDownloadURL}}">Download</a>
-              <a class="btn btn-outline-secondary btn-sm" href="{{.PreviewReturnURL}}">Hide preview</a>
-            </div>
-          </div>
-          <div class="card-body">
-            {{if .PreviewNote}}
-            <div class="alert alert-secondary mb-3" role="note">{{.PreviewNote}}</div>
-            <a class="btn btn-primary" href="{{.PreviewDownloadURL}}">Download file</a>
-            {{else}}
-            <pre class="preview-content bg-light border rounded p-3 mb-0 overflow-auto font-monospace small" style="max-height: 480px;" tabindex="0">{{.PreviewContent}}</pre>
-            {{end}}
-          </div>
-        </section>
-            {{else}}
-            <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
-              <div class="card-header bg-body">
-                <h2 class="h6 mb-0" id="preview-heading">Preview</h2>
-              </div>
-              <div class="card-body">
-                <p class="text-body-secondary mb-1">No file selected.</p>
-                <p class="text-body-secondary mb-0">Select a file from the list to preview it here. Text files open inline; other files remain available to download.</p>
-              </div>
-            </section>
-            {{end}}
-          </div>
-
+          <!-- Keyboard focus follows DOM order: the listing comes first so rows precede the
+     preview pane; the order utilities below keep the visual layout unchanged. -->
           <div class="col-12 col-lg-7 order-2 order-lg-1">
             <section class="card shadow-sm border-0" aria-label="Directory contents">
           <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">
@@ -147,6 +117,38 @@
             {{end}}
           </ul>
             </section>
+          </div>
+
+          <div class="col-12 col-lg-5 order-1 order-lg-2">
+            {{if .PreviewPath}}
+            <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
+              <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <h2 class="h6 mb-0 text-break" id="preview-heading">Preview · {{.PreviewName}}</h2>
+            <div class="d-flex flex-wrap gap-2">
+              <a class="btn btn-outline-primary btn-sm" href="{{.PreviewDownloadURL}}">Download</a>
+              <a class="btn btn-outline-secondary btn-sm" href="{{.PreviewReturnURL}}">Hide preview</a>
+            </div>
+          </div>
+          <div class="card-body">
+            {{if .PreviewNote}}
+            <div class="alert alert-secondary mb-3" role="note">{{.PreviewNote}}</div>
+            <a class="btn btn-primary" href="{{.PreviewDownloadURL}}">Download file</a>
+            {{else}}
+            <pre class="preview-content bg-light border rounded p-3 mb-0 overflow-auto font-monospace small" style="max-height: 480px;" tabindex="0">{{.PreviewContent}}</pre>
+            {{end}}
+          </div>
+        </section>
+            {{else}}
+            <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
+              <div class="card-header bg-body">
+                <h2 class="h6 mb-0" id="preview-heading">Preview</h2>
+              </div>
+              <div class="card-body">
+                <p class="text-body-secondary mb-1">No file selected.</p>
+                <p class="text-body-secondary mb-0">Select a file from the list to preview it here. Text files open inline; other files remain available to download.</p>
+              </div>
+            </section>
+            {{end}}
           </div>
         </div>
 

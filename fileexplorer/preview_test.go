@@ -168,8 +168,11 @@ func TestPlainDirectoryPageShowsUnselectedPreviewState(t *testing.T) {
 	if strings.Contains(body, "previewable content") {
 		t.Fatal("unselected preview state renders a file's content")
 	}
-	if !strings.Contains(body, `href="/preview/a.txt">Preview`) {
-		t.Fatal("row does not offer the preview link")
+	if !strings.Contains(body, `href="/preview/a.txt">a.txt</a>`) {
+		t.Fatal("filename link no longer targets the preview")
+	}
+	if strings.Contains(body, `>Preview</a>`) {
+		t.Fatal("row offers a redundant Preview button")
 	}
 }
 
@@ -216,9 +219,13 @@ func TestPreviewSelectionFollowsTheURL(t *testing.T) {
 	if strings.Contains(body, "alpha content") {
 		t.Fatal("unrelated file content is rendered")
 	}
-	// b.txt is previewing, so its row offers Hide preview while a.txt offers Preview.
-	if !strings.Contains(body, `href="/preview/a.txt">Preview`) {
-		t.Fatal("non-previewed row does not offer the preview link")
+	// b.txt is previewing, so its row offers Hide preview while a.txt keeps only
+	// the default preview link (no redundant Preview button).
+	if strings.Contains(body, `>Preview</a>`) {
+		t.Fatal("non-previewed row offers a redundant Preview button")
+	}
+	if !strings.Contains(body, `href="/preview/a.txt">a.txt</a>`) {
+		t.Fatal("non-previewed row lost its preview link")
 	}
 	if !strings.Contains(body, `href="/d/">Hide preview`) {
 		t.Fatal("previewed row does not offer the hide link")

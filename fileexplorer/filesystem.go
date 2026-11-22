@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -114,10 +115,10 @@ func (f *rootedFS) clean(rel string) (string, error) {
 	for i, component := range parts {
 		current = path.Join(current, component)
 		info, err := f.root.Lstat(f.name(current))
+		if os.IsNotExist(err) {
+			continue
+		}
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -205,25 +206,16 @@ func (f *rootedFS) RemoveAll(name string) error {
 	return f.root.RemoveAll(f.name(rel))
 }
 
-var (
-	errInvalidName           = errors.New("invalid name")
-	errRootMutation          = errors.New("cannot mutate root")
-	errCreateDirectory       = errors.New("unable to create directory")
-	errCreateFile            = errors.New("unable to create file")
-	errFinishCreateFile      = errors.New("unable to finish creating file")
-	errEntryExists           = errors.New("entry already exists")
-	errRenameEntry           = errors.New("unable to rename entry")
-	errDeleteEntry           = errors.New("unable to delete entry")
-	errOpenUpload            = errors.New("unable to save upload")
-	errSaveUpload            = errors.New("unable to save upload")
-	errUploadTooLarge        = errors.New("upload too large")
-	errEditorContentTooLarge = errors.New("editor content too large")
-	errUnsupportedText       = errors.New("unsupported editor content")
-	errPrepareFileSave       = errors.New("unable to prepare file save")
-	errPreserveFileMode      = errors.New("unable to preserve file permissions")
-	errSaveFile              = errors.New("unable to save file")
-	errReplaceFile           = errors.New("unable to replace file")
-)
+type interactionError struct {
+	status  int
+	message string
+}
+
+func (e *interactionError) Error() string { return e.message }
+
+func newInteractionError(status int, message string) *interactionError {
+	return &interactionError{status: status, message: message}
+}
 
 type mutations struct {
 	filesystem *rootedFS
@@ -239,10 +231,10 @@ func (m *mutations) MakeDirectory(parent, name string) (string, error) {
 		return "", err
 	}
 	if !validName(name) {
-		return "", errInvalidName
+		return "", newInteractionError(http.StatusBadRequest, "Invalid directory name")
 	}
 	if err := m.filesystem.Mkdir(path.Join(m.filesystem.Relative(dir), name), 0o755); err != nil {
-		return "", errCreateDirectory
+		return "", newInteractionError(http.StatusConflict, "Unable to create directory")
 	}
 	return current, nil
 }
@@ -253,14 +245,14 @@ func (m *mutations) CreateFile(parent, name string) (string, error) {
 		return "", err
 	}
 	if !validName(name) {
-		return "", errInvalidName
+		return "", newInteractionError(http.StatusBadRequest, "Invalid file name")
 	}
 	file, err := m.filesystem.OpenFile(path.Join(m.filesystem.Relative(dir), name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		return "", errCreateFile
+		return "", newInteractionError(http.StatusConflict, "Unable to create file")
 	}
 	if err := file.Close(); err != nil {
-		return "", errFinishCreateFile
+		return "", newInteractionError(http.StatusInternalServerError, "Unable to finish creating file")
 	}
 	return current, nil
 }
@@ -271,10 +263,10 @@ func (m *mutations) Rename(old, name string) (string, error) {
 		return "", err
 	}
 	if target == m.filesystem.Path() {
-		return "", errRootMutation
+		return "", newInteractionError(http.StatusBadRequest, "Cannot rename the root directory")
 	}
 	if !validName(name) {
-		return "", errInvalidName
+		return "", newInteractionError(http.StatusBadRequest, "Invalid name")
 	}
 	oldRel := m.filesystem.Relative(target)
 	parent := path.Dir(oldRel)
@@ -285,13 +277,15 @@ func (m *mutations) Rename(old, name string) (string, error) {
 	if _, err := m.filesystem.Resolve(newRel); err != nil {
 		return "", err
 	}
-	if _, err := m.filesystem.Lstat(newRel); err == nil {
-		return "", errEntryExists
-	} else if !os.IsNotExist(err) {
+	_, err = m.filesystem.Lstat(newRel)
+	if err == nil {
+		return "", newInteractionError(http.StatusConflict, "An entry with that name already exists")
+	}
+	if !os.IsNotExist(err) {
 		return "", err
 	}
 	if err := m.filesystem.Rename(oldRel, newRel); err != nil {
-		return "", errRenameEntry
+		return "", newInteractionError(http.StatusConflict, "Unable to rename entry")
 	}
 	return parent, nil
 }
@@ -302,7 +296,7 @@ func (m *mutations) Delete(rel string) (string, error) {
 		return "", err
 	}
 	if target == m.filesystem.Path() {
-		return "", errRootMutation
+		return "", newInteractionError(http.StatusBadRequest, "Cannot delete the root directory")
 	}
 	rel = m.filesystem.Relative(target)
 	parent := path.Dir(rel)
@@ -310,7 +304,7 @@ func (m *mutations) Delete(rel string) (string, error) {
 		parent = ""
 	}
 	if err := m.filesystem.RemoveAll(rel); err != nil {
-		return "", errDeleteEntry
+		return "", newInteractionError(http.StatusConflict, "Unable to delete entry")
 	}
 	return parent, nil
 }
@@ -321,7 +315,7 @@ func (m *mutations) Upload(parent, name string, source io.Reader) (string, error
 		return "", err
 	}
 	if !validName(name) {
-		return "", errInvalidName
+		return "", newInteractionError(http.StatusBadRequest, "Invalid file name")
 	}
 	dest := path.Join(m.filesystem.Relative(dir), name)
 	if _, err := m.filesystem.Resolve(dest); err != nil {
@@ -329,40 +323,40 @@ func (m *mutations) Upload(parent, name string, source io.Reader) (string, error
 	}
 	out, err := m.filesystem.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return "", errOpenUpload
+		return "", newInteractionError(http.StatusConflict, "Unable to save upload")
 	}
 	size, copyErr := io.Copy(out, io.LimitReader(source, maxUploadSize+1))
 	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil || size > maxUploadSize {
-		_ = m.filesystem.Remove(dest)
-		if size > maxUploadSize {
-			return "", errUploadTooLarge
-		}
-		return "", errSaveUpload
+	if copyErr == nil && closeErr == nil && size <= maxUploadSize {
+		return current, nil
 	}
-	return current, nil
+	_ = m.filesystem.Remove(dest)
+	if size > maxUploadSize {
+		return "", newInteractionError(http.StatusBadRequest, "Invalid upload")
+	}
+	return "", newInteractionError(http.StatusInternalServerError, "Unable to save upload")
 }
 
 // SaveText atomically replaces a text file while preserving its permission bits.
 func (m *mutations) SaveText(rel, content string, mode os.FileMode) error {
 	if len(content) > maxEditorSize {
-		return errEditorContentTooLarge
+		return newInteractionError(http.StatusRequestEntityTooLarge, "Editor content is too large (maximum 1 MiB)")
 	}
 	if !utf8.ValidString(content) || strings.IndexByte(content, 0) >= 0 {
-		return errUnsupportedText
+		return newInteractionError(http.StatusUnsupportedMediaType, "The editor only saves UTF-8 text files")
 	}
 	temp, err := randomTempName(path.Dir(rel))
 	if err != nil {
-		return errPrepareFileSave
+		return newInteractionError(http.StatusInternalServerError, "Unable to prepare file save")
 	}
 	out, err := m.filesystem.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
-		return errPrepareFileSave
+		return newInteractionError(http.StatusInternalServerError, "Unable to prepare file save")
 	}
 	if err := out.Chmod(mode); err != nil {
 		_ = out.Close()
 		_ = m.filesystem.Remove(temp)
-		return errPreserveFileMode
+		return newInteractionError(http.StatusInternalServerError, "Unable to preserve file permissions")
 	}
 	removeTemp := true
 	defer func() {
@@ -372,16 +366,16 @@ func (m *mutations) SaveText(rel, content string, mode os.FileMode) error {
 		}
 	}()
 	if _, err := io.WriteString(out, content); err != nil {
-		return errSaveFile
+		return newInteractionError(http.StatusInternalServerError, "Unable to save file")
 	}
 	if err := out.Sync(); err != nil {
-		return errSaveFile
+		return newInteractionError(http.StatusInternalServerError, "Unable to save file")
 	}
 	if err := out.Close(); err != nil {
-		return errSaveFile
+		return newInteractionError(http.StatusInternalServerError, "Unable to save file")
 	}
 	if err := m.filesystem.Rename(temp, rel); err != nil {
-		return errReplaceFile
+		return newInteractionError(http.StatusInternalServerError, "Unable to replace file")
 	}
 	removeTemp = false
 	return nil

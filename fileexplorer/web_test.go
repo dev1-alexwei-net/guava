@@ -138,11 +138,7 @@ func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			if tc.file != "" {
-				if err := os.WriteFile(filepath.Join(root, tc.file), tc.data, 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
+			writePreviewFixture(t, root, tc.file, tc.data)
 			h := makeTestHandler(t, root)
 			target := "/"
 			if tc.file != "" {
@@ -343,5 +339,15 @@ func TestRenderPageEscapesEntryNames(t *testing.T) {
 	}
 	if !strings.Contains(body.String(), "&lt;script&gt;") {
 		t.Fatal("escaped entry name not present")
+	}
+}
+
+func writePreviewFixture(t *testing.T, root, name string, data []byte) {
+	t.Helper()
+	if name == "" {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(root, name), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

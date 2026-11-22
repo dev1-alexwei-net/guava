@@ -35,9 +35,7 @@ func TestPreviewPageShowsSelectedFileContent(t *testing.T) {
 			t.Errorf("rendered page does not contain %q", want)
 		}
 	}
-	if strings.Contains(body, "<script") {
-		t.Fatal("preview markup contains client-side JavaScript")
-	}
+	assertNoClientSideJavaScript(t, body)
 }
 
 func TestFilenameLinkNavigatesToPreview(t *testing.T) {
@@ -100,9 +98,7 @@ func TestPreviewContentIsKeyboardFocusable(t *testing.T) {
 	if !strings.Contains(body, ".preview-content:focus") {
 		t.Fatal("preview content has no visible focus indicator")
 	}
-	if strings.Contains(body, `<script`) {
-		t.Fatal("introduces client-side JavaScript")
-	}
+	assertNoClientSideJavaScript(t, body)
 }
 
 func TestFocusOrderIsLogicalAndTrapFree(t *testing.T) {
@@ -130,9 +126,7 @@ func TestFocusOrderIsLogicalAndTrapFree(t *testing.T) {
 		t.Fatalf("focus order is not logical: rowName=%d paneHide=%d paneContent=%d", rowName, paneHide, paneContent)
 	}
 	// The page is fully server-rendered, so nothing can trap keyboard focus.
-	if strings.Contains(body, `<script`) {
-		t.Fatal("introduces client-side JavaScript")
-	}
+	assertNoClientSideJavaScript(t, body)
 }
 
 func TestPreviewPageBackLinkTargetsParentDirectory(t *testing.T) {
@@ -372,9 +366,7 @@ func TestPreviewShowsNoteForBinaryFile(t *testing.T) {
 	if !strings.Contains(body, "does not appear to be UTF-8 text") {
 		t.Fatal("expected the non-text note")
 	}
-	if strings.Contains(body, "<script") {
-		t.Fatal("fallback preview state contains client-side JavaScript")
-	}
+	assertNoClientSideJavaScript(t, body)
 }
 
 func TestPreviewShowsNoteForOversizedFile(t *testing.T) {
@@ -395,9 +387,7 @@ func TestPreviewShowsNoteForOversizedFile(t *testing.T) {
 	if !strings.Contains(body, "too large to preview") {
 		t.Fatal("expected the size note")
 	}
-	if strings.Contains(body, "<script") {
-		t.Fatal("fallback preview state contains client-side JavaScript")
-	}
+	assertNoClientSideJavaScript(t, body)
 }
 
 func TestPrimaryLinkResolvesToPreviewWithDirectoryListing(t *testing.T) {
@@ -433,9 +423,7 @@ func TestPrimaryLinkResolvesToPreviewWithDirectoryListing(t *testing.T) {
 	if strings.Contains(body, "beta content") {
 		t.Fatal("unrelated file content is rendered")
 	}
-	if strings.Contains(body, "<script") {
-		t.Fatal("preview page contains client-side JavaScript")
-	}
+	assertNoClientSideJavaScript(t, body)
 }
 
 func TestChangingPreviewURLChangesSelectionAcrossDirectories(t *testing.T) {
@@ -567,9 +555,7 @@ func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 		if !strings.Contains(body, `aria-current="true"`) {
 			t.Fatal("selected row is not exposed with an aria-current state")
 		}
-		if strings.Contains(body, `<script`) {
-			t.Fatal("introduces client-side JavaScript")
-		}
+		assertNoClientSideJavaScript(t, body)
 	})
 
 	t.Run("non-text note", func(t *testing.T) {
@@ -616,9 +602,7 @@ func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 		if !strings.Contains(body, "Select a file from the list to preview it here") {
 			t.Fatal("empty state does not explain how to select a file")
 		}
-		if strings.Contains(body, `<script`) {
-			t.Fatal("introduces client-side JavaScript")
-		}
+		assertNoClientSideJavaScript(t, body)
 	})
 }
 
@@ -640,7 +624,81 @@ func assertFallbackNoteState(t *testing.T, body string) {
 	if !strings.Contains(body, `>Download file</a>`) {
 		t.Fatal("fallback state does not offer a reachable Download file action")
 	}
-	if strings.Contains(body, `<script`) {
-		t.Fatal("introduces client-side JavaScript")
+	assertNoClientSideJavaScript(t, body)
+}
+
+// assertNoClientSideJavaScript pins the no-client-side-JavaScript contract so
+// every rendered preview state can share one check.
+func assertNoClientSideJavaScript(t *testing.T, body string) {
+	t.Helper()
+	if strings.Contains(body, "<script") {
+		t.Fatal("rendered state contains client-side JavaScript")
+	}
+}
+
+// TestAccessiblePreviewFlowEndToEnd pins the whole accessible preview flow in
+// one scenario, in user order: directory → preview → hide. If any #46
+// sub-issue regresses, this test fails at the step that depends on it.
+func TestAccessiblePreviewFlowEndToEnd(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "top.txt"), []byte("top content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	// 1. Directory page: the filename links to the preview route and rows
+	//    offer no redundant Preview button.
+	dir := get(t, h, "/")
+	if dir.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d", dir.Code)
+	}
+	dirBody := dir.Body.String()
+	assertNoClientSideJavaScript(t, dirBody)
+	if !strings.Contains(dirBody, `href="/preview/a.txt">a.txt</a>`) {
+		t.Fatal("directory page: filename link does not target the preview route")
+	}
+	if strings.Contains(dirBody, `>Preview</a>`) {
+		t.Fatal("directory page: row offers a redundant Preview button")
+	}
+
+	// 2. Preview page: the file content renders above the directory listing.
+	//    The visual stacking is server-rendered via the order utilities: the
+	//    pane column sorts first in the visual flow (order-1, on top) and the
+	//    listing column second (order-2, below).
+	rec := get(t, h, "/preview/a.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	assertNoClientSideJavaScript(t, body)
+	if !strings.Contains(body, "previewable content") {
+		t.Fatal("preview page: file content is missing")
+	}
+	if !strings.Contains(body, `href="/preview/top.txt">top.txt</a>`) {
+		t.Fatal("preview page: directory listing is missing")
+	}
+	if !strings.Contains(body, `class="col-12 col-lg-5 order-1 order-lg-2"`) {
+		t.Fatal("preview page: pane column does not sort first in the visual flow (content above listing)")
+	}
+	if !strings.Contains(body, `class="col-12 col-lg-7 order-2 order-lg-1"`) {
+		t.Fatal("preview page: listing column does not sort second in the visual flow")
+	}
+
+	// 3. Exactly one Hide preview control, in the pane header.
+	if count := strings.Count(body, "Hide preview"); count != 1 {
+		t.Fatalf("preview page: Hide preview occurrences = %d, want exactly 1 (pane header)", count)
+	}
+
+	// 4. The preview content area is keyboard-focusable.
+	if !strings.Contains(body, `tabindex="0"`) {
+		t.Fatal("preview page: content area is not keyboard-focusable")
+	}
+
+	// 5. Hiding navigates back to the parent directory URL.
+	if !strings.Contains(body, `href="/d/">Hide preview`) {
+		t.Fatal("preview page: Hide preview does not target the parent directory URL")
 	}
 }

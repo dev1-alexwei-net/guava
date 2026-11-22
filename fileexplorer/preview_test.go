@@ -3,31 +3,27 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func postPreview(t *testing.T, h http.Handler, rel, action string) *httptest.ResponseRecorder {
+func get(t *testing.T, h http.Handler, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	form := url.Values{"path": {rel}, "action": {action}}
-	req := httptest.NewRequest(http.MethodPost, "/preview", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
 	return rec
 }
 
-func TestPreviewShowsSelectedFileContent(t *testing.T) {
+func TestPreviewPageShowsSelectedFileContent(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h := makeTestHandler(t, root)
 
-	rec := postPreview(t, h, "a.txt", "show")
+	rec := get(t, h, "/preview/a.txt")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -42,32 +38,62 @@ func TestPreviewShowsSelectedFileContent(t *testing.T) {
 	}
 }
 
-func TestPreviewHideRemovesPane(t *testing.T) {
+func TestPreviewPageBackLinkTargetsParentDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "a.txt"), []byte("nested content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "top.txt"), []byte("top content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	nested := get(t, h, "/preview/docs/a.txt")
+	if nested.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", nested.Code, http.StatusOK)
+	}
+	if !strings.Contains(nested.Body.String(), `href="/d/docs">Hide preview`) {
+		t.Errorf("back link does not target the parent directory: %s", nested.Body.String())
+	}
+
+	top := get(t, h, "/preview/top.txt")
+	if top.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", top.Code, http.StatusOK)
+	}
+	if !strings.Contains(top.Body.String(), `href="/d/">Hide preview`) {
+		t.Errorf("back link does not target the root directory: %s", top.Body.String())
+	}
+}
+
+func TestPlainDirectoryPageHasNoPreviewPane(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h := makeTestHandler(t, root)
 
-	show := postPreview(t, h, "a.txt", "show")
-	if show.Code != http.StatusOK || !strings.Contains(show.Body.String(), "previewable content") {
-		t.Fatalf("show failed: status=%d", show.Code)
+	// Visiting a preview first must not leak state into the plain directory.
+	if rec := get(t, h, "/preview/a.txt"); rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d", rec.Code)
 	}
 
-	hide := postPreview(t, h, "a.txt", "hide")
-	if hide.Code != http.StatusOK {
-		t.Fatalf("hide status = %d, want %d", hide.Code, http.StatusOK)
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d", rec.Code)
 	}
-	if strings.Contains(hide.Body.String(), `id="preview-heading"`) {
-		t.Fatal("preview pane is still rendered after hiding")
+	body := rec.Body.String()
+	if strings.Contains(body, `id="preview-heading"`) {
+		t.Fatal("plain directory page renders the preview pane")
 	}
-	// The row button must offer "Preview" again.
-	if !strings.Contains(hide.Body.String(), ">Preview<") {
-		t.Fatal("row does not offer the Preview mutation again after hiding")
+	if !strings.Contains(body, `href="/preview/a.txt">Preview`) {
+		t.Fatal("row does not offer the preview link")
 	}
 }
 
-func TestPreviewSwitchesBetweenFiles(t *testing.T) {
+func TestPreviewSelectionFollowsTheURL(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("alpha content"), 0o600); err != nil {
 		t.Fatal(err)
@@ -77,20 +103,23 @@ func TestPreviewSwitchesBetweenFiles(t *testing.T) {
 	}
 	h := makeTestHandler(t, root)
 
-	first := postPreview(t, h, "a.txt", "show")
-	if !strings.Contains(first.Body.String(), "alpha content") {
-		t.Fatalf("first preview does not show alpha: %s", first.Body.String())
-	}
-	second := postPreview(t, h, "b.txt", "show")
+	second := get(t, h, "/preview/b.txt")
 	if second.Code != http.StatusOK {
-		t.Fatalf("second preview status = %d", second.Code)
+		t.Fatalf("status = %d, want %d", second.Code, http.StatusOK)
 	}
 	body := second.Body.String()
 	if !strings.Contains(body, "Preview · b.txt") || !strings.Contains(body, "beta content") {
-		t.Fatal("preview did not switch to b.txt")
+		t.Fatal("preview does not follow the requested URL")
 	}
 	if strings.Contains(body, "alpha content") {
-		t.Fatal("old preview content is still rendered")
+		t.Fatal("unrelated file content is rendered")
+	}
+	// b.txt is previewing, so its row offers Hide preview while a.txt offers Preview.
+	if !strings.Contains(body, `href="/preview/a.txt">Preview`) {
+		t.Fatal("non-previewed row does not offer the preview link")
+	}
+	if !strings.Contains(body, `href="/d/">Hide preview`) {
+		t.Fatal("previewed row does not offer the hide link")
 	}
 }
 
@@ -101,7 +130,7 @@ func TestPreviewRejectsDirectory(t *testing.T) {
 	}
 	h := makeTestHandler(t, root)
 
-	rec := postPreview(t, h, "sub", "show")
+	rec := get(t, h, "/preview/sub")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -112,7 +141,7 @@ func TestPreviewRejectsDirectory(t *testing.T) {
 
 func TestPreviewRejectsMissingFile(t *testing.T) {
 	h := makeTestHandler(t, t.TempDir())
-	rec := postPreview(t, h, "nope.txt", "show")
+	rec := get(t, h, "/preview/nope.txt")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -126,7 +155,7 @@ func TestPreviewShowsNoteForBinaryFile(t *testing.T) {
 	}
 	h := makeTestHandler(t, root)
 
-	rec := postPreview(t, h, "blob.bin", "show")
+	rec := get(t, h, "/preview/blob.bin")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -139,46 +168,42 @@ func TestPreviewShowsNoteForBinaryFile(t *testing.T) {
 	}
 }
 
-func TestPreviewSelectionClearsWhenFileDeleted(t *testing.T) {
+func TestPreviewShowsNoteForOversizedFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), make([]byte, maxPreviewSize+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/preview/big.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="preview-heading"`) {
+		t.Fatal("preview pane is not rendered for an oversized file")
+	}
+	if !strings.Contains(body, "too large to preview") {
+		t.Fatal("expected the size note")
+	}
+}
+
+func TestPreviewClearsWhenFileDeleted(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("temp"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	h := makeTestHandler(t, root)
 
-	if rec := postPreview(t, h, "a.txt", "show"); rec.Code != http.StatusOK {
-		t.Fatalf("show status = %d", rec.Code)
+	if rec := get(t, h, "/preview/a.txt"); rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d", rec.Code)
 	}
 	if err := os.Remove(filepath.Join(root, "a.txt")); err != nil {
 		t.Fatal(err)
 	}
 
-	page := httptest.NewRecorder()
-	h.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
-	if page.Code != http.StatusOK {
-		t.Fatalf("GET / status = %d", page.Code)
-	}
-	if strings.Contains(page.Body.String(), `id="preview-heading"`) {
-		t.Fatal("preview pane still rendered after the selected file was deleted")
-	}
-}
-
-func TestPreviewAcceptsPutLikeOtherMutations(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("put content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := makeTestHandler(t, root)
-
-	form := url.Values{"path": {"a.txt"}, "action": {"show"}}
-	req := httptest.NewRequest(http.MethodPut, "/preview", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("PUT status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if !strings.Contains(rec.Body.String(), "put content") {
-		t.Fatal("PUT mutation did not render the preview")
+	rec := get(t, h, "/preview/a.txt")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d after deletion", rec.Code, http.StatusNotFound)
 	}
 }

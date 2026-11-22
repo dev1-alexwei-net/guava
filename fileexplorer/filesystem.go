@@ -72,6 +72,21 @@ func (f *rootedFS) Relative(target string) string {
 	return filepath.ToSlash(rel)
 }
 
+func (f *rootedFS) ResolveParent(rel string) (string, string, error) {
+	dir, err := f.Resolve(rel)
+	if err != nil {
+		return "", "", err
+	}
+	info, err := f.Stat(f.Relative(dir))
+	if err != nil {
+		return "", "", err
+	}
+	if !info.IsDir() {
+		return "", "", errInvalidPath
+	}
+	return dir, f.Relative(dir), nil
+}
+
 func (f *rootedFS) clean(rel string) (string, error) {
 	if strings.IndexByte(rel, 0) >= 0 || filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, `\`) {
 		return "", errInvalidPath

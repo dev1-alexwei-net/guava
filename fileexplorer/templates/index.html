@@ -100,7 +100,7 @@
           </div>
           <ul class="list-group list-group-flush">
             {{range .Items}}
-            <li class="list-group-item p-3">
+            <li class="list-group-item p-3"{{if eq .Path $.PreviewPath}} aria-current="true"{{end}}>
               <div class="d-flex flex-column flex-xl-row justify-content-between align-items-xl-center gap-3">
                 <div class="d-flex align-items-start gap-3 flex-grow-1">
                   <span class="badge rounded-pill {{if .IsDir}}text-bg-primary{{else}}text-bg-light border text-body-secondary{{end}} mt-1">{{if .IsDir}}Folder{{else}}File{{end}}</span>
@@ -110,7 +110,7 @@
                     {{else}}
                     <a class="d-block link-body-emphasis fw-medium text-break" href="{{.PreviewURL}}">{{.Name}}</a>
                     {{end}}
-                    {{if not .IsDir}}<small class="text-body-secondary">{{.Size}} bytes</small>{{end}}
+                    {{if not .IsDir}}<span class="d-inline-flex align-items-center gap-2">{{if eq .Path $.PreviewPath}}<span class="badge rounded-pill text-bg-primary">Selected</span>{{end}}<small class="text-body-secondary">{{.Size}} bytes</small></span>{{end}}
                   </div>
                 </div>
                 <div class="d-flex flex-column flex-sm-row flex-wrap gap-2">

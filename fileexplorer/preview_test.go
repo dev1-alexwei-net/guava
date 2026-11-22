@@ -307,6 +307,9 @@ func TestPreviewShowsNoteForBinaryFile(t *testing.T) {
 	if !strings.Contains(body, "does not appear to be UTF-8 text") {
 		t.Fatal("expected the non-text note")
 	}
+	if strings.Contains(body, "<script") {
+		t.Fatal("fallback preview state contains client-side JavaScript")
+	}
 }
 
 func TestPreviewShowsNoteForOversizedFile(t *testing.T) {
@@ -326,6 +329,85 @@ func TestPreviewShowsNoteForOversizedFile(t *testing.T) {
 	}
 	if !strings.Contains(body, "too large to preview") {
 		t.Fatal("expected the size note")
+	}
+	if strings.Contains(body, "<script") {
+		t.Fatal("fallback preview state contains client-side JavaScript")
+	}
+}
+
+func TestPrimaryLinkResolvesToPreviewWithDirectoryListing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("alpha content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("beta content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	// Step 1: the directory page offers the primary (filename) link.
+	dir := get(t, h, "/")
+	if dir.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d", dir.Code)
+	}
+	if !strings.Contains(dir.Body.String(), `href="/preview/a.txt">a.txt</a>`) {
+		t.Fatal("directory page does not offer the primary file link")
+	}
+
+	// Step 2: that target renders the file's content above its directory listing.
+	rec := get(t, h, "/preview/a.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Preview · a.txt", "alpha content", `href="/preview/b.txt">b.txt</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("preview page does not contain %q (file and directory listing must render together)", want)
+		}
+	}
+	if strings.Contains(body, "beta content") {
+		t.Fatal("unrelated file content is rendered")
+	}
+	if strings.Contains(body, "<script") {
+		t.Fatal("preview page contains client-side JavaScript")
+	}
+}
+
+func TestChangingPreviewURLChangesSelectionAcrossDirectories(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("alpha content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "b.txt"), []byte("beta content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	nested := get(t, h, "/preview/docs/b.txt")
+	if nested.Code != http.StatusOK {
+		t.Fatalf("GET /preview/docs/b.txt status = %d", nested.Code)
+	}
+	nestedBody := nested.Body.String()
+	if !strings.Contains(nestedBody, "Preview · b.txt") || !strings.Contains(nestedBody, "beta content") {
+		t.Fatal("nested preview does not render the requested file")
+	}
+	if strings.Contains(nestedBody, "alpha content") {
+		t.Fatal("file outside the parent directory is rendered")
+	}
+
+	top := get(t, h, "/preview/a.txt")
+	if top.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt status = %d", top.Code)
+	}
+	topBody := top.Body.String()
+	if !strings.Contains(topBody, "Preview · a.txt") || !strings.Contains(topBody, "alpha content") {
+		t.Fatal("selection does not change with the preview URL")
+	}
+	if strings.Contains(topBody, "beta content") {
+		t.Fatal("previously selected file content remains after changing the preview URL")
 	}
 }
 

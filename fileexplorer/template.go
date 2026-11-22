@@ -12,20 +12,25 @@ var pageFiles embed.FS
 var pageTemplate = template.Must(template.ParseFS(pageFiles, "templates/index.html"))
 
 type pageData struct {
-	Current       string
-	Breadcrumbs   []breadcrumb
-	ParentURL     string
-	Items         []pageItem
-	Error         string
-	Editor        bool
-	EditorPath    string
-	EditorURL     string
-	Content       string
-	Saved         bool
-	ConfirmDelete bool
-	DeletePath    string
-	DeleteName    string
-	ReturnURL     string
+	Current     string
+	Breadcrumbs []breadcrumb
+	ParentURL   string
+	Items       []pageItem
+	Error       string
+	Editor      bool
+	EditorPath  string
+	EditorURL   string
+	Content     string
+	Saved       bool
+	// Preview holds the toggleable preview-pane state for the directory page.
+	PreviewPath    string
+	PreviewName    string
+	PreviewContent string
+	PreviewNote    string
+	ConfirmDelete  bool
+	DeletePath     string
+	DeleteName     string
+	ReturnURL      string
 }
 
 type breadcrumb struct {

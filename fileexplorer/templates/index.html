@@ -105,7 +105,11 @@
                 <div class="d-flex align-items-start gap-3 flex-grow-1">
                   <span class="badge rounded-pill {{if .IsDir}}text-bg-primary{{else}}text-bg-light border text-body-secondary{{end}} mt-1">{{if .IsDir}}Folder{{else}}File{{end}}</span>
                   <div class="flex-grow-1">
-                    <a class="d-block link-body-emphasis fw-medium text-break" href="{{.URL}}">{{.Name}}{{if .IsDir}}/{{end}}</a>
+                    {{if .IsDir}}
+                    <a class="d-block link-body-emphasis fw-medium text-break" href="{{.URL}}">{{.Name}}/</a>
+                    {{else}}
+                    <a class="d-block link-body-emphasis fw-medium text-break" href="{{.PreviewURL}}">{{.Name}}</a>
+                    {{end}}
                     {{if not .IsDir}}<small class="text-body-secondary">{{.Size}} bytes</small>{{end}}
                   </div>
                 </div>

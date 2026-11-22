@@ -199,7 +199,7 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 		Error:       pageError,
 	}
 	for _, entry := range entries {
-		data.Items = append(data.Items, pageItem{
+		item := pageItem{
 			Name:        entry.Name,
 			Path:        entry.Path,
 			URL:         itemURL(entry.Path, entry.IsDir),
@@ -208,7 +208,11 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 			DeleteURL:   "/confirm-delete/" + escapedPath(entry.Path),
 			IsDir:       entry.IsDir,
 			Size:        entry.Size,
-		})
+		}
+		if !entry.IsDir {
+			item.PreviewURL = "/preview/" + escapedPath(entry.Path)
+		}
+		data.Items = append(data.Items, item)
 	}
 	e.applyPreview(&data, current, previewRel)
 	e.writePage(w, http.StatusOK, data)

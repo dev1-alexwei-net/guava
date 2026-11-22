@@ -107,6 +107,35 @@ func TestPreviewPageBackLinkTargetsParentDirectory(t *testing.T) {
 	}
 }
 
+func TestSelectedFileIsIdentifiedAccessibly(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("other content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/preview/a.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `aria-current="true"`) {
+		t.Fatal("selected file is not exposed with an aria-current state")
+	}
+	if got := strings.Count(body, `aria-current="true"`); got != 1 {
+		t.Fatalf("aria-current markers = %d, want exactly one", got)
+	}
+	if !strings.Contains(body, `>Selected</span>`) {
+		t.Fatal("selected file has no visible Selected indicator")
+	}
+	if got := strings.Count(body, `>Selected</span>`); got != 1 {
+		t.Fatalf("Selected indicators = %d, want exactly one", got)
+	}
+}
+
 func TestPlainDirectoryPageShowsUnselectedPreviewState(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("previewable content"), 0o600); err != nil {

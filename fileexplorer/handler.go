@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -282,11 +283,50 @@ func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
 		data.PreviewNote = "This file is too large to preview. Download it instead."
 		return
 	}
-	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
-		data.PreviewNote = "This file does not appear to be UTF-8 text, so it cannot be previewed. Download it instead."
+	decoded, ok := decodePreviewText(content)
+	if !ok {
+		data.PreviewNote = "This file does not appear to be UTF-8 text or BOM-marked UTF-16 text, so it cannot be previewed. Download it instead."
 		return
 	}
-	data.PreviewContent = string(content)
+	data.PreviewContent = decoded
+}
+
+func decodePreviewText(content []byte) (string, bool) {
+	if bytes.HasPrefix(content, []byte{0xEF, 0xBB, 0xBF}) {
+		content = content[3:]
+	}
+	if bytes.HasPrefix(content, []byte{0xFF, 0xFE}) || bytes.HasPrefix(content, []byte{0xFE, 0xFF}) {
+		littleEndian := content[0] == 0xFF
+		content = content[2:]
+		if len(content)%2 != 0 {
+			return "", false
+		}
+		units := make([]uint16, len(content)/2)
+		for i := range units {
+			if littleEndian {
+				units[i] = uint16(content[2*i]) | uint16(content[2*i+1])<<8
+			} else {
+				units[i] = uint16(content[2*i])<<8 | uint16(content[2*i+1])
+			}
+		}
+		for i := 0; i < len(units); i++ {
+			unit := units[i]
+			if unit >= 0xD800 && unit <= 0xDBFF {
+				if i+1 >= len(units) || units[i+1] < 0xDC00 || units[i+1] > 0xDFFF {
+					return "", false
+				}
+				i++
+			} else if unit >= 0xDC00 && unit <= 0xDFFF {
+				return "", false
+			}
+		}
+		decoded := string(utf16.Decode(units))
+		return decoded, !strings.ContainsRune(decoded, 0)
+	}
+	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		return "", false
+	}
+	return string(content), true
 }
 
 func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {

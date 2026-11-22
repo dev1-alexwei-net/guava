@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/binary"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 func get(t *testing.T, h http.Handler, target string) *httptest.ResponseRecorder {
@@ -144,6 +146,45 @@ func TestPreviewRejectsMissingFile(t *testing.T) {
 	rec := get(t, h, "/preview/nope.txt")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestPreviewDecodesBOMMarkedText(t *testing.T) {
+	root := t.TempDir()
+	const want = "café 😀"
+	for _, test := range []struct {
+		name  string
+		order binary.ByteOrder
+		bom   []byte
+	}{
+		{name: "utf16le", order: binary.LittleEndian, bom: []byte{0xFF, 0xFE}},
+		{name: "utf16be", order: binary.BigEndian, bom: []byte{0xFE, 0xFF}},
+	} {
+		units := utf16.Encode([]rune(want))
+		content := append([]byte(nil), test.bom...)
+		for _, unit := range units {
+			var pair [2]byte
+			test.order.PutUint16(pair[:], unit)
+			content = append(content, pair[:]...)
+		}
+		if err := os.WriteFile(filepath.Join(root, test.name+".txt"), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "utf8-bom.txt"), append([]byte{0xEF, 0xBB, 0xBF}, []byte(want)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+	for _, name := range []string{"utf16le.txt", "utf16be.txt", "utf8-bom.txt"} {
+		t.Run(name, func(t *testing.T) {
+			rec := get(t, h, "/preview/"+name)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
+				t.Fatalf("preview status=%d; expected decoded content %q; body=%s", rec.Code, want, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "does not appear to be") {
+				t.Fatal("decoded text was treated as unsupported content")
+			}
+		})
 	}
 }
 

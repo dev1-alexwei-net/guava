@@ -180,28 +180,28 @@ func randomTempName(parent string) (string, error) {
 
 func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
 	if err := parseForm(w, r); err != nil {
-		e.renderError(w, http.StatusBadRequest, "Invalid form")
+		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
 	}
 	parent, current, err := e.resolveParent(r.FormValue("parent"))
 	if err != nil {
-		e.pathError(w, err)
+		e.redirectMutationPathError(w, r, err)
 		return
 	}
 	name := r.FormValue("name")
 	if !validName(name) {
-		e.renderError(w, http.StatusBadRequest, "Invalid file name")
+		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid file name")
 		return
 	}
 	parentRel := e.relativePath(parent)
 	rel := path.Join(parentRel, name)
 	file, err := e.rootFS.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		e.renderError(w, http.StatusConflict, "Unable to create file")
+		e.redirectMutationError(w, r, http.StatusConflict, "Unable to create file")
 		return
 	}
 	if err := file.Close(); err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to finish creating file")
+		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to finish creating file")
 		return
 	}
 	e.redirectToDirectory(w, r, current)

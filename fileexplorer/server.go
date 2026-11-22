@@ -108,11 +108,27 @@ func (a *application) buildRoutes() http.Handler {
 	mux.Handle("GET /confirm-delete/{path...}", a.serialized(a.confirmDeletePage))
 	mux.Handle("GET /preview/{path...}", a.serialized(a.previewPage))
 	mux.HandleFunc("GET /static/bootstrap.min.css", a.renderer.Stylesheet)
+	mutations := []struct {
+		path string
+		run  func(*http.Request) (string, error)
+	}{
+		{path: "/mkdir", run: func(r *http.Request) (string, error) {
+			return a.mutations.MakeDirectory(r.FormValue("parent"), r.FormValue("name"))
+		}},
+		{path: "/create-file", run: func(r *http.Request) (string, error) {
+			return a.mutations.CreateFile(r.FormValue("parent"), r.FormValue("name"))
+		}},
+		{path: "/rename", run: func(r *http.Request) (string, error) {
+			return a.mutations.Rename(r.FormValue("old"), r.FormValue("new"))
+		}},
+		{path: "/delete", run: func(r *http.Request) (string, error) {
+			return a.mutations.Delete(r.FormValue("path"))
+		}},
+	}
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
-		mux.Handle(method+" /mkdir", a.serialized(a.mkdir))
-		mux.Handle(method+" /create-file", a.serialized(a.createFile))
-		mux.Handle(method+" /rename", a.serialized(a.rename))
-		mux.Handle(method+" /delete", a.serialized(a.delete))
+		for _, mutation := range mutations {
+			mux.Handle(method+" "+mutation.path, a.formMutation(mutation.run))
+		}
 		mux.Handle(method+" /upload", a.serialized(a.upload))
 	}
 	return mux
@@ -155,11 +171,7 @@ func (e *application) filePage(w http.ResponseWriter, r *http.Request) {
 	}
 	info, err := e.filesystem.Stat(e.filesystem.Relative(target))
 	if err != nil {
-		if os.IsNotExist(err) {
-			e.renderError(w, http.StatusNotFound, "File not found")
-			return
-		}
-		e.renderError(w, http.StatusInternalServerError, "Unable to read file")
+		e.renderReadError(w, err, "File not found", "Unable to read file")
 		return
 	}
 	if !info.Mode().IsRegular() {
@@ -181,6 +193,14 @@ func (e *application) filePage(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
+func (e *application) renderReadError(w http.ResponseWriter, err error, missing, failure string) {
+	if os.IsNotExist(err) {
+		e.renderError(w, http.StatusNotFound, missing)
+		return
+	}
+	e.renderError(w, http.StatusInternalServerError, failure)
+}
+
 func (e *application) renderDirectory(w http.ResponseWriter, requested string, previewRel string, pageError string) {
 	dir, err := e.filesystem.Resolve(requested)
 	if err != nil {
@@ -189,11 +209,7 @@ func (e *application) renderDirectory(w http.ResponseWriter, requested string, p
 	}
 	info, err := e.filesystem.Stat(e.filesystem.Relative(dir))
 	if err != nil {
-		if os.IsNotExist(err) {
-			e.renderError(w, http.StatusNotFound, "Directory not found")
-			return
-		}
-		e.renderError(w, http.StatusInternalServerError, "Unable to read directory")
+		e.renderReadError(w, err, "Directory not found", "Unable to read directory")
 		return
 	}
 	if !info.IsDir() {
@@ -230,11 +246,7 @@ func (e *application) previewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	info, err := e.filesystem.Stat(e.filesystem.Relative(target))
 	if err != nil {
-		if os.IsNotExist(err) {
-			e.renderError(w, http.StatusNotFound, "File not found")
-			return
-		}
-		e.renderError(w, http.StatusInternalServerError, "Unable to read file")
+		e.renderReadError(w, err, "File not found", "Unable to read file")
 		return
 	}
 	if !info.Mode().IsRegular() {
@@ -292,36 +304,13 @@ func (e *application) applyPreview(data *pageData, current, rel string) {
 }
 
 func decodePreviewText(content []byte) (string, bool) {
-	if bytes.HasPrefix(content, []byte{0xEF, 0xBB, 0xBF}) {
+	switch {
+	case bytes.HasPrefix(content, []byte{0xEF, 0xBB, 0xBF}):
 		content = content[3:]
-	}
-	if bytes.HasPrefix(content, []byte{0xFF, 0xFE}) || bytes.HasPrefix(content, []byte{0xFE, 0xFF}) {
-		littleEndian := content[0] == 0xFF
-		content = content[2:]
-		if len(content)%2 != 0 {
-			return "", false
-		}
-		units := make([]uint16, len(content)/2)
-		for i := range units {
-			if littleEndian {
-				units[i] = uint16(content[2*i]) | uint16(content[2*i+1])<<8
-			} else {
-				units[i] = uint16(content[2*i])<<8 | uint16(content[2*i+1])
-			}
-		}
-		for i := 0; i < len(units); i++ {
-			unit := units[i]
-			if unit >= 0xD800 && unit <= 0xDBFF {
-				if i+1 >= len(units) || units[i+1] < 0xDC00 || units[i+1] > 0xDFFF {
-					return "", false
-				}
-				i++
-			} else if unit >= 0xDC00 && unit <= 0xDFFF {
-				return "", false
-			}
-		}
-		decoded := string(utf16.Decode(units))
-		return decoded, !strings.ContainsRune(decoded, 0)
+	case bytes.HasPrefix(content, []byte{0xFF, 0xFE}):
+		return decodeUTF16Preview(content[2:], true)
+	case bytes.HasPrefix(content, []byte{0xFE, 0xFF}):
+		return decodeUTF16Preview(content[2:], false)
 	}
 	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
 		return "", false
@@ -329,65 +318,57 @@ func decodePreviewText(content []byte) (string, bool) {
 	return string(content), true
 }
 
-func (e *application) mkdir(w http.ResponseWriter, r *http.Request) {
-	if err := parseForm(w, r); err != nil {
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
-		return
+func decodeUTF16Preview(content []byte, littleEndian bool) (string, bool) {
+	if len(content)%2 != 0 {
+		return "", false
 	}
-	current, err := e.mutations.MakeDirectory(r.FormValue("parent"), r.FormValue("name"))
-	if errors.Is(err, errInvalidName) {
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid directory name")
-		return
-	}
-	if err != nil {
-		if errors.Is(err, errCreateDirectory) {
-			e.redirectMutationError(w, r, http.StatusConflict, "Unable to create directory")
-		} else {
-			e.redirectMutationPathError(w, r, err)
+	units := make([]uint16, len(content)/2)
+	for i := range units {
+		first, second := uint16(content[2*i]), uint16(content[2*i+1])
+		if littleEndian {
+			units[i] = first | second<<8
+			continue
 		}
-		return
+		units[i] = first<<8 | second
 	}
-	e.redirectToDirectory(w, r, current)
+	for i, unit := range units {
+		if isUTF16HighSurrogate(unit) && (i+1 == len(units) || !isUTF16LowSurrogate(units[i+1])) {
+			return "", false
+		}
+		if isUTF16LowSurrogate(unit) && (i == 0 || !isUTF16HighSurrogate(units[i-1])) {
+			return "", false
+		}
+	}
+	decoded := string(utf16.Decode(units))
+	return decoded, !strings.ContainsRune(decoded, 0)
 }
 
-func (e *application) rename(w http.ResponseWriter, r *http.Request) {
-	if err := parseForm(w, r); err != nil {
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
-		return
-	}
-	current, err := e.mutations.Rename(r.FormValue("old"), r.FormValue("new"))
-	switch {
-	case errors.Is(err, errRootMutation):
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Cannot rename the root directory")
-	case errors.Is(err, errInvalidName):
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid name")
-	case errors.Is(err, errEntryExists):
-		e.redirectMutationError(w, r, http.StatusConflict, "An entry with that name already exists")
-	case errors.Is(err, errRenameEntry):
-		e.redirectMutationError(w, r, http.StatusConflict, "Unable to rename entry")
-	case err != nil:
-		e.redirectMutationPathError(w, r, err)
-	default:
-		e.redirectToDirectory(w, r, current)
-	}
+func isUTF16HighSurrogate(unit uint16) bool { return unit >= 0xD800 && unit <= 0xDBFF }
+
+func isUTF16LowSurrogate(unit uint16) bool { return unit >= 0xDC00 && unit <= 0xDFFF }
+
+func (e *application) formMutation(operation func(*http.Request) (string, error)) http.Handler {
+	return e.serialized(func(w http.ResponseWriter, r *http.Request) {
+		if err := parseForm(w, r); err != nil {
+			e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
+			return
+		}
+		current, err := operation(r)
+		e.finishMutation(w, r, current, err)
+	})
 }
 
-func (e *application) delete(w http.ResponseWriter, r *http.Request) {
-	if err := parseForm(w, r); err != nil {
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
+func (e *application) finishMutation(w http.ResponseWriter, r *http.Request, current string, err error) {
+	if err == nil {
+		e.redirectToDirectory(w, r, current)
 		return
 	}
-	current, err := e.mutations.Delete(r.FormValue("path"))
-	switch {
-	case errors.Is(err, errRootMutation):
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Cannot delete the root directory")
-	case errors.Is(err, errDeleteEntry):
-		e.redirectMutationError(w, r, http.StatusConflict, "Unable to delete entry")
-	case err != nil:
-		e.redirectMutationPathError(w, r, err)
-	default:
-		e.redirectToDirectory(w, r, current)
+	var interaction *interactionError
+	if errors.As(err, &interaction) {
+		e.redirectMutationError(w, r, interaction.status, interaction.message)
+		return
 	}
+	e.redirectMutationPathError(w, r, err)
 }
 
 func (e *application) upload(w http.ResponseWriter, r *http.Request) {
@@ -408,20 +389,7 @@ func (e *application) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	current, err := e.mutations.Upload(parent, header.Filename, file)
-	switch {
-	case errors.Is(err, errInvalidName):
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid file name")
-	case errors.Is(err, errOpenUpload):
-		e.redirectMutationError(w, r, http.StatusConflict, "Unable to save upload")
-	case errors.Is(err, errUploadTooLarge):
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid upload")
-	case errors.Is(err, errSaveUpload):
-		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to save upload")
-	case err != nil:
-		e.redirectMutationPathError(w, r, err)
-	default:
-		e.redirectToDirectory(w, r, current)
-	}
+	e.finishMutation(w, r, current, err)
 }
 
 func (e *application) redirectToDirectory(w http.ResponseWriter, r *http.Request, current string) {
@@ -440,37 +408,26 @@ func parseForm(w http.ResponseWriter, r *http.Request) error {
 	return r.ParseForm()
 }
 
+func pathInteraction(err error) *interactionError {
+	switch {
+	case errors.Is(err, errForbidden):
+		return newInteractionError(http.StatusForbidden, "Path is outside the configured root or contains a symbolic link")
+	case errors.Is(err, errInvalidPath):
+		return newInteractionError(http.StatusBadRequest, "Invalid path")
+	case os.IsNotExist(err):
+		return newInteractionError(http.StatusNotFound, "Path not found")
+	default:
+		return newInteractionError(http.StatusBadRequest, "Invalid path")
+	}
+}
+
 func (e *application) pathError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errForbidden) {
-		e.renderError(w, http.StatusForbidden, "Path is outside the configured root or contains a symbolic link")
-		return
-	}
-	if errors.Is(err, errInvalidPath) {
-		e.renderError(w, http.StatusBadRequest, "Invalid path")
-		return
-	}
-	if os.IsNotExist(err) {
-		e.renderError(w, http.StatusNotFound, "Path not found")
-		return
-	}
-	e.renderError(w, http.StatusBadRequest, "Invalid path")
+	interaction := pathInteraction(err)
+	e.renderError(w, interaction.status, interaction.message)
 }
 
 func (e *application) redirectMutationError(w http.ResponseWriter, r *http.Request, status int, message string) {
-	parent := r.FormValue("parent")
-	if parent == "" {
-		target := r.FormValue("old")
-		if target == "" {
-			target = r.FormValue("path")
-		}
-		if target != "" {
-			parent = path.Dir(strings.ReplaceAll(target, `\`, "/"))
-			if parent == "." {
-				parent = ""
-			}
-		}
-	}
-	_, current, err := e.filesystem.ResolveParent(parent)
+	_, current, err := e.filesystem.ResolveParent(mutationParent(r))
 	if err != nil {
 		current = ""
 	}
@@ -482,20 +439,43 @@ func (e *application) redirectMutationError(w http.ResponseWriter, r *http.Reque
 	http.Redirect(w, r, target+"?"+query.Encode(), http.StatusSeeOther)
 }
 
+func mutationParent(r *http.Request) string {
+	if parent := r.FormValue("parent"); parent != "" {
+		return parent
+	}
+	target := r.FormValue("old")
+	if target == "" {
+		target = r.FormValue("path")
+	}
+	if target == "" {
+		return ""
+	}
+	parent := path.Dir(strings.ReplaceAll(target, `\`, "/"))
+	if parent == "." {
+		return ""
+	}
+	return parent
+}
+
 func (e *application) redirectMutationPathError(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, errForbidden) {
-		e.redirectMutationError(w, r, http.StatusForbidden, "Path is outside the configured root or contains a symbolic link")
-		return
+	interaction := pathInteraction(err)
+	e.redirectMutationError(w, r, interaction.status, interaction.message)
+}
+
+func interactionDetails(err error, fallback string) (int, string) {
+	var interaction *interactionError
+	if errors.As(err, &interaction) {
+		return interaction.status, interaction.message
 	}
-	if errors.Is(err, errInvalidPath) {
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid path")
-		return
+	return http.StatusInternalServerError, fallback
+}
+
+func editorSubmissionError(err error) (int, string) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return http.StatusRequestEntityTooLarge, "Editor content is too large (maximum 1 MiB)"
 	}
-	if os.IsNotExist(err) {
-		e.redirectMutationError(w, r, http.StatusNotFound, "Path not found")
-		return
-	}
-	e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid path")
+	return http.StatusBadRequest, "Invalid editor submission"
 }
 
 func (e *application) renderError(w http.ResponseWriter, status int, message string) {
@@ -577,53 +557,17 @@ func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxEditorSize*3+4096)
 	if err := r.ParseForm(); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			e.renderError(w, http.StatusRequestEntityTooLarge, "Editor content is too large (maximum 1 MiB)")
-			return
-		}
-		e.renderError(w, http.StatusBadRequest, "Invalid editor submission")
+		status, message := editorSubmissionError(err)
+		e.renderError(w, status, message)
 		return
 	}
 	content := r.FormValue("content")
 	if err := e.mutations.SaveText(rel, content, info.Mode().Perm()); err != nil {
-		switch {
-		case errors.Is(err, errEditorContentTooLarge):
-			e.renderError(w, http.StatusRequestEntityTooLarge, "Editor content is too large (maximum 1 MiB)")
-		case errors.Is(err, errUnsupportedText):
-			e.renderError(w, http.StatusUnsupportedMediaType, "The editor only saves UTF-8 text files")
-		case errors.Is(err, errPrepareFileSave):
-			e.renderError(w, http.StatusInternalServerError, "Unable to prepare file save")
-		case errors.Is(err, errPreserveFileMode):
-			e.renderError(w, http.StatusInternalServerError, "Unable to preserve file permissions")
-		case errors.Is(err, errReplaceFile):
-			e.renderError(w, http.StatusInternalServerError, "Unable to replace file")
-		default:
-			e.renderError(w, http.StatusInternalServerError, "Unable to save file")
-		}
+		status, message := interactionDetails(err, "Unable to save file")
+		e.renderError(w, status, message)
 		return
 	}
 	http.Redirect(w, r, e.renderer.EditorURL(rel)+"?saved=1", http.StatusSeeOther)
-}
-
-func (e *application) createFile(w http.ResponseWriter, r *http.Request) {
-	if err := parseForm(w, r); err != nil {
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
-		return
-	}
-	current, err := e.mutations.CreateFile(r.FormValue("parent"), r.FormValue("name"))
-	switch {
-	case errors.Is(err, errInvalidName):
-		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid file name")
-	case errors.Is(err, errCreateFile):
-		e.redirectMutationError(w, r, http.StatusConflict, "Unable to create file")
-	case errors.Is(err, errFinishCreateFile):
-		e.redirectMutationError(w, r, http.StatusInternalServerError, "Unable to finish creating file")
-	case err != nil:
-		e.redirectMutationPathError(w, r, err)
-	default:
-		e.redirectToDirectory(w, r, current)
-	}
 }
 
 func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) {

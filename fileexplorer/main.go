@@ -43,9 +43,9 @@ func run() (err error) {
 	dbPath := *db
 	if dbPath == "" {
 		dbPath, err = defaultDatabasePath(*root)
-		if err != nil {
-			return fmt.Errorf("database path: %w", err)
-		}
+	}
+	if err != nil {
+		return fmt.Errorf("database path: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return fmt.Errorf("create database directory: %w", err)

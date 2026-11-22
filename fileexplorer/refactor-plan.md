@@ -45,6 +45,7 @@ Types with different responsibilities remain distinct; related types share sourc
 6. **#62 — HTTP composition:** wire explicit application dependencies and keep routes/request parsing separate from operations.
 7. **#64 — tests:** retain compact behavior-level coverage for the security and user-visible contracts below; document any removed duplicate coverage.
 8. **#65 — startup and closeout:** finish the composition root, document actual abstractions, and recount LOC and file totals.
+9. **#76 — control flow and interaction errors:** flatten nested conditionals, centralize user-facing status/message construction, and share form-mutation request handling.
 
 Use conventional Go source names that describe real responsibilities (for example, `server.go`, `filesystem.go`, `store.go`, and `renderer.go`). The current application has no user/browser session state: preview selection is encoded in the URL, so a speculative `session.go` abstraction would add indirection rather than model a real responsibility.
 
@@ -83,3 +84,19 @@ wc -l fileexplorer/*_test.go
 | All Go lines | 2,969 | 2,635 | −334 lines (−11.2%) |
 
 The requested fourfold production-LOC reduction (at most 325 lines) was not reached. The completed decomposition preserves the rooted filesystem boundary, SQLite replica and rollback behavior, all existing routes and mutations, editor/preview limits, accessible server-rendered UI, and graceful shutdown. Those explicit types and their error/status mapping increase production LOC by 274 lines versus baseline; reaching 325 lines without dropping behavior or writing code-golfed, tightly coupled handlers is not a maintainable trade-off. The file-count target is met by keeping the responsibilities as separate types while grouping related types into five production files and retaining the three focused test files.
+
+
+## #76 control-flow and interaction errors
+
+The follow-up removes nested `if` statements across Go source and tests by using guard clauses, simple predicates, and small mapping helpers. User-visible mutation failures now use one `interactionError` factory carrying the response status and message; operation-specific error sentinels and the handler-side sentinel switch statements are gone. A shared form-mutation handler wraps serialization, form parsing, operation execution, and redirect/error handling. Path and read failures also share their status/message mappings. Routes, redirect targets, statuses, and messages remain covered by the existing behavior tests.
+
+At the #76 stack point, production Go is 62 lines smaller than the #75 point; the test suite and file count are unchanged. Reproduce the counts with the commands in the #65 section above.
+
+| Measure | Baseline | #75 stack point | #76 stack point |
+| --- | ---: | ---: | ---: |
+| Production Go lines | 1,301 | 1,575 | 1,513 |
+| Test Go lines | 1,668 | 1,060 | 1,073 |
+| All Go files | 16 | 8 | 8 |
+| All Go lines | 2,969 | 2,635 | 2,586 |
+
+This follow-up reduces production code by 62 lines (3.9%) from #75 and brings production code to 212 lines (16.3%) above baseline. Test helpers add 13 lines to keep nested conditionals out of the test suite; total Go lines are 49 below #75 and 383 below baseline. The requested fourfold production-LOC reduction is still not met; the upper bound of 325 production lines would require deleting behavior or adding excessive compression. The file-count target remains met. `go test ./...`, `go vet ./...`, and a `CGO_ENABLED=0` build pass at this stack point.

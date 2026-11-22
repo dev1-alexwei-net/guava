@@ -17,7 +17,7 @@
 
   <main class="container py-4 py-lg-5">
     <div class="row justify-content-center">
-      <div class="col-12 col-xxl-10">
+      <div class="col-12">
         <nav aria-label="Breadcrumb">
           <ol class="breadcrumb mb-3">
             <li class="breadcrumb-item"><a href="/">Root</a></li>
@@ -68,9 +68,11 @@
           </div>
         </section>
         {{else}}
-        {{if .PreviewPath}}
-        <section class="card shadow-sm border-0 mb-4" aria-labelledby="preview-heading">
-          <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="row g-4">
+          <div class="col-12 col-lg-5 order-1 order-lg-2">
+            {{if .PreviewPath}}
+            <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
+              <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
             <h2 class="h6 mb-0 text-break" id="preview-heading">Preview · {{.PreviewName}}</h2>
             <a class="btn btn-outline-secondary btn-sm" href="{{.PreviewReturnURL}}">Hide preview</a>
           </div>
@@ -82,18 +84,21 @@
             {{end}}
           </div>
         </section>
-        {{else}}
-        <section class="card shadow-sm border-0 mb-4" aria-labelledby="preview-heading">
-          <div class="card-header bg-body">
-            <h2 class="h6 mb-0" id="preview-heading">Preview</h2>
+            {{else}}
+            <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
+              <div class="card-header bg-body">
+                <h2 class="h6 mb-0" id="preview-heading">Preview</h2>
+              </div>
+              <div class="card-body">
+                <p class="text-body-secondary mb-1">No file selected.</p>
+                <p class="text-body-secondary mb-0">Select a file from the list to preview it here. Text files open inline; other files remain available to download.</p>
+              </div>
+            </section>
+            {{end}}
           </div>
-          <div class="card-body">
-            <p class="text-body-secondary mb-1">No file selected.</p>
-            <p class="text-body-secondary mb-0">Select a file from the list to preview it here. Text files open inline; other files remain available to download.</p>
-          </div>
-        </section>
-        {{end}}
-        <section class="card shadow-sm border-0 mb-4" aria-label="Directory contents">
+
+          <div class="col-12 col-lg-7 order-2 order-lg-1">
+            <section class="card shadow-sm border-0" aria-label="Directory contents">
           <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">
             <h2 class="h6 mb-0">Contents</h2>
             <span class="badge rounded-pill text-bg-secondary">{{len .Items}} items</span>
@@ -133,9 +138,11 @@
             </li>
             {{end}}
           </ul>
-        </section>
+            </section>
+          </div>
+        </div>
 
-        <div class="row g-3">
+        <div class="row g-3 mt-4">
           <div class="col-12 col-lg-4">
             <section class="card h-100 shadow-sm border-0" aria-labelledby="mkdir-heading">
               <div class="card-body">

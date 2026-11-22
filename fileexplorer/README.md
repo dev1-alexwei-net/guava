@@ -18,6 +18,20 @@ The flags are:
 
 The server handles SIGINT and SIGTERM with a five-second graceful-shutdown timeout.
 
+## Design
+
+`main.go` is the composition root: it resolves the flags and `PORT` default, opens the SQLite `Store`, builds an `application`, starts `http.Server`, and handles SIGINT/SIGTERM with a five-second graceful-shutdown timeout. The application closes its rooted filesystem handle and the caller closes the database on both normal shutdown and startup/server errors.
+
+`server.go` owns the application, route table, request handlers, and HTTP error/redirect mapping. The composed objects keep the responsibilities explicit:
+
+- `rootedFS` validates paths and performs file operations through Go's `os.Root` API; symlink components are rejected.
+- `scanner` walks the rooted filesystem, and `synchronizer` replaces the SQLite replica through `Store.ReplaceAll` only after a successful scan.
+- `Store` owns SQLite schema, replica replacement, and direct-child queries.
+- `mutations` owns file/directory changes and atomically replaces editor saves while preserving permission bits.
+- `renderer` builds page data and URLs, executes the HTML template, and serves the embedded stylesheet.
+
+Preview selection is URL state, not a browser session: `/preview/<path>` determines which file is shown, so the server needs no session store or client-side state.
+
 ## Routes
 
 - `GET /` browses the root directory.
@@ -46,7 +60,7 @@ The template uses Bootstrap's responsive layout classes and the standard viewpor
 
 ## Filesystem and SQLite behavior
 
-The filesystem is synchronized into SQLite before each directory page is rendered. `Store.Sync` walks the configured root, stores slash-separated paths relative to that root, skips symlinks, and atomically replaces the `files` table. The filesystem remains authoritative; the database is a queryable replica used for directory listings. Paths are validated relative to the configured root, symlink components are rejected, and filesystem mutations use Go's rooted filesystem APIs to prevent escaping the root. Listings include direct children only, with directories before files and names sorted within each group.
+Before each directory page is rendered, the application's `synchronizer` asks its `scanner` to walk the configured rooted filesystem. The scanner stores slash-separated relative paths and skips symlinks; after a successful scan, `Store.ReplaceAll` transactionally replaces the SQLite replica. The filesystem remains authoritative, and the database is used for directory listings. `rootedFS` validates paths, rejects symlink components, and performs operations through Go's rooted filesystem API. Listings include direct children only, with directories before files and names sorted within each group.
 
 The SQLite driver is [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite), which supports `CGO_ENABLED=0`. The service uses only the Go `database/sql` API and the SQLite driver.
 

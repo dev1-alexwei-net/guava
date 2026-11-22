@@ -26,12 +26,14 @@ The issue #57 production-LOC target is at most 325 lines (one quarter of baselin
 
 ## Responsibility map
 
-- `main.go`: flags, address/database defaults, store lifetime, HTTP server startup, signals, and graceful shutdown.
-- `handler.go`: route registration, serialized access, path containment, directory/file routes, sync/listing, preview decoding, mutations, redirects, page-model assembly, and error mapping.
-- `editor.go`: editor read/save plus create-file and delete-confirmation behavior.
-- `store.go`: SQLite schema, database lifetime, direct-child queries, and atomic replacement.
-- `sync.go`: filesystem walk and conversion to replica entries.
-- `template.go` and `assets.go`: embedded template data/rendering and the embedded stylesheet response.
+- `main.go`: flags, address/database defaults, resource lifetime, HTTP server startup, signals, and graceful shutdown.
+- `server.go`: `application` composition, route registration, serialized request handling, page/editor/mutation handlers, redirects, and HTTP error mapping.
+- `filesystem.go`: `rootedFS` path policy and rooted operations, plus the distinct `mutations` object for file and directory changes.
+- `store.go`: the distinct `Store`, `scanner`, and `synchronizer` types for SQLite persistence, filesystem walking, and replica refresh.
+- `renderer.go`: page models, URL generation, template execution, and embedded stylesheet serving.
+- `server_test.go`, `web_test.go`, and `store_test.go`: behavior-level route, accessibility, filesystem, mutation, storage, and synchronization coverage.
+
+Types with different responsibilities remain distinct; related types share source files to meet the requested file-count reduction.
 
 ## Migration order
 
@@ -62,3 +64,22 @@ The retained tests should protect these external contracts and high-risk regress
 At the #64 stack point, the suite is consolidated from the 9 baseline `*_test.go` files and 1,668 lines to `server_test.go`, `web_test.go`, and `store_test.go` with 1,060 lines: 36.5% fewer test lines and 66.7% fewer test files. Reproduce the current count with `wc -l fileexplorer/*_test.go`.
 
 Redundant route listing and stylesheet checks were folded into end-to-end route/render checks; repeated preview link, focus, selection, fallback, and responsive-layout assertions were merged into an accessible preview flow and state tables. Rooted path policy remains covered separately from HTTP traversal/symlink tests. Store root ordering and nested direct-child behavior now share one test, and synchronization idempotence is exercised in the add/remove flow. The one-row `Store.Upsert` and `Store.Delete` helpers had no production callers, so they and their private CRUD tests were removed; replica replacement and listing remain covered, including rollback on a failed replacement. BOM decoding, binary/size fallback, downloads, accessibility state, editor/mutation guarantees, route errors, external filesystem refresh, and symlink boundaries remain covered.
+
+## #65 closeout
+
+Count physical lines in the five production Go files and three test files using the same baseline method:
+
+```sh
+wc -l fileexplorer/main.go fileexplorer/server.go fileexplorer/filesystem.go \
+  fileexplorer/store.go fileexplorer/renderer.go
+wc -l fileexplorer/*_test.go
+```
+
+| Measure | Baseline | Final | Change |
+| --- | ---: | ---: | ---: |
+| Production Go lines | 1,301 in 7 files | 1,575 in 5 files | +274 lines (+21.1%) |
+| Test Go lines | 1,668 in 9 files | 1,060 in 3 files | −608 lines (−36.5%) |
+| All Go files | 16 | 8 | −8 files (−50.0%) |
+| All Go lines | 2,969 | 2,635 | −334 lines (−11.2%) |
+
+The requested fourfold production-LOC reduction (at most 325 lines) was not reached. The completed decomposition preserves the rooted filesystem boundary, SQLite replica and rollback behavior, all existing routes and mutations, editor/preview limits, accessible server-rendered UI, and graceful shutdown. Those explicit types and their error/status mapping increase production LOC by 274 lines versus baseline; reaching 325 lines without dropping behavior or writing code-golfed, tightly coupled handlers is not a maintainable trade-off. The file-count target is met by keeping the responsibilities as separate types while grouping related types into five production files and retaining the three focused test files.

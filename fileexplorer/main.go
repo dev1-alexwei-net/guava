@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +18,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() (err error) {
 	addr := flag.String("addr", "", "listen address; defaults to $PORT or :8080")
 	root := flag.String("root", ".", "directory to serve")
 	db := flag.String("db", "", "SQLite database file; defaults to a file in the system temp directory")
@@ -34,27 +42,27 @@ func main() {
 
 	dbPath := *db
 	if dbPath == "" {
-		var err error
 		dbPath, err = defaultDatabasePath(*root)
 		if err != nil {
-			log.Fatalf("database path: %v", err)
+			return fmt.Errorf("database path: %w", err)
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		log.Fatalf("create database directory: %v", err)
+		return fmt.Errorf("create database directory: %w", err)
 	}
 	store, err := Open(dbPath)
 	if err != nil {
-		log.Fatalf("open database: %v", err)
+		return fmt.Errorf("open database: %w", err)
 	}
-	defer store.Close()
+	defer func() { err = errors.Join(err, store.Close()) }()
 
-	app, err := newHandler(*root, store)
+	app, err := newApplicationAt(*root, store)
 	if err != nil {
-		log.Fatalf("configure file explorer: %v", err)
+		return fmt.Errorf("configure file explorer: %w", err)
 	}
-	srv := &http.Server{Addr: listen, Handler: app}
+	defer func() { err = errors.Join(err, app.Close()) }()
 
+	srv := &http.Server{Addr: listen, Handler: app.Handler()}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -68,15 +76,16 @@ func main() {
 
 	select {
 	case err := <-errCh:
-		log.Fatalf("server error: %v", err)
+		return fmt.Errorf("server error: %w", err)
 	case <-ctx.Done():
 		log.Println("shutting down...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Fatalf("shutdown: %v", err)
+			return fmt.Errorf("shutdown: %w", err)
 		}
 		log.Println("stopped")
+		return nil
 	}
 }
 

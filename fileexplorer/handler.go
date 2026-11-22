@@ -28,11 +28,10 @@ var (
 )
 
 type explorerHandler struct {
-	root        string
-	rootFS      *os.Root
-	store       *Store
-	mu          sync.Mutex
-	previewPath string // relative path of the file selected in the preview pane
+	root   string
+	rootFS *os.Root
+	store  *Store
+	mu     sync.Mutex
 }
 
 // newHandler creates the file-explorer routes for an existing root and store.
@@ -69,6 +68,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	mux.Handle("GET /edit/{path...}", e.serialized(e.editorPage))
 	mux.Handle("POST /edit/{path...}", e.serialized(e.saveFile))
 	mux.Handle("GET /confirm-delete/{path...}", e.serialized(e.confirmDeletePage))
+	mux.Handle("GET /preview/{path...}", e.serialized(e.previewPage))
 	mux.HandleFunc("GET /static/bootstrap.min.css", bootstrapStylesheet)
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		mux.Handle(method+" /mkdir", e.serialized(e.mkdir))
@@ -76,7 +76,6 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 		mux.Handle(method+" /rename", e.serialized(e.rename))
 		mux.Handle(method+" /delete", e.serialized(e.delete))
 		mux.Handle(method+" /upload", e.serialized(e.upload))
-		mux.Handle(method+" /preview", e.serialized(e.preview))
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if requestHasTraversal(r.URL.Path) {
@@ -105,11 +104,11 @@ func (e *explorerHandler) serialized(next http.HandlerFunc) http.Handler {
 }
 
 func (e *explorerHandler) rootPage(w http.ResponseWriter, r *http.Request) {
-	e.renderDirectory(w, "")
+	e.renderDirectory(w, "", "")
 }
 
 func (e *explorerHandler) directoryPage(w http.ResponseWriter, r *http.Request) {
-	e.renderDirectory(w, r.PathValue("path"))
+	e.renderDirectory(w, r.PathValue("path"), "")
 }
 
 func (e *explorerHandler) filePage(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +145,7 @@ func (e *explorerHandler) filePage(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
-func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested string) {
+func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested string, previewRel string) {
 	dir, err := e.resolve(requested)
 	if err != nil {
 		e.pathError(w, err)
@@ -209,60 +208,46 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 			Size:        entry.Size,
 		})
 	}
-	e.applyPreview(&data, current)
+	e.applyPreview(&data, current, previewRel)
 	e.writePage(w, http.StatusOK, data)
 }
 
-// preview is the toggle mutation for the preview pane. action=show selects the
-// file at path for preview and re-renders its parent directory with the pane
-// visible; action=hide clears the selection. There is no client-side state or
-// JavaScript: the server keeps the selection and every state change is a form
-// POST.
-func (e *explorerHandler) preview(w http.ResponseWriter, r *http.Request) {
-	if err := parseForm(w, r); err != nil {
-		e.renderError(w, http.StatusBadRequest, "Invalid form")
-		return
-	}
-	rel := r.FormValue("path")
-	if rel == "" {
-		e.renderError(w, http.StatusBadRequest, "A file path is required")
-		return
-	}
+// previewPage renders the parent directory of the requested file with the
+// preview pane active for that file. The preview state lives in the URL, so
+// the route always matches what the page shows: the pane is visible exactly
+// when the path is /preview/{path}, and hiding it is a plain navigation back
+// to the directory. There is no client-side state or JavaScript.
+func (e *explorerHandler) previewPage(w http.ResponseWriter, r *http.Request) {
+	rel := r.PathValue("path")
 	target, err := e.resolve(rel)
 	if err != nil {
 		e.pathError(w, err)
 		return
 	}
-	switch r.FormValue("action") {
-	case "hide":
-		e.previewPath = ""
-	case "show":
-		info, err := e.rootFS.Stat(e.rootName(e.relativePath(target)))
-		if err != nil {
-			e.pathError(w, err)
+	info, err := e.rootFS.Stat(e.rootName(e.relativePath(target)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			e.renderError(w, http.StatusNotFound, "File not found")
 			return
 		}
-		if !info.Mode().IsRegular() {
-			e.renderError(w, http.StatusBadRequest, "Preview requires a regular file")
-			return
-		}
-		e.previewPath = e.relativePath(target)
-	default:
-		e.renderError(w, http.StatusBadRequest, "Invalid preview action")
+		e.renderError(w, http.StatusInternalServerError, "Unable to read file")
+		return
+	}
+	if !info.Mode().IsRegular() {
+		e.renderError(w, http.StatusBadRequest, "Preview requires a regular file")
 		return
 	}
 	parent := filepath.ToSlash(filepath.Dir(rel))
 	if parent == "." {
 		parent = ""
 	}
-	e.renderDirectory(w, parent)
+	e.renderDirectory(w, parent, rel)
 }
 
-// applyPreview fills the preview pane when the selected file lives in the
-// directory being rendered. A stale selection (deleted or renamed away) is
-// cleared so the pane never shows content that no longer exists.
-func (e *explorerHandler) applyPreview(data *pageData, current string) {
-	rel := e.previewPath
+// applyPreview fills the preview pane for the file selected in the URL. The
+// file was already validated by previewPage; if it is missing at render time
+// the pane is left empty rather than showing stale content.
+func (e *explorerHandler) applyPreview(data *pageData, current, rel string) {
 	if rel == "" {
 		return
 	}
@@ -275,24 +260,22 @@ func (e *explorerHandler) applyPreview(data *pageData, current string) {
 	}
 	info, err := e.rootFS.Stat(e.rootName(rel))
 	if err != nil || !info.Mode().IsRegular() {
-		e.previewPath = ""
 		return
 	}
 	data.PreviewPath = rel
 	data.PreviewName = filepath.Base(rel)
+	data.PreviewReturnURL = itemURL(parent, true)
 	if info.Size() > maxPreviewSize {
 		data.PreviewNote = fmt.Sprintf("This file is too large to preview (maximum %d KiB). Download it instead.", maxPreviewSize>>10)
 		return
 	}
 	file, err := e.rootFS.Open(e.rootName(rel))
 	if err != nil {
-		e.previewPath = ""
 		return
 	}
 	defer file.Close()
 	content, err := io.ReadAll(io.LimitReader(file, maxPreviewSize+1))
 	if err != nil {
-		e.previewPath = ""
 		return
 	}
 	if len(content) > maxPreviewSize {
@@ -325,7 +308,7 @@ func (e *explorerHandler) mkdir(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusConflict, "Unable to create directory")
 		return
 	}
-	e.renderDirectory(w, current)
+	e.renderDirectory(w, current, "")
 }
 
 func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +358,7 @@ func (e *explorerHandler) rename(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to read directory")
 		return
 	}
-	e.renderDirectory(w, filepath.ToSlash(current))
+	e.renderDirectory(w, filepath.ToSlash(current), "")
 }
 
 func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
@@ -403,7 +386,7 @@ func (e *explorerHandler) delete(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to read directory")
 		return
 	}
-	e.renderDirectory(w, filepath.ToSlash(current))
+	e.renderDirectory(w, filepath.ToSlash(current), "")
 }
 
 func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +433,7 @@ func (e *explorerHandler) upload(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to save upload")
 		return
 	}
-	e.renderDirectory(w, current)
+	e.renderDirectory(w, current, "")
 }
 
 func (e *explorerHandler) resolveParent(rel string) (string, string, error) {

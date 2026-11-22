@@ -22,15 +22,17 @@ type pageData struct {
 	EditorURL   string
 	Content     string
 	Saved       bool
-	// Preview holds the toggleable preview-pane state for the directory page.
-	PreviewPath    string
-	PreviewName    string
-	PreviewContent string
-	PreviewNote    string
-	ConfirmDelete  bool
-	DeletePath     string
-	DeleteName     string
-	ReturnURL      string
+	// Preview holds the preview-pane state for the directory page; the
+	// selection lives in the URL (GET /preview/{path}).
+	PreviewPath      string
+	PreviewName      string
+	PreviewContent   string
+	PreviewNote      string
+	PreviewReturnURL string
+	ConfirmDelete    bool
+	DeletePath       string
+	DeleteName       string
+	ReturnURL        string
 }
 
 type breadcrumb struct {

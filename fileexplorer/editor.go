@@ -204,7 +204,7 @@ func (e *explorerHandler) createFile(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, http.StatusInternalServerError, "Unable to finish creating file")
 		return
 	}
-	e.renderDirectory(w, current)
+	e.renderDirectory(w, current, "")
 }
 
 func (e *explorerHandler) confirmDeletePage(w http.ResponseWriter, r *http.Request) {

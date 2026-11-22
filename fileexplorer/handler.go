@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -26,6 +25,7 @@ const maxPreviewSize = 512 << 10
 type explorerHandler struct {
 	filesystem *rootedFS
 	store      *Store
+	syncer     *synchronizer
 	mu         sync.Mutex
 }
 
@@ -38,7 +38,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &explorerHandler{filesystem: filesystem, store: store}
+	e := &explorerHandler{filesystem: filesystem, store: store, syncer: newSynchronizer(store, filesystem)}
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", e.serialized(e.rootPage))
 	mux.Handle("GET /d/{$}", e.serialized(e.rootPage))
@@ -143,7 +143,7 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 		e.renderError(w, http.StatusNotFound, "Directory not found")
 		return
 	}
-	if _, err := e.store.SyncRoot(e.filesystem); err != nil {
+	if _, err := e.syncer.Sync(); err != nil {
 		e.renderError(w, http.StatusInternalServerError, "Unable to synchronize directory")
 		return
 	}
@@ -154,13 +154,6 @@ func (e *explorerHandler) renderDirectory(w http.ResponseWriter, requested strin
 		e.renderError(w, http.StatusInternalServerError, "Unable to list directory")
 		return
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].IsDir != entries[j].IsDir {
-			return entries[i].IsDir
-		}
-		return entries[i].Name < entries[j].Name
-	})
-
 	data := pageData{
 		Current:     current,
 		Breadcrumbs: makeBreadcrumbs(current),

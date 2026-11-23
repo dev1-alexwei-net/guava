@@ -28,6 +28,10 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 	defer func() {
 		attrs := []slog.Attr{slog.Duration("elapsed", time.Since(runStarted))}
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				logAttrs(logger, ctx, slog.LevelInfo, "Executor run canceled", attrs...)
+				return
+			}
 			attrs = append(attrs, slog.Any("error", err))
 			logAttrs(logger, ctx, slog.LevelError, "Executor run failed", attrs...)
 			return

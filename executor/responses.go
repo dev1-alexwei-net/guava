@@ -105,7 +105,13 @@ func (c responsesClient) createObserved(ctx context.Context, input, user, previo
 			slog.Duration("fetch_elapsed", fetchElapsed),
 			slog.Any("error", err),
 		)
-		logAttrs(c.config.Logger, ctx, slog.LevelError, "OpenResponses fetch failed", attrs...)
+		level := slog.LevelError
+		message := "OpenResponses fetch failed"
+		if errors.Is(err, context.Canceled) {
+			level = slog.LevelInfo
+			message = "OpenResponses fetch canceled"
+		}
+		logAttrs(c.config.Logger, ctx, level, message, attrs...)
 		return agentResponse{}, fmt.Errorf("send OpenResponses request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -125,7 +131,13 @@ func (c responsesClient) createObserved(ctx context.Context, input, user, previo
 	)
 	if readErr != nil {
 		responseAttrs = append(responseAttrs, slog.Any("error", readErr))
-		logAttrs(c.config.Logger, ctx, slog.LevelError, "Failed to read OpenResponses response", responseAttrs...)
+		level := slog.LevelError
+		message := "Failed to read OpenResponses response"
+		if errors.Is(readErr, context.Canceled) {
+			level = slog.LevelInfo
+			message = "OpenResponses response read canceled"
+		}
+		logAttrs(c.config.Logger, ctx, level, message, responseAttrs...)
 	} else if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		logAttrs(c.config.Logger, ctx, slog.LevelError, "OpenResponses returned an error response", responseAttrs...)
 	} else {

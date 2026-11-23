@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -50,7 +49,7 @@ func run() error {
 	if flags.NArg() > 0 {
 		return fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	parsedLogLevel, err := parseLogLevel(*logLevel)
+	parsedLogLevel, err := executor.ParseLogLevel(*logLevel)
 	if err != nil {
 		return err
 	}
@@ -79,45 +78,13 @@ func run() error {
 }
 
 func parseLogLevel(value string) (slog.Level, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "trace":
-		return executor.LevelTrace, nil
-	case "debug":
-		return slog.LevelDebug, nil
-	case "info":
-		return slog.LevelInfo, nil
-	case "warn":
-		return slog.LevelWarn, nil
-	case "error":
-		return slog.LevelError, nil
-	default:
-		return 0, fmt.Errorf("invalid log level %q (want trace, debug, info, warn, or error)", value)
-	}
+	return executor.ParseLogLevel(value)
 }
 
 func newLogger(output io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
-			if attr.Key == slog.LevelKey && attr.Value.Kind() == slog.KindAny {
-				if actualLevel, ok := attr.Value.Any().(slog.Level); ok && actualLevel == executor.LevelTrace {
-					return slog.String(slog.LevelKey, "TRACE")
-				}
-			}
-			return attr
-		},
-	}))
+	return executor.NewTextLogger(output, level)
 }
 
 func newGatewayHTTPClient(verifyTLS bool) *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	tlsConfig := transport.TLSClientConfig
-	if tlsConfig == nil {
-		tlsConfig = &tls.Config{}
-	} else {
-		tlsConfig = tlsConfig.Clone()
-	}
-	tlsConfig.InsecureSkipVerify = !verifyTLS // #nosec G402 -- verification is an explicit CLI opt-in.
-	transport.TLSClientConfig = tlsConfig
-	return &http.Client{Transport: transport}
+	return executor.NewGatewayHTTPClient(verifyTLS)
 }

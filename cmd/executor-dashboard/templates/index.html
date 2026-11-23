@@ -1,0 +1,42 @@
+{{define "dashboard.html" -}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
+  <title>Executor dashboard</title>
+</head>
+<body>
+  <main>
+    <h1>Executor dashboard</h1>
+    <p>Status: <strong>{{.Status}}</strong></p>
+
+    {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
+    {{if .LastErr}}<p role="alert">Last error: {{.LastErr}}</p>{{end}}
+
+    <form action="/start?refresh={{.Refresh}}" method="post">
+      <button type="submit" {{if .Busy}}disabled{{end}}>Start executor</button>
+    </form>
+    <form action="/stop?refresh={{.Refresh}}" method="post">
+      <button type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
+    </form>
+
+    <form action="/" method="get">
+      <label for="refresh">Refresh page</label>
+      <select id="refresh" name="refresh">
+        <option value="0" {{if eq .Refresh 0}}selected{{end}}>Off</option>
+        <option value="2" {{if eq .Refresh 2}}selected{{end}}>Every 2 seconds</option>
+        <option value="5" {{if eq .Refresh 5}}selected{{end}}>Every 5 seconds</option>
+        <option value="10" {{if eq .Refresh 10}}selected{{end}}>Every 10 seconds</option>
+        <option value="30" {{if eq .Refresh 30}}selected{{end}}>Every 30 seconds</option>
+      </select>
+      <button type="submit">Apply</button>
+    </form>
+
+    <h2>Logs</h2>
+    <textarea aria-label="Executor logs" rows="24" cols="100" wrap="off" readonly>{{.Logs}}</textarea>
+  </main>
+</body>
+</html>
+{{- end}}

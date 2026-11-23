@@ -24,6 +24,12 @@ type Config struct {
 	// GatewayURL is the OpenClaw Gateway base URL, without the /v1/responses path.
 	GatewayURL string
 
+	// FileExplorerURL is the fileexplorer base URL used to refresh the file
+	// index, without the internal refresh path. Use a hostname reachable from
+	// wherever the executor runs, such as the container name on a container
+	// network; the local default works on loopback.
+	FileExplorerURL string
+
 	// AgentID selects the OpenClaw agent that receives each request.
 	AgentID string
 
@@ -52,6 +58,7 @@ func New(config Config) (*Executor, error) {
 	}
 
 	config.GatewayURL = strings.TrimRight(strings.TrimSpace(config.GatewayURL), "/")
+	config.FileExplorerURL = strings.TrimRight(strings.TrimSpace(config.FileExplorerURL), "/")
 	if config.HTTPClient == nil {
 		config.HTTPClient = http.DefaultClient
 	}
@@ -59,7 +66,8 @@ func New(config Config) (*Executor, error) {
 	return &Executor{config: config}, nil
 }
 
-// Validate reports missing required values or an invalid Gateway base URL.
+// Validate reports missing required values or an invalid Gateway or
+// fileexplorer base URL.
 // Authentication is optional because a Gateway may use a trusted proxy or
 // private no-auth ingress.
 func (c Config) Validate() error {
@@ -71,6 +79,7 @@ func (c Config) Validate() error {
 		{name: "filesystem root", value: c.RootPath},
 		{name: "instructions path", value: c.InstructionsPath},
 		{name: "Gateway URL", value: c.GatewayURL},
+		{name: "fileexplorer URL", value: c.FileExplorerURL},
 		{name: "agent ID", value: c.AgentID},
 	}
 	for _, field := range required {
@@ -79,21 +88,34 @@ func (c Config) Validate() error {
 		}
 	}
 
-	parsed, err := url.Parse(strings.TrimSpace(c.GatewayURL))
+	if err := validateBaseURL("Gateway URL", c.GatewayURL); err != nil {
+		return err
+	}
+	if err := validateBaseURL("fileexplorer URL", c.FileExplorerURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateBaseURL reports when value is not a usable base URL: the scheme
+// must be http or https, a host must be present, and credentials, a query,
+// and a fragment are not allowed.
+func validateBaseURL(field, value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil {
-		return fmt.Errorf("invalid Gateway URL: %w", err)
+		return fmt.Errorf("invalid %s: %w", field, err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("Gateway URL must use http or https")
+		return fmt.Errorf("%s must use http or https", field)
 	}
 	if parsed.Hostname() == "" {
-		return fmt.Errorf("Gateway URL must include a host")
+		return fmt.Errorf("%s must include a host", field)
 	}
 	if parsed.User != nil {
-		return fmt.Errorf("Gateway URL must not contain user information")
+		return fmt.Errorf("%s must not contain user information", field)
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("Gateway URL must not contain a query or fragment")
+		return fmt.Errorf("%s must not contain a query or fragment", field)
 	}
 	return nil
 }

@@ -31,6 +31,7 @@ func run() error {
 	rootPath := flags.String("root", "", "filesystem root for paths in the database (required)")
 	instructionsPath := flags.String("instructions", "instructions.md", "fallback instructions file")
 	gatewayURL := flags.String("gateway-url", "http://127.0.0.1:18789", "OpenClaw Gateway base URL")
+	fileExplorerURL := flags.String("fileexplorer-url", "http://127.0.0.1:8080", "fileexplorer base URL for refreshing the file index")
 	agentID := flags.String("agent-id", "main", "OpenClaw agent ID")
 	verifyTLS := flags.Bool("verify-tls", false, "verify the Gateway TLS certificate and hostname (default: skipped)")
 	logLevel := flags.String("log-level", "info", "logging verbosity: trace, debug, info, warn, or error")
@@ -60,6 +61,7 @@ func run() error {
 		RootPath:         *rootPath,
 		InstructionsPath: *instructionsPath,
 		GatewayURL:       *gatewayURL,
+		FileExplorerURL:  *fileExplorerURL,
 		AgentID:          *agentID,
 		AuthToken:        os.Getenv("OPENCLAW_AUTH_TOKEN"),
 		HTTPClient:       executor.NewGatewayHTTPClient(*verifyTLS),

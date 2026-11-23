@@ -24,6 +24,7 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 	logAttrs(logger, ctx, slog.LevelInfo, "Executor run started",
 		slog.String("agent_id", e.config.AgentID),
 		slog.String("gateway_url", e.config.GatewayURL),
+		slog.String("fileexplorer_url", e.config.FileExplorerURL),
 	)
 	defer func() {
 		attrs := []slog.Attr{slog.Duration("elapsed", time.Since(runStarted))}

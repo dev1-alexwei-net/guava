@@ -69,6 +69,16 @@ The CLI writes structured text logs to stderr. At `info` level it reports run an
 
 Library callers can provide a `slog.Logger` through `Config.Logger`; if omitted, the executor emits no package logs.
 
+## Standalone dashboard
+
+Run the separate server-rendered dashboard with:
+
+```sh
+go run ./cmd/executor-dashboard -database ./fileexplorer.sqlite -root ./files -instructions ./instructions.md -gateway-url http://127.0.0.1:18789 -agent-id main -log-level info
+```
+
+Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8081` by default. The `-database` and `-root` flags are required. The dashboard starts one executor run at a time, shows its status and the most recent 64 KiB of logs in a text area, and cancels an active run when the dashboard shuts down. Its optional full-page refresh is off by default, and `-log-level` selects the same levels as the executor CLI. It is a separate command and does not add routes to `fileexplorer`. Set `OPENCLAW_AUTH_TOKEN` when Gateway authentication is required; pass `-verify-tls` to enable certificate and hostname verification.
+
 ## Processing behavior
 
 - The package reads only rows where `is_dir = 0`, ordered by the slash-separated `path` using SQLite binary ordering.

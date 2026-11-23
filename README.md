@@ -41,7 +41,8 @@ docker run --rm \
   ghcr.io/dev1-alexwei-net/guava/executor:latest \
   -database /data/fileexplorer.sqlite -root /files \
   -instructions /app/instructions.md \
-  -gateway-url http://host.docker.internal:18789
+  -gateway-url http://host.docker.internal:18789 \
+  -fileexplorer-url http://fileexplorer:8080
 ```
 
 To run the dashboard from the same image, set the dashboard binary as the entrypoint and bind it to the container interface:
@@ -57,7 +58,8 @@ docker run --rm -p 8081:8081 \
   ghcr.io/dev1-alexwei-net/guava/executor:latest \
   -addr 0.0.0.0:8081 -database /data/fileexplorer.sqlite \
   -root /files -instructions /app/instructions.md \
-  -gateway-url http://host.docker.internal:18789
+  -gateway-url http://host.docker.internal:18789 \
+  -fileexplorer-url http://fileexplorer:8080
 ```
 
-The examples assume the Gateway is reachable at `host.docker.internal:18789`; change `-gateway-url` and host networking as needed. Set `OPENCLAW_AUTH_TOKEN` in the host environment when Gateway bearer authentication is enabled. The executor's `-verify-tls` flag opts into standard certificate and hostname verification.
+The examples assume the Gateway is reachable at `host.docker.internal:18789` and the fileexplorer service is reachable as `http://fileexplorer:8080`; change these URLs and host/container networking as needed. The executor refreshes fileexplorer between file routines so newly created files can be discovered during the same run. Set `OPENCLAW_AUTH_TOKEN` in the host environment when Gateway bearer authentication is enabled. The executor's `-verify-tls` flag opts into standard certificate and hostname verification.

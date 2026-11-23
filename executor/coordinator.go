@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // Coordinator is the in-memory work queue for a single dynamic
@@ -22,11 +23,10 @@ import (
 // failed run leaves no persisted state, and a later run starts fresh
 // with a new coordinator.
 type Coordinator struct {
-	refresher  Refresher
-	lister     FileLister
-	process    ProcessFile
-	discovered map[string]bool
-	queue      []string
+	refresher Refresher
+	lister    FileLister
+	process   ProcessFile
+	queue     *WorkQueue
 }
 
 // NewCoordinator validates the discovery dependencies and returns a
@@ -42,10 +42,10 @@ func NewCoordinator(refresher Refresher, lister FileLister, process ProcessFile)
 		return nil, errors.New("file processor is required")
 	}
 	return &Coordinator{
-		refresher:  refresher,
-		lister:     lister,
-		process:    process,
-		discovered: make(map[string]bool),
+		refresher: refresher,
+		lister:    lister,
+		process:   process,
+		queue:     NewWorkQueue(),
 	}, nil
 }
 
@@ -67,14 +67,23 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		if err := c.refreshAndDiscover(ctx); err != nil {
 			return err
 		}
-		if len(c.queue) == 0 {
+		if c.queue.Empty() {
 			return nil
 		}
 
-		path := c.queue[0]
-		c.queue = c.queue[1:]
+		pending := c.queue.Pending()
+		if len(pending) == 0 {
+			return nil
+		}
+		path := pending[0]
 		if err := c.process(ctx, path); err != nil {
-			return err
+			return fmt.Errorf("process file %q: %w", path, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("process file %q canceled before completion: %w", path, err)
+		}
+		if popped, ok := c.queue.Pop(); !ok || popped != path {
+			return fmt.Errorf("work queue changed while processing %q", path)
 		}
 	}
 }
@@ -87,18 +96,14 @@ func (c *Coordinator) refreshAndDiscover(ctx context.Context) error {
 		return err
 	}
 	if err := c.refresher.Refresh(ctx); err != nil {
-		return err
+		return fmt.Errorf("refresh file index: %w", err)
 	}
 	paths, err := c.lister.FilePaths(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("list indexed files: %w", err)
 	}
-	for _, path := range paths {
-		if c.discovered[path] {
-			continue
-		}
-		c.discovered[path] = true
-		c.queue = append(c.queue, path)
+	if _, err := c.queue.Enqueue(paths); err != nil {
+		return fmt.Errorf("enqueue discovered files: %w", err)
 	}
 	return nil
 }

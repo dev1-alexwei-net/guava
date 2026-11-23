@@ -84,9 +84,9 @@ Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8
 
 ## Refreshing the fileexplorer index
 
-`HTTPRefresher` refreshes the fileexplorer index over HTTP. fileexplorer re-synchronizes its SQLite index whenever a directory page is rendered, so a single GET to the base URL is a complete refresh. `Refresh` issues a context-bound GET to the configured base URL, drains and closes the HTML response body without parsing or retaining it, and returns an error that includes the response status when the response is not 2xx. Cancellation propagates through the context.
+`HTTPRefresher` refreshes the fileexplorer index over HTTP. fileexplorer re-synchronizes its SQLite index whenever a directory page is rendered, so a single GET to the base URL is a complete refresh. `Refresh` issues a context-bound GET to the configured base URL, drains and closes the HTML response body without parsing or retaining it, and returns an error that includes the response status when the response is not 2xx. `Executor.Run` calls it before the initial index listing and between file routines, so files created during a conversation can enter the same run after fileexplorer synchronizes its index. Cancellation propagates through the context.
 
-The adapter depends only on the base URL and an HTTP client; it does not touch the queue or SQLite index implementations, and `Refresh(ctx)` satisfies the `Refresher` contract from [story #109](https://github.com/dev1-alexwei-net/guava/issues/109), so a queue coordinator can call it directly once the queue is integrated.
+The adapter depends only on the base URL and an HTTP client; it does not touch the queue or SQLite index implementations, and `Refresh(ctx)` satisfies the `Refresher` contract from [story #109](https://github.com/dev1-alexwei-net/guava/issues/109), so the queue coordinator can use it without depending on HTTP details.
 
 ```go
 refresher, err := executor.NewHTTPRefresher("http://127.0.0.1:8080", nil)
@@ -126,14 +126,14 @@ for !queue.Empty() {
 - It reads each current file from `RootPath` through Go's rooted filesystem API. Paths must be relative and contained by the root; directories and paths that escape the root are rejected.
 - For each target file, the executor looks for an indexed `instructions.md` in the file's directory and then each parent directory up to the root. The nearest match wins; instructions are not combined across ancestors. The file is read through `RootPath`. If none is indexed, the configured `InstructionsPath` fallback is used. Indexed files named `instructions.md` are treated as instruction sources and are not processed as target files. The initial input also includes the indexed target path and its current contents.
 - Each file starts a separate conversation. If assistant output text does not contain the exact marker `<complete />`, the package sends `Continue` with the previous `previous_response_id`. It does not start the next file until the marker appears.
-- Database rows and source files are not modified.
+- `Run` refreshes fileexplorer and discovers the current regular-file paths before selecting work, then refreshes again between file routines. Each discovery batch is ordered by SQLite binary path order and appended behind already pending paths. A path is processed at most once per run; a newly discovered path that sorts earlier than pending work still goes to the tail of that run's queue.
+- Queue and completion state are in memory and scoped to one `Run`. A later run starts fresh; failed runs stop at the first error, and restarting does not resume prior progress.
+- Database rows and source files are not modified by the executor. The configured fileexplorer GET may of course refresh its own index as part of its normal page behavior.
 - `Run` accepts a `context.Context`; cancellation and database, file, and HTTP errors stop the run and are returned to the caller.
 
 ## Dynamic discovery interfaces
 
-`Refresher`, `FileLister`, and `ProcessFile` are the small interfaces around the dynamic discovery loop planned in [story #109](https://github.com/dev1-alexwei-net/guava/issues/109). A `Coordinator` refreshes the index before selecting work, appends paths not previously discovered to a FIFO queue in the listing's order, and invokes the `ProcessFile` callback for each path at most once per run. It depends only on those interfaces, not on HTTP or SQLite, so its behavior is exercised with in-memory fakes in `coordinator_test.go`.
-
-`Executor.Run` does not use the coordinator yet: it still processes a one-time snapshot of the index. The current fileexplorer SQLite adapter and executor behavior are preserved until the queue is integrated.
+`Refresher`, `FileLister`, and `ProcessFile` isolate the dynamic discovery loop described in [story #109](https://github.com/dev1-alexwei-net/guava/issues/109). `Coordinator` refreshes the index before each selection, appends unseen paths through `WorkQueue`, and invokes the processor in FIFO order. The coordinator does not depend on HTTP or SQLite, so its ordering and failure behavior is tested with in-memory fakes in `coordinator_test.go`. `Executor.Run` composes the HTTP refresher, read-only SQLite index, and rooted file processor behind those interfaces.
 
 ## OpenClaw Gateway
 

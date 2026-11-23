@@ -17,7 +17,7 @@ import (
 // The adapter depends only on the base URL and an HTTP client; it does not
 // touch the queue or SQLite index implementations. Its Refresh method
 // satisfies the Refresher contract from story #109, so a coordinator can use
-// it directly once the queue is integrated.
+// it directly without depending on HTTP details.
 type HTTPRefresher struct {
 	baseURL *url.URL
 	client  *http.Client

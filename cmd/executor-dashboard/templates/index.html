@@ -1,41 +1,73 @@
 {{define "dashboard.html" -}}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="{{.Theme}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
   <title>Executor dashboard</title>
+  <link href="/static/bootstrap.min.css" rel="stylesheet">
 </head>
-<body>
-  <main>
-    <h1>Executor dashboard</h1>
-    <p>Status: <strong>{{.Status}}</strong></p>
+<body class="bg-body-tertiary">
+  <nav class="navbar border-bottom bg-body">
+    <div class="container py-2">
+      <span class="navbar-brand fw-semibold">Executor dashboard</span>
+      <form action="/" method="get">
+        <input type="hidden" name="refresh" value="{{.Refresh}}">
+        <button class="btn btn-outline-secondary btn-sm" type="submit" name="theme" value="{{.NextTheme}}">Switch to {{.NextTheme}} mode</button>
+      </form>
+    </div>
+  </nav>
 
-    {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
-    {{if .LastErr}}<p role="alert">Last error: {{.LastErr}}</p>{{end}}
+  <main class="container py-4 py-lg-5">
+    <header class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2 mb-4">
+      <h1 class="h3 mb-0">Executor</h1>
+      <p class="mb-0">Status: <span class="badge text-bg-secondary">{{.Status}}</span></p>
+    </header>
 
-    <form action="/start?refresh={{.Refresh}}" method="post">
-      <button type="submit" {{if .Busy}}disabled{{end}}>Start executor</button>
-    </form>
-    <form action="/stop?refresh={{.Refresh}}" method="post">
-      <button type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
-    </form>
+    {{if .Error}}<div class="alert alert-danger" role="alert">{{.Error}}</div>{{end}}
+    {{if .LastErr}}<div class="alert alert-danger" role="alert">Last error: {{.LastErr}}</div>{{end}}
 
-    <form action="/" method="get">
-      <label for="refresh">Refresh page</label>
-      <select id="refresh" name="refresh">
-        <option value="0" {{if eq .Refresh 0}}selected{{end}}>Off</option>
-        <option value="2" {{if eq .Refresh 2}}selected{{end}}>Every 2 seconds</option>
-        <option value="5" {{if eq .Refresh 5}}selected{{end}}>Every 5 seconds</option>
-        <option value="10" {{if eq .Refresh 10}}selected{{end}}>Every 10 seconds</option>
-        <option value="30" {{if eq .Refresh 30}}selected{{end}}>Every 30 seconds</option>
-      </select>
-      <button type="submit">Apply</button>
-    </form>
+    <section class="card shadow-sm mb-4" aria-labelledby="controls-heading">
+      <div class="card-body">
+        <h2 class="h5" id="controls-heading">Controls</h2>
+        <div class="d-flex flex-column flex-sm-row gap-2 mb-4">
+          <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post">
+            <button class="btn btn-primary" type="submit" {{if .Busy}}disabled{{end}}>Start executor</button>
+          </form>
+          <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post">
+            <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
+          </form>
+        </div>
 
-    <h2>Logs</h2>
-    <textarea aria-label="Executor logs" rows="24" cols="100" wrap="off" readonly>{{.Logs}}</textarea>
+        <form action="/" method="get" class="row g-2 align-items-end">
+          <input type="hidden" name="theme" value="{{.Theme}}">
+          <div class="col-auto">
+            <label class="form-label mb-0" for="refresh">Refresh page</label>
+            <select class="form-select" id="refresh" name="refresh">
+              <option value="0" {{if eq .Refresh 0}}selected{{end}}>Off</option>
+              <option value="2" {{if eq .Refresh 2}}selected{{end}}>Every 2 seconds</option>
+              <option value="5" {{if eq .Refresh 5}}selected{{end}}>Every 5 seconds</option>
+              <option value="10" {{if eq .Refresh 10}}selected{{end}}>Every 10 seconds</option>
+              <option value="30" {{if eq .Refresh 30}}selected{{end}}>Every 30 seconds</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <button class="btn btn-outline-primary" type="submit">Apply</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card shadow-sm" aria-labelledby="logs-heading">
+      <div class="card-header bg-body d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1">
+        <h2 class="h5 mb-0" id="logs-heading">Logs</h2>
+        <small class="text-body-secondary">Recent 64 KiB</small>
+      </div>
+      <div class="card-body">
+        <textarea class="form-control font-monospace" aria-label="Executor logs" rows="24" readonly>{{.Logs}}</textarea>
+      </div>
+    </section>
   </main>
 </body>
 </html>

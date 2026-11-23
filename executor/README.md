@@ -1,6 +1,6 @@
 # Executor
 
-The `executor` package runs an OpenClaw Responses conversation for each regular file in a fileexplorer SQLite index. It is a Go library; it does not provide a command-line executable.
+The `executor` package runs an OpenClaw Responses conversation for each regular file in a fileexplorer SQLite index. The `cmd/executor` program provides a CLI for running the package.
 
 ## Inputs
 
@@ -14,7 +14,7 @@ Create an `executor.Config` with:
 - `AuthToken`: optional bearer token. Leave it empty when authentication is provided by a trusted proxy or private no-auth ingress.
 - `HTTPClient`: optional HTTP client override; the package uses `http.DefaultClient` when omitted.
 
-## Example
+## Library example
 
 ```go
 package main
@@ -44,7 +44,22 @@ func main() {
 }
 ```
 
-Set `AuthToken` in the config when the Gateway uses shared-secret authentication. The executor sends it as `Authorization: Bearer <token>`; it does not read environment variables itself.
+## Run from the command line
+
+From the repository root, run:
+
+```sh
+go run ./cmd/executor \
+  -database ./fileexplorer.sqlite \
+  -root ./files \
+  -instructions ./instructions.md \
+  -gateway-url http://127.0.0.1:18789 \
+  -agent-id main
+```
+
+The `-database` and `-root` flags are required. `-instructions` defaults to `instructions.md`, `-gateway-url` defaults to `http://127.0.0.1:18789`, and `-agent-id` defaults to `main`. For shared-secret Gateway authentication, set `OPENCLAW_AUTH_TOKEN` in the command's environment; the CLI sends it as a bearer token and does not put it in the argument list. Omit it when authentication is handled by a trusted proxy or private no-auth ingress.
+
+To build a standalone binary, run `go build -o ./guava-executor ./cmd/executor`, then invoke `./guava-executor` with the same flags. The CLI exits nonzero on configuration or processing errors. SIGINT and SIGTERM cancel the active run.
 
 ## Processing behavior
 

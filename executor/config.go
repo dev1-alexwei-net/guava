@@ -16,8 +16,8 @@ type Config struct {
 	// RootPath is the filesystem root that corresponds to paths stored in the index.
 	RootPath string
 
-	// InstructionsPath is the fallback instructions file used when the index has no
-	// ancestor instructions.md for a target file.
+	// InstructionsPath is the fallback instructions file used when no filesystem
+	// ancestor instructions.md exists for a target file.
 	InstructionsPath string
 
 	// GatewayURL is the OpenClaw Gateway base URL, without the /v1/responses path.

@@ -1,9 +1,11 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 )
 
@@ -21,25 +23,35 @@ func isInstructionsFile(file indexedFile) bool {
 	return path.Base(file.path) == instructionsFileName
 }
 
-func indexedInstructions(files []indexedFile) map[string]indexedFile {
-	instructions := make(map[string]indexedFile)
-	for _, file := range files {
-		if isInstructionsFile(file) {
-			instructions[file.path] = file
-		}
+func nearestInstructionsPath(rootPath string, file indexedFile) (string, bool, error) {
+	absoluteRoot, err := filepath.Abs(rootPath)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve filesystem root: %w", err)
 	}
-	return instructions
-}
+	resolvedRoot, err := filepath.EvalSymlinks(absoluteRoot)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve filesystem root: %w", err)
+	}
 
-func nearestInstructionsFile(file indexedFile, instructions map[string]indexedFile) (indexedFile, bool) {
-	for directory := path.Dir(file.path); ; directory = path.Dir(directory) {
-		candidate := path.Join(directory, instructionsFileName)
-		if instructionFile, ok := instructions[candidate]; ok {
-			return instructionFile, true
+	directory := filepath.Dir(filepath.Join(resolvedRoot, filepath.FromSlash(file.path)))
+	for {
+		candidate := filepath.Join(directory, instructionsFileName)
+		info, err := os.Stat(candidate)
+		if err == nil {
+			if !info.Mode().IsRegular() {
+				return "", false, fmt.Errorf("instructions path %q is not a regular file", candidate)
+			}
+			return candidate, true, nil
 		}
-		if directory == "." {
-			return indexedFile{}, false
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", false, fmt.Errorf("inspect instructions file %q: %w", candidate, err)
 		}
+
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return "", false, nil
+		}
+		directory = parent
 	}
 }
 

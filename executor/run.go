@@ -38,8 +38,7 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		return err
 	}
 
-	instructionsByPath := indexedInstructions(files)
-	instructionContents := make(map[string]string, len(instructionsByPath))
+	instructionContents := make(map[string]string)
 	fallbackInstructions := ""
 	fallbackLoaded := false
 
@@ -60,16 +59,19 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		}
 
 		instructions := ""
-		if instructionFile, found := nearestInstructionsFile(file, instructionsByPath); found {
+		instructionsPath, found, err := nearestInstructionsPath(e.config.RootPath, file)
+		if err != nil {
+			return fmt.Errorf("process file %q: %w", file.path, err)
+		}
+		if found {
 			var cached bool
-			instructions, cached = instructionContents[instructionFile.path]
+			instructions, cached = instructionContents[instructionsPath]
 			if !cached {
-				instructionContent, err := reader.read(instructionFile)
+				instructions, err = loadInstructions(instructionsPath)
 				if err != nil {
-					return fmt.Errorf("process file %q: read indexed instructions %q: %w", file.path, instructionFile.path, err)
+					return fmt.Errorf("process file %q: %w", file.path, err)
 				}
-				instructions = string(instructionContent)
-				instructionContents[instructionFile.path] = instructions
+				instructionContents[instructionsPath] = instructions
 			}
 		} else {
 			if !fallbackLoaded {

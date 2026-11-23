@@ -28,7 +28,7 @@ func run() error {
 
 	databasePath := flags.String("database", "", "path to the fileexplorer SQLite database (required)")
 	rootPath := flags.String("root", "", "filesystem root for paths in the database (required)")
-	instructionsPath := flags.String("instructions", "instructions.md", "fallback instructions file when no indexed ancestor instructions.md exists")
+	instructionsPath := flags.String("instructions", "instructions.md", "fallback instructions file when no ancestor instructions.md exists on disk")
 	gatewayURL := flags.String("gateway-url", "http://127.0.0.1:18789", "OpenClaw Gateway base URL")
 	agentID := flags.String("agent-id", "main", "OpenClaw agent ID")
 	verifyTLS := flags.Bool("verify-tls", false, "verify the Gateway TLS certificate and hostname (default: skipped)")

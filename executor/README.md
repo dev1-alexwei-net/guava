@@ -88,6 +88,12 @@ Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8
 - Database rows and source files are not modified.
 - `Run` accepts a `context.Context`; cancellation and database, file, and HTTP errors stop the run and are returned to the caller.
 
+## Dynamic discovery interfaces
+
+`Refresher`, `FileLister`, and `ProcessFile` are the small interfaces around the dynamic discovery loop planned in [story #109](https://github.com/dev1-alexwei-net/guava/issues/109). A `Coordinator` refreshes the index before selecting work, appends paths not previously discovered to a FIFO queue in the listing's order, and invokes the `ProcessFile` callback for each path at most once per run. It depends only on those interfaces, not on HTTP or SQLite, so its behavior is exercised with in-memory fakes in `coordinator_test.go`.
+
+`Executor.Run` does not use the coordinator yet: it still processes a one-time snapshot of the index. The current fileexplorer SQLite adapter and executor behavior are preserved until the queue is integrated.
+
 ## OpenClaw Gateway
 
 The package sends non-streaming JSON requests to `POST {GatewayURL}/v1/responses`, with `model: "openclaw"` and the `x-openclaw-agent-id` header. The OpenClaw Responses endpoint is disabled by default; enable `gateway.http.endpoints.responses.enabled` on the Gateway.

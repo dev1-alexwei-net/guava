@@ -1,0 +1,14 @@
+.git
+.git/**
+.github
+.github/**
+tickets
+tickets/**
+data
+data/**
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*
+dist
+dist/**

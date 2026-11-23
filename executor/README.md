@@ -82,6 +82,23 @@ go run ./cmd/executor-dashboard -database ./fileexplorer.sqlite -root ./files -i
 
 Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8081` by default. The `-database` and `-root` flags are required. `-fileexplorer-url` defaults to `http://127.0.0.1:8080` and takes the same HTTP(S) base URL as the executor CLI. The dashboard starts one executor run at a time, shows its status and the most recent 64 KiB of logs in a text area, and cancels an active run when the dashboard shuts down. It uses bundled Bootstrap for responsive styling, with a server-rendered light/dark toggle and no JavaScript. Its optional full-page refresh is off by default, and `-log-level` selects the same levels as the executor CLI. It is a separate command and does not add routes to `fileexplorer`. Set `OPENCLAW_AUTH_TOKEN` when Gateway authentication is required; pass `-verify-tls` to enable certificate and hostname verification.
 
+## Refreshing the fileexplorer index
+
+`HTTPRefresher` refreshes the fileexplorer index over HTTP. fileexplorer re-synchronizes its SQLite index whenever a directory page is rendered, so a single GET to the base URL is a complete refresh. `Refresh` issues a context-bound GET to the configured base URL, drains and closes the HTML response body without parsing or retaining it, and returns an error that includes the response status when the response is not 2xx. Cancellation propagates through the context.
+
+The adapter depends only on the base URL and an HTTP client; it does not touch the queue or SQLite index implementations, and `Refresh(ctx)` satisfies the `Refresher` contract from [story #109](https://github.com/dev1-alexwei-net/guava/issues/109), so a queue coordinator can call it directly once the queue is integrated.
+
+```go
+refresher, err := executor.NewHTTPRefresher("http://127.0.0.1:8080", nil)
+if err != nil {
+	log.Fatal(err)
+}
+
+if err := refresher.Refresh(context.Background()); err != nil {
+	log.Fatal(err)
+}
+```
+
 ## Processing behavior
 
 - The package reads only rows where `is_dir = 0`, ordered by the slash-separated `path` using SQLite binary ordering.

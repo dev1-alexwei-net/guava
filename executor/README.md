@@ -99,6 +99,27 @@ if err := refresher.Refresh(context.Background()); err != nil {
 }
 ```
 
+## Work queue
+
+`WorkQueue` is the append-only, in-memory work queue scoped to a single executor run. `NewWorkQueue` starts an empty queue; `Enqueue` accepts one ordered file snapshot and appends only the paths not already discovered during the run. Already queued items keep their FIFO position; each new batch is appended as a group, sorted by binary (byte-wise) path order, the same ordering the fileexplorer index uses. Path identity is the normalized relative path, so the same file discovered in different raw spellings is queued once. A snapshot containing an absolute path, an empty path, or a path that escapes the root fails as a whole and leaves the queue unchanged.
+
+`Pop` removes and returns the oldest queued path, `Len` and `Empty` report the queue state, and `Pending` returns a copy of the queued paths in FIFO order. The queue holds its state in memory only: it adds no shared-database table and is not shared between runs.
+
+```go
+queue := executor.NewWorkQueue()
+if added, err := queue.Enqueue([]string{"zeta.txt", "alpha.txt"}); err != nil {
+	log.Fatal(err)
+}
+
+for !queue.Empty() {
+	path, ok := queue.Pop()
+	if !ok {
+		break
+	}
+	// process path
+}
+```
+
 ## Processing behavior
 
 - The package reads only rows where `is_dir = 0`, ordered by the slash-separated `path` using SQLite binary ordering.

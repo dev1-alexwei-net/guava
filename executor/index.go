@@ -57,6 +57,18 @@ func readOnlySQLiteDSN(databasePath string) (string, error) {
 	return dsn.String(), nil
 }
 
+func (i *fileIndex) FilePaths(ctx context.Context) ([]string, error) {
+	files, err := i.regularFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, len(files))
+	for n, file := range files {
+		paths[n] = file.path
+	}
+	return paths, nil
+}
+
 func (i *fileIndex) regularFiles(ctx context.Context) ([]indexedFile, error) {
 	if i == nil || i.db == nil {
 		return nil, fmt.Errorf("fileexplorer index is not open")

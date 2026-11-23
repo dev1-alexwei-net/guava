@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -175,12 +176,15 @@ func TestCoordinatorStopsOnRefreshFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinator.Run(context.Background()); err != errRefresh {
-		t.Fatalf("Run() error = %v, want %v", err, errRefresh)
+	if err := coordinator.Run(context.Background()); !errors.Is(err, errRefresh) {
+		t.Fatalf("Run() error = %v, want wrapped %v", err, errRefresh)
 	}
 	wantPaths(t, processor.processed, []string{"a.txt"})
 	if refresher.calls != 2 {
 		t.Errorf("Refresh calls = %d, want the second refresh to fail the run", refresher.calls)
+	}
+	if got := coordinator.queue.Pending(); len(got) != 1 || got[0] != "b.txt" {
+		t.Errorf("pending after refresh failure = %v, want unprocessed item retained", got)
 	}
 }
 
@@ -193,8 +197,8 @@ func TestCoordinatorStopsOnListingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinator.Run(context.Background()); err != errList {
-		t.Fatalf("Run() error = %v, want %v", err, errList)
+	if err := coordinator.Run(context.Background()); !errors.Is(err, errList) {
+		t.Fatalf("Run() error = %v, want wrapped %v", err, errList)
 	}
 	if len(processor.processed) != 0 {
 		t.Errorf("processed %v, want no paths", processor.processed)
@@ -210,10 +214,13 @@ func TestCoordinatorStopsOnProcessingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinator.Run(context.Background()); err != errProcess {
-		t.Fatalf("Run() error = %v, want %v", err, errProcess)
+	if err := coordinator.Run(context.Background()); !errors.Is(err, errProcess) || !strings.Contains(err.Error(), `"b.txt"`) {
+		t.Fatalf("Run() error = %v, want wrapped %v with file path", err, errProcess)
 	}
 	wantPaths(t, processor.processed, []string{"a.txt", "b.txt"})
+	if got := coordinator.queue.Pending(); len(got) != 1 || got[0] != "b.txt" {
+		t.Errorf("pending after processing failure = %v, want failed item retained", got)
+	}
 }
 
 func TestCoordinatorDoesNotStartForCanceledContext(t *testing.T) {
@@ -248,11 +255,14 @@ func TestCoordinatorStopsWhenContextCancelsMidRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinator.Run(ctx); err != context.Canceled {
-		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	if err := coordinator.Run(ctx); !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), `"a.txt"`) {
+		t.Fatalf("Run() error = %v, want context.Canceled wrapped with active path", err)
 	}
-	// a.txt completed before the cancellation; b.txt must not start.
+	// b.txt must not start, and cancellation must not mark a.txt complete.
 	wantPaths(t, processor.processed, []string{"a.txt"})
+	if got := coordinator.queue.Pending(); len(got) != 2 || got[0] != "a.txt" || got[1] != "b.txt" {
+		t.Errorf("pending after cancellation = %v, want current and later work retained", got)
+	}
 }
 
 func TestNewCoordinatorRejectsMissingDependencies(t *testing.T) {

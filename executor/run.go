@@ -56,25 +56,41 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		err = errors.Join(err, reader.close())
 	}()
 
-	files, err := index.regularFiles(ctx)
+	refresher, err := NewHTTPRefresher(e.config.FileExplorerURL, e.config.HTTPClient)
 	if err != nil {
 		return err
 	}
-	logAttrs(logger, ctx, slog.LevelDebug, "Loaded indexed files", slog.Int("count", len(files)))
+	logAttrs(logger, ctx, slog.LevelDebug, "Starting dynamic file discovery")
 
-	instructionsByPath := indexedInstructions(files)
-	instructionContents := make(map[string]string, len(instructionsByPath))
 	fallbackInstructions := ""
 	fallbackLoaded := false
-
-	for _, file := range files {
+	processFile := func(ctx context.Context, path string) error {
+		files, err := index.regularFiles(ctx)
+		if err != nil {
+			return fmt.Errorf("list indexed files: %w", err)
+		}
+		var file indexedFile
+		found := false
+		for _, candidate := range files {
+			if candidate.path == path {
+				file = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			logAttrs(logger, ctx, slog.LevelDebug, "Skipping file no longer in index", slog.String("path", path))
+			return nil
+		}
 		// Instruction files are inputs to other files, not work items themselves.
 		if isInstructionsFile(file) {
-			continue
+			logAttrs(logger, ctx, slog.LevelDebug, "Skipping indexed instructions file", slog.String("path", path))
+			return nil
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
 		fileStarted := time.Now()
 		fileReadStarted := time.Now()
 		content, err := reader.read(file)
@@ -96,28 +112,23 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		}
 
 		instructions := ""
-		if instructionFile, found := nearestInstructionsFile(file, instructionsByPath); found {
-			var cached bool
-			instructions, cached = instructionContents[instructionFile.path]
-			if !cached {
-				instructionsReadStarted := time.Now()
-				instructionContent, err := reader.read(instructionFile)
-				if err != nil {
-					logAttrs(logger, ctx, slog.LevelError, "Failed to read indexed instructions",
-						slog.String("path", instructionFile.path),
-						slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-						slog.Any("error", err),
-					)
-					return fmt.Errorf("process file %q: read indexed instructions %q: %w", file.path, instructionFile.path, err)
-				}
-				instructions = string(instructionContent)
-				instructionContents[instructionFile.path] = instructions
-				logAttrs(logger, ctx, slog.LevelDebug, "Read indexed instructions",
+		if instructionFile, ok := nearestInstructionsFile(file, indexedInstructions(files)); ok {
+			instructionsReadStarted := time.Now()
+			instructionContent, err := reader.read(instructionFile)
+			if err != nil {
+				logAttrs(logger, ctx, slog.LevelError, "Failed to read indexed instructions",
 					slog.String("path", instructionFile.path),
-					slog.Int("bytes", len(instructionContent)),
 					slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
+					slog.Any("error", err),
 				)
+				return fmt.Errorf("process file %q: read indexed instructions %q: %w", file.path, instructionFile.path, err)
 			}
+			instructions = string(instructionContent)
+			logAttrs(logger, ctx, slog.LevelDebug, "Read indexed instructions",
+				slog.String("path", instructionFile.path),
+				slog.Int("bytes", len(instructionContent)),
+				slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
+			)
 		} else {
 			if !fallbackLoaded {
 				instructionsReadStarted := time.Now()
@@ -160,6 +171,12 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 			slog.String("path", file.path),
 			slog.Duration("elapsed", time.Since(fileStarted)),
 		)
+		return nil
 	}
-	return nil
+
+	coordinator, err := NewCoordinator(refresher, index, processFile)
+	if err != nil {
+		return err
+	}
+	return coordinator.Run(ctx)
 }

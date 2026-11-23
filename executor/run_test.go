@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,6 +41,10 @@ func TestExecutorRunProcessesFilesSequentially(t *testing.T) {
 
 	var requests []responsesRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		var request responsesRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
@@ -62,6 +67,7 @@ func TestExecutorRunProcessesFilesSequentially(t *testing.T) {
 	config.RootPath = rootPath
 	config.InstructionsPath = instructionsPath
 	config.GatewayURL = server.URL
+	config.FileExplorerURL = server.URL
 	config.AgentID = "executor-agent"
 	config.HTTPClient = server.Client()
 	executor, err := New(config)
@@ -91,6 +97,112 @@ func TestExecutorRunProcessesFilesSequentially(t *testing.T) {
 	}
 }
 
+func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
+	rootPath := t.TempDir()
+	for name, content := range map[string]string{"a.txt": "first content", "z.txt": "already queued content"} {
+		if err := os.WriteFile(filepath.Join(rootPath, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createIndexFixture(t, databasePath,
+		[]indexedFile{
+			{path: "a.txt", name: "a.txt", size: 13},
+			{path: "z.txt", name: "z.txt", size: 22},
+		}, nil,
+	)
+	instructionsPath := filepath.Join(t.TempDir(), "instructions.md")
+	const instructions = "Follow the fallback instructions."
+	if err := os.WriteFile(instructionsPath, []byte(instructions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests []responsesRequest
+	var synced bool
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/":
+			// This endpoint models fileexplorer's regular GET-triggered index sync.
+			if !synced {
+				if _, err := os.Stat(filepath.Join(rootPath, "b.txt")); err == nil {
+					db, err := sql.Open("sqlite", databasePath)
+					if err != nil {
+						t.Errorf("open index for sync: %v", err)
+						http.Error(w, "sync failed", http.StatusInternalServerError)
+						return
+					}
+					_, err = db.Exec("INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 0, ?, 0)", "b.txt", "b.txt", len("created during the first routine"))
+					closeErr := db.Close()
+					if err != nil || closeErr != nil {
+						t.Errorf("sync newly created file: exec=%v close=%v", err, closeErr)
+						http.Error(w, "sync failed", http.StatusInternalServerError)
+						return
+					}
+					synced = true
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/responses":
+			var request responsesRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode request: %v", err)
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
+			requests = append(requests, request)
+			if strings.Contains(request.Input, `Current file path: "a.txt"`) {
+				if err := os.WriteFile(filepath.Join(rootPath, "b.txt"), []byte("created during the first routine"), 0o600); err != nil {
+					t.Errorf("create file during routine: %v", err)
+					http.Error(w, "create failed", http.StatusInternalServerError)
+					return
+				}
+			}
+			response := responsesAPIResponse{
+				ID:     fmt.Sprintf("resp_%d", len(requests)),
+				Output: assistantText(completionMarker),
+			}
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				t.Errorf("encode response: %v", err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.DatabasePath = databasePath
+	config.RootPath = rootPath
+	config.InstructionsPath = instructionsPath
+	config.GatewayURL = server.URL
+	config.FileExplorerURL = server.URL
+	config.HTTPClient = server.Client()
+	runner, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 3 {
+		t.Fatalf("got %d conversations, want 3: %#v", len(requests), requests)
+	}
+	wantPaths := []string{`Current file path: "a.txt"`, `Current file path: "z.txt"`, `Current file path: "b.txt"`}
+	for i, want := range wantPaths {
+		if !strings.Contains(requests[i].Input, want) {
+			t.Errorf("conversation %d input does not identify %q: %q", i, want, requests[i].Input)
+		}
+		if !strings.Contains(requests[i].Input, instructions) {
+			t.Errorf("conversation %d input is missing fallback instructions", i)
+		}
+	}
+	if !strings.Contains(requests[2].Input, "created during the first routine") {
+		t.Errorf("new file content was not available in the same run: %q", requests[2].Input)
+	}
+}
+
 func TestExecutorRunStopsOnFirstFileError(t *testing.T) {
 	rootPath := t.TempDir()
 	for _, name := range []string{"a.txt", "b.txt"} {
@@ -112,7 +224,11 @@ func TestExecutorRunStopsOnFirstFileError(t *testing.T) {
 	}
 
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		calls++
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(w, `{"error":{"message":"denied"}}`)
@@ -124,6 +240,7 @@ func TestExecutorRunStopsOnFirstFileError(t *testing.T) {
 	config.RootPath = rootPath
 	config.InstructionsPath = instructionsPath
 	config.GatewayURL = server.URL
+	config.FileExplorerURL = server.URL
 	config.HTTPClient = server.Client()
 	executor, err := New(config)
 	if err != nil {

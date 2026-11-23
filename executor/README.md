@@ -77,7 +77,7 @@ Run the separate server-rendered dashboard with:
 go run ./cmd/executor-dashboard -database ./fileexplorer.sqlite -root ./files -instructions ./instructions.md -gateway-url http://127.0.0.1:18789 -agent-id main -log-level info
 ```
 
-Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8081` by default. The `-database` and `-root` flags are required. The dashboard starts one executor run at a time, shows its status and the most recent 64 KiB of logs in a text area, and cancels an active run when the dashboard shuts down. Its optional full-page refresh is off by default, and `-log-level` selects the same levels as the executor CLI. It is a separate command and does not add routes to `fileexplorer`. Set `OPENCLAW_AUTH_TOKEN` when Gateway authentication is required; pass `-verify-tls` to enable certificate and hostname verification.
+Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8081` by default. The `-database` and `-root` flags are required. The dashboard starts one executor run at a time, shows its status and the most recent 64 KiB of logs in a text area, and cancels an active run when the dashboard shuts down. It uses bundled Bootstrap for responsive styling, with a server-rendered light/dark toggle and no JavaScript. Its optional full-page refresh is off by default, and `-log-level` selects the same levels as the executor CLI. It is a separate command and does not add routes to `fileexplorer`. Set `OPENCLAW_AUTH_TOKEN` when Gateway authentication is required; pass `-verify-tls` to enable certificate and hostname verification.
 
 ## Processing behavior
 

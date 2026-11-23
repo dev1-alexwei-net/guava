@@ -11,7 +11,7 @@ import (
 	"github.com/dev1-alexwei-net/guava/executor"
 )
 
-//go:embed templates/index.html
+//go:embed templates/index.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
 var dashboardFiles embed.FS
 
 type dashboard struct {
@@ -21,13 +21,15 @@ type dashboard struct {
 }
 
 type dashboardPageData struct {
-	Status  string
-	Logs    string
-	LastErr string
-	Error   string
-	Refresh int
-	Running bool
-	Busy    bool
+	Status    string
+	Logs      string
+	LastErr   string
+	Error     string
+	Refresh   int
+	Theme     string
+	NextTheme string
+	Running   bool
+	Busy      bool
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
@@ -46,6 +48,7 @@ func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, erro
 	mux.HandleFunc("GET /{$}", app.show)
 	mux.HandleFunc("POST /start", app.start)
 	mux.HandleFunc("POST /stop", app.stop)
+	mux.HandleFunc("GET /static/bootstrap.min.css", app.stylesheet)
 	app.routes = mux
 	return app, nil
 }
@@ -61,14 +64,21 @@ func (d *dashboard) Close() {
 func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 	snapshot := d.controller.Snapshot()
 	refresh := parseRefresh(r.URL.Query().Get("refresh"))
+	theme := parseTheme(r.URL.Query().Get("theme"))
+	nextTheme := "dark"
+	if theme == "dark" {
+		nextTheme = "light"
+	}
 	data := dashboardPageData{
-		Status:  snapshot.Status,
-		Logs:    snapshot.Logs,
-		LastErr: snapshot.LastErr,
-		Refresh: refresh,
-		Running: snapshot.Status == "running",
-		Busy:    snapshot.Status == "running" || snapshot.Status == "stopping",
-		Error:   r.URL.Query().Get("error"),
+		Status:    snapshot.Status,
+		Logs:      snapshot.Logs,
+		LastErr:   snapshot.LastErr,
+		Refresh:   refresh,
+		Theme:     theme,
+		NextTheme: nextTheme,
+		Running:   snapshot.Status == "running",
+		Busy:      snapshot.Status == "running" || snapshot.Status == "stopping",
+		Error:     r.URL.Query().Get("error"),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -77,6 +87,19 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 	if err := d.page.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
 	}
+}
+
+func (d *dashboard) stylesheet(w http.ResponseWriter, _ *http.Request) {
+	css, err := dashboardFiles.ReadFile("static/bootstrap.min.css")
+	if err != nil {
+		http.Error(w, "stylesheet unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(css)
 }
 
 func (d *dashboard) start(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +117,9 @@ func redirectDashboard(w http.ResponseWriter, r *http.Request, err error) {
 	if refresh := parseRefresh(r.URL.Query().Get("refresh")); refresh > 0 {
 		query.Set("refresh", strconv.Itoa(refresh))
 	}
+	if theme := parseTheme(r.URL.Query().Get("theme")); theme == "dark" {
+		query.Set("theme", theme)
+	}
 	if err != nil {
 		query.Set("error", err.Error())
 	}
@@ -102,6 +128,13 @@ func redirectDashboard(w http.ResponseWriter, r *http.Request, err error) {
 		target += "?" + encoded
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func parseTheme(value string) string {
+	if value == "dark" {
+		return "dark"
+	}
+	return "light"
 }
 
 func parseRefresh(value string) int {

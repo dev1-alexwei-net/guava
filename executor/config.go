@@ -3,6 +3,7 @@ package executor
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,6 +34,10 @@ type Config struct {
 	// HTTPClient overrides the default HTTP client. It is useful for custom
 	// transports, including tests that use a local mock Gateway.
 	HTTPClient *http.Client
+
+	// Logger receives structured progress and Gateway request details. A nil
+	// logger disables package logging.
+	Logger *slog.Logger
 }
 
 // Executor holds validated configuration for a file-processing run.

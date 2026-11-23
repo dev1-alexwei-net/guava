@@ -13,6 +13,7 @@ Create an `executor.Config` with:
 - `AgentID`: the OpenClaw agent to route requests to.
 - `AuthToken`: optional bearer token. Leave it empty when authentication is provided by a trusted proxy or private no-auth ingress.
 - `HTTPClient`: optional HTTP client override; the package uses `http.DefaultClient` when omitted.
+- `Logger`: optional structured logger. A nil logger disables package logging.
 
 ## Library example
 
@@ -54,12 +55,19 @@ go run ./cmd/executor \
   -root ./files \
   -instructions ./instructions.md \
   -gateway-url http://127.0.0.1:18789 \
-  -agent-id main
+  -agent-id main \
+  -log-level info
 ```
 
-The `-database` and `-root` flags are required. `-instructions` defaults to `instructions.md` and is used only when the index has no applicable ancestor instruction file. `-gateway-url` defaults to `http://127.0.0.1:18789`, and `-agent-id` defaults to `main`. TLS certificate and hostname verification is skipped by default; pass `-verify-tls` to enable standard verification. For shared-secret Gateway authentication, set `OPENCLAW_AUTH_TOKEN` in the command's environment; the CLI sends it as a bearer token and does not put it in the argument list. Omit it when authentication is handled by a trusted proxy or private no-auth ingress.
+The `-database` and `-root` flags are required. `-instructions` defaults to `instructions.md` and is used only when the index has no applicable ancestor instruction file. `-gateway-url` defaults to `http://127.0.0.1:18789`, `-agent-id` defaults to `main`, and `-log-level` defaults to `info`. Supported log levels are `error`, `warn`, `info`, `debug`, and `trace`. TLS certificate and hostname verification is skipped by default; pass `-verify-tls` to enable standard verification. For shared-secret Gateway authentication, set `OPENCLAW_AUTH_TOKEN` in the command's environment; the CLI sends it as a bearer token and does not put it in the argument list. Omit it when authentication is handled by a trusted proxy or private no-auth ingress.
 
 To build a standalone binary, run `go build -o ./guava-executor ./cmd/executor`, then invoke `./guava-executor` with the same flags. The CLI exits nonzero on configuration or processing errors. SIGINT and SIGTERM cancel the active run.
+
+## Logging
+
+The CLI writes structured text logs to stderr. At `info` level it reports run and per-file progress, plus each Gateway response status, response byte count, fetch time, response-body read time, and total elapsed time. `debug` adds indexed-file and instructions-file read timings and conversation-turn details. `trace` includes the raw Gateway response body; use it only when that full content is wanted in the log. The bearer token is never logged. `warn` and `error` select those severities and more severe events.
+
+Library callers can provide a `slog.Logger` through `Config.Logger`; if omitted, the executor emits no package logs.
 
 ## Processing behavior
 

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const maxResponsesBodySize = 32 << 20
@@ -56,6 +58,10 @@ type responsesClient struct {
 }
 
 func (c responsesClient) create(ctx context.Context, input, user, previousResponseID string) (agentResponse, error) {
+	return c.createObserved(ctx, input, user, previousResponseID, "", 0)
+}
+
+func (c responsesClient) createObserved(ctx context.Context, input, user, previousResponseID, filePath string, turn int) (agentResponse, error) {
 	endpoint, err := responsesEndpoint(c.config.GatewayURL)
 	if err != nil {
 		return agentResponse{}, err
@@ -88,15 +94,53 @@ func (c responsesClient) create(ctx context.Context, input, user, previousRespon
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	fetchStarted := time.Now()
 	resp, err := httpClient.Do(req)
+	fetchElapsed := time.Since(fetchStarted)
 	if err != nil {
+		attrs := responseLogAttrs(filePath, turn)
+		attrs = append(attrs,
+			slog.String("method", req.Method),
+			slog.String("url", endpoint),
+			slog.Duration("fetch_elapsed", fetchElapsed),
+			slog.Any("error", err),
+		)
+		logAttrs(c.config.Logger, ctx, slog.LevelError, "OpenResponses fetch failed", attrs...)
 		return agentResponse{}, fmt.Errorf("send OpenResponses request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponsesBodySize+1))
-	if err != nil {
-		return agentResponse{}, fmt.Errorf("read OpenResponses response: %w", err)
+	responseReadStarted := time.Now()
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponsesBodySize+1))
+	responseReadElapsed := time.Since(responseReadStarted)
+	responseAttrs := responseLogAttrs(filePath, turn)
+	responseAttrs = append(responseAttrs,
+		slog.String("method", req.Method),
+		slog.String("url", endpoint),
+		slog.Int("status", resp.StatusCode),
+		slog.Int("response_bytes", len(responseBody)),
+		slog.Duration("fetch_elapsed", fetchElapsed),
+		slog.Duration("response_read_elapsed", responseReadElapsed),
+		slog.Duration("elapsed", time.Since(fetchStarted)),
+	)
+	if readErr != nil {
+		responseAttrs = append(responseAttrs, slog.Any("error", readErr))
+		logAttrs(c.config.Logger, ctx, slog.LevelError, "Failed to read OpenResponses response", responseAttrs...)
+	} else if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		logAttrs(c.config.Logger, ctx, slog.LevelError, "OpenResponses returned an error response", responseAttrs...)
+	} else {
+		logAttrs(c.config.Logger, ctx, slog.LevelInfo, "OpenResponses response received", responseAttrs...)
+	}
+	if c.config.Logger != nil && c.config.Logger.Enabled(ctx, LevelTrace) {
+		rawAttrs := responseLogAttrs(filePath, turn)
+		rawAttrs = append(rawAttrs,
+			slog.Int("status", resp.StatusCode),
+			slog.String("body", string(responseBody)),
+		)
+		c.config.Logger.LogAttrs(ctx, LevelTrace, "Raw OpenResponses response body received", rawAttrs...)
+	}
+	if readErr != nil {
+		return agentResponse{}, fmt.Errorf("read OpenResponses response: %w", readErr)
 	}
 	if len(responseBody) > maxResponsesBodySize {
 		return agentResponse{}, fmt.Errorf("OpenResponses response exceeds %d bytes", maxResponsesBodySize)
@@ -129,6 +173,17 @@ func (c responsesClient) create(ctx context.Context, input, user, previousRespon
 		}
 	}
 	return agentResponse{id: decoded.ID, outputText: output.String()}, nil
+}
+
+func responseLogAttrs(filePath string, turn int) []slog.Attr {
+	attrs := make([]slog.Attr, 0, 2)
+	if filePath != "" {
+		attrs = append(attrs, slog.String("path", filePath))
+	}
+	if turn > 0 {
+		attrs = append(attrs, slog.Int("turn", turn))
+	}
+	return attrs
 }
 
 func responsesEndpoint(gatewayURL string) (string, error) {

@@ -100,7 +100,7 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 				slog.Duration("file_read_elapsed", time.Since(fileReadStarted)),
 				slog.Any("error", err),
 			)
-			return fmt.Errorf("process file %q: %w", file.path, err)
+			return fmt.Errorf("read indexed file: %w", err)
 		}
 		logAttrs(logger, ctx, slog.LevelDebug, "Read indexed file",
 			slog.String("path", file.path),
@@ -121,7 +121,7 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 					slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
 					slog.Any("error", err),
 				)
-				return fmt.Errorf("process file %q: read indexed instructions %q: %w", file.path, instructionFile.path, err)
+				return fmt.Errorf("read indexed instructions %q: %w", instructionFile.path, err)
 			}
 			instructions = string(instructionContent)
 			logAttrs(logger, ctx, slog.LevelDebug, "Read indexed instructions",
@@ -139,7 +139,7 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 						slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
 						slog.Any("error", err),
 					)
-					return fmt.Errorf("process file %q: %w", file.path, err)
+					return err
 				}
 				fallbackLoaded = true
 				logAttrs(logger, ctx, slog.LevelDebug, "Read fallback instructions",
@@ -165,7 +165,7 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 				slog.Duration("elapsed", time.Since(fileStarted)),
 				slog.Any("error", err),
 			)
-			return fmt.Errorf("process file %q: %w", file.path, err)
+			return fmt.Errorf("run file conversation: %w", err)
 		}
 		logAttrs(logger, ctx, slog.LevelInfo, "Indexed file processing completed",
 			slog.String("path", file.path),

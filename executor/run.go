@@ -33,16 +33,21 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		err = errors.Join(err, reader.close())
 	}()
 
-	instructions, err := loadInstructions(e.config.InstructionsPath)
-	if err != nil {
-		return err
-	}
 	files, err := index.regularFiles(ctx)
 	if err != nil {
 		return err
 	}
 
+	instructionsByPath := indexedInstructions(files)
+	instructionContents := make(map[string]string, len(instructionsByPath))
+	fallbackInstructions := ""
+	fallbackLoaded := false
+
 	for _, file := range files {
+		// Instruction files are inputs to other files, not work items themselves.
+		if isInstructionsFile(file) {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -53,6 +58,33 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
+		instructions := ""
+		if instructionFile, found := nearestInstructionsFile(file, instructionsByPath); found {
+			var cached bool
+			instructions, cached = instructionContents[instructionFile.path]
+			if !cached {
+				instructionContent, err := reader.read(instructionFile)
+				if err != nil {
+					return fmt.Errorf("process file %q: read indexed instructions %q: %w", file.path, instructionFile.path, err)
+				}
+				instructions = string(instructionContent)
+				instructionContents[instructionFile.path] = instructions
+			}
+		} else {
+			if !fallbackLoaded {
+				fallbackInstructions, err = loadInstructions(e.config.InstructionsPath)
+				if err != nil {
+					return fmt.Errorf("process file %q: %w", file.path, err)
+				}
+				fallbackLoaded = true
+			}
+			instructions = fallbackInstructions
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		input := composeInitialInput(instructions, file, content)
 		if err := e.runFileConversation(ctx, input); err != nil {
 			return fmt.Errorf("process file %q: %w", file.path, err)

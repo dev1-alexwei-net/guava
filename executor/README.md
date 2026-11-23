@@ -8,7 +8,7 @@ Create an `executor.Config` with:
 
 - `DatabasePath`: an existing fileexplorer SQLite database. The executor opens it read-only and reads regular-file rows from the existing `files` table.
 - `RootPath`: the filesystem root corresponding to the relative paths in that database. The database stores metadata, not file contents.
-- `InstructionsPath`: the path to the `instructions.md` file.
+- `InstructionsPath`: the fallback path to an `instructions.md` file. A closer indexed `instructions.md` for each target file takes precedence.
 - `GatewayURL`: the OpenClaw Gateway base URL, without `/v1/responses`.
 - `AgentID`: the OpenClaw agent to route requests to.
 - `AuthToken`: optional bearer token. Leave it empty when authentication is provided by a trusted proxy or private no-auth ingress.
@@ -57,7 +57,7 @@ go run ./cmd/executor \
   -agent-id main
 ```
 
-The `-database` and `-root` flags are required. `-instructions` defaults to `instructions.md`, `-gateway-url` defaults to `http://127.0.0.1:18789`, and `-agent-id` defaults to `main`. For shared-secret Gateway authentication, set `OPENCLAW_AUTH_TOKEN` in the command's environment; the CLI sends it as a bearer token and does not put it in the argument list. Omit it when authentication is handled by a trusted proxy or private no-auth ingress.
+The `-database` and `-root` flags are required. `-instructions` defaults to `instructions.md` and is used only when the index has no applicable ancestor instruction file. `-gateway-url` defaults to `http://127.0.0.1:18789`, and `-agent-id` defaults to `main`. For shared-secret Gateway authentication, set `OPENCLAW_AUTH_TOKEN` in the command's environment; the CLI sends it as a bearer token and does not put it in the argument list. Omit it when authentication is handled by a trusted proxy or private no-auth ingress.
 
 To build a standalone binary, run `go build -o ./guava-executor ./cmd/executor`, then invoke `./guava-executor` with the same flags. The CLI exits nonzero on configuration or processing errors. SIGINT and SIGTERM cancel the active run.
 
@@ -65,7 +65,7 @@ To build a standalone binary, run `go build -o ./guava-executor ./cmd/executor`,
 
 - The package reads only rows where `is_dir = 0`, ordered by the slash-separated `path` using SQLite binary ordering.
 - It reads each current file from `RootPath` through Go's rooted filesystem API. Paths must be relative and contained by the root; directories and paths that escape the root are rejected.
-- For each file, the initial input combines the contents of `InstructionsPath`, the indexed path, and the file's current contents.
+- For each target file, the executor looks for an indexed `instructions.md` in the file's directory and then each parent directory up to the root. The nearest match wins; instructions are not combined across ancestors. The file is read through `RootPath`. If none is indexed, the configured `InstructionsPath` fallback is used. Indexed files named `instructions.md` are treated as instruction sources and are not processed as target files. The initial input also includes the indexed target path and its current contents.
 - Each file starts a separate conversation. If assistant output text does not contain the exact marker `<complete />`, the package sends `Continue` with the previous `previous_response_id`. It does not start the next file until the marker appears.
 - Database rows and source files are not modified.
 - `Run` accepts a `context.Context`; cancellation and database, file, and HTTP errors stop the run and are returned to the caller.

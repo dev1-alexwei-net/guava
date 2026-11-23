@@ -12,14 +12,14 @@ import (
 const maxLogBytes = 64 << 10
 
 type executorController struct {
-	mu       sync.Mutex
-	runner   *executor.Executor
-	logger   *slog.Logger
-	logs     *tailLogBuffer
-	status   string
-	lastErr  string
-	cancel   context.CancelFunc
-	done     chan struct{}
+	mu      sync.Mutex
+	runner  *executor.Executor
+	logger  *slog.Logger
+	logs    *tailLogBuffer
+	status  string
+	lastErr string
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 type executorSnapshot struct {

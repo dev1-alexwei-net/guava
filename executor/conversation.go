@@ -29,7 +29,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 		}
 		turn++
 		response, err := client.createObserved(ctx, input, "", previousResponseID, filePath, turn)
-		if err != nil {
+		if err != nil && !containsOutputLimitMessage(err.Error()) {
 			return err
 		}
 		attrs := []slog.Attr{slog.Int("turn", turn), slog.String("response_id", response.id)}
@@ -48,4 +48,8 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 
 func containsCompletionMarker(text string) bool {
 	return strings.Contains(text, completionMarker)
+}
+
+func containsOutputLimitMessage(text string) bool {
+	return strings.Contains(text, "The model was cut off") // should responses api handle this?
 }

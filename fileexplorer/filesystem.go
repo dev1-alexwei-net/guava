@@ -178,6 +178,31 @@ func (f *rootedFS) Mkdir(name string, perm os.FileMode) error {
 	return f.root.Mkdir(f.name(rel), perm)
 }
 
+// MkdirWithMode applies the requested mode after creation so the process umask
+// cannot remove permission bits from a newly created directory.
+func (f *rootedFS) MkdirWithMode(name string, perm os.FileMode) error {
+	rel, err := f.clean(name)
+	if err != nil {
+		return err
+	}
+	rootedName := f.name(rel)
+	if err := f.root.Mkdir(rootedName, perm); err != nil {
+		return err
+	}
+	dir, err := f.root.OpenRoot(rootedName)
+	if err != nil {
+		_ = f.root.Remove(rootedName)
+		return err
+	}
+	chmodErr := dir.Chmod(".", perm)
+	_ = dir.Close()
+	if chmodErr != nil {
+		_ = f.root.Remove(rootedName)
+		return chmodErr
+	}
+	return nil
+}
+
 func (f *rootedFS) Rename(oldname, newname string) error {
 	oldRel, err := f.clean(oldname)
 	if err != nil {
@@ -233,7 +258,7 @@ func (m *mutations) MakeDirectory(parent, name string) (string, error) {
 	if !validName(name) {
 		return "", newInteractionError(http.StatusBadRequest, "Invalid directory name")
 	}
-	if err := m.filesystem.Mkdir(path.Join(m.filesystem.Relative(dir), name), 0o755); err != nil {
+	if err := m.filesystem.MkdirWithMode(path.Join(m.filesystem.Relative(dir), name), 0o777); err != nil {
 		return "", newInteractionError(http.StatusConflict, "Unable to create directory")
 	}
 	return current, nil

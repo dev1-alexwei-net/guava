@@ -359,6 +359,33 @@ func TestThemeToggleSwitchesCurrentPageAndPreservesOtherQuery(t *testing.T) {
 	}
 }
 
+func TestRootBreadcrumbPreservesTheme(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	dark := get(t, h, "/d/docs?theme=dark")
+	if dark.Code != http.StatusOK {
+		t.Fatalf("dark directory status=%d body=%s", dark.Code, dark.Body.String())
+	}
+	if !strings.Contains(dark.Body.String(), `href="/?theme=dark">Root</a>`) {
+		t.Error("dark Root breadcrumb does not link back to Root with the dark theme")
+	}
+
+	light := get(t, h, "/d/docs")
+	if light.Code != http.StatusOK {
+		t.Fatalf("light directory status=%d body=%s", light.Code, light.Body.String())
+	}
+	if !strings.Contains(light.Body.String(), `<a href="/">Root</a>`) {
+		t.Error("light Root breadcrumb does not link to Root")
+	}
+	if strings.Contains(light.Body.String(), `theme=dark">Root`) {
+		t.Error("light Root breadcrumb unexpectedly links to the dark theme")
+	}
+}
+
 func TestDarkThemePersistsAcrossExplorerNavigation(t *testing.T) {
 	root := t.TempDir()
 	docs := filepath.Join(root, "docs")
@@ -382,6 +409,7 @@ func TestDarkThemePersistsAcrossExplorerNavigation(t *testing.T) {
 	for _, want := range []string{
 		`<html lang="en" data-bs-theme="dark">`,
 		`href="/?theme=dark">Guava</a>`,
+		`href="/?theme=dark">Root</a>`,
 		`href="/d/docs?theme=dark">docs/</a>`,
 		`href="/preview/root.txt?theme=dark">root.txt</a>`,
 		`href="/edit/root.txt?theme=dark">Edit</a>`,

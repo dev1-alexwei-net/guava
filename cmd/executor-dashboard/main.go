@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,7 +27,9 @@ func main() {
 func run() error {
 	flags := flag.NewFlagSet("executor-dashboard", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	addr := flags.String("addr", "127.0.0.1:8081", "dashboard listen address")
+	host := flags.String("host", envOrDefault("HOST", "127.0.0.1"), "bind host; defaults to $HOST or 127.0.0.1")
+	port := flags.String("port", envOrDefault("PORT", "8081"), "bind port; defaults to $PORT or 8081")
+	addr := flags.String("addr", "", "deprecated: complete listen address or port; overrides -host and -port")
 	databasePath := flags.String("database", "", "path to the fileexplorer SQLite database (required)")
 	rootPath := flags.String("root", "", "filesystem root for paths in the database (required)")
 	instructionsPath := flags.String("instructions", "instructions.md", "fallback instructions file")
@@ -71,7 +74,11 @@ func run() error {
 	}
 	defer app.Close()
 
-	server := &http.Server{Addr: normalizeAddress(*addr), Handler: app}
+	listen := net.JoinHostPort(*host, *port)
+	if *addr != "" {
+		listen = normalizeAddress(*addr)
+	}
+	server := &http.Server{Addr: listen, Handler: app}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -96,12 +103,17 @@ func run() error {
 	}
 }
 
-func normalizeAddress(addr string) string {
-	if addr == "" {
-		return "127.0.0.1:8081"
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
 	}
+	return fallback
+}
+
+func normalizeAddress(addr string) string {
+	addr = strings.TrimSpace(addr)
 	if strings.Contains(addr, ":") {
 		return addr
 	}
-	return ":" + addr
+	return net.JoinHostPort("", addr)
 }

@@ -9,10 +9,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -24,20 +26,16 @@ func main() {
 }
 
 func run() (err error) {
-	addr := flag.String("addr", "", "listen address; defaults to $PORT or :8080")
+	host := flag.String("host", envOrDefault("HOST", ""), "bind host; defaults to $HOST or all interfaces")
+	port := flag.String("port", envOrDefault("PORT", "8080"), "bind port; defaults to $PORT or 8080")
+	addr := flag.String("addr", "", "deprecated: complete listen address or port; overrides -host and -port")
 	root := flag.String("root", ".", "directory to serve")
 	db := flag.String("db", "", "SQLite database file; defaults to a file in the system temp directory")
 	flag.Parse()
 
-	listen := *addr
-	if listen == "" {
-		listen = os.Getenv("PORT")
-	}
-	if listen == "" {
-		listen = ":8080"
-	}
-	if listen[0] != ':' {
-		listen = ":" + listen
+	listen := net.JoinHostPort(*host, *port)
+	if *addr != "" {
+		listen = normalizeAddress(*addr)
 	}
 
 	dbPath := *db
@@ -87,6 +85,21 @@ func run() (err error) {
 		log.Println("stopped")
 		return nil
 	}
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func normalizeAddress(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if strings.Contains(addr, ":") {
+		return addr
+	}
+	return net.JoinHostPort("", addr)
 }
 
 func defaultDatabasePath(root string) (string, error) {

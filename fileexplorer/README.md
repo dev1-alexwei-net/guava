@@ -7,20 +7,22 @@
 From the repository root, run:
 
 ```sh
-CGO_ENABLED=0 go run ./fileexplorer -root /path/to/directory -addr :8080
+CGO_ENABLED=0 go run ./fileexplorer -root /path/to/directory -host 0.0.0.0 -port 8080
 ```
 
 The flags are:
 
 - `-root`: directory to expose; defaults to the current directory.
-- `-addr`: listen address; defaults to the `PORT` environment variable or `:8080`. A port without a leading colon is prefixed with `:`.
+- `-host`: host/interface to bind; defaults to the `HOST` environment variable or all interfaces. Use `127.0.0.1` to restrict access to loopback.
+- `-port`: TCP port to bind; defaults to the `PORT` environment variable or `8080`.
+- `-addr`: deprecated compatibility option for a complete listen address or bare port; when set, it overrides `-host` and `-port`.
 - `-db`: SQLite database file. By default, the service uses a database file in the system temporary directory, keyed by the absolute root path. Keep any explicitly configured database file outside the served root.
 
 The server handles SIGINT and SIGTERM with a five-second graceful-shutdown timeout.
 
 ## Design
 
-`main.go` is the composition root: it resolves the flags and `PORT` default, opens the SQLite `Store`, builds an `application`, starts `http.Server`, and handles SIGINT/SIGTERM with a five-second graceful-shutdown timeout. The application closes its rooted filesystem handle and the caller closes the database on both normal shutdown and startup/server errors.
+`main.go` is the composition root: it resolves the host and port flags and their `HOST`/`PORT` environment defaults, opens the SQLite `Store`, builds an `application`, starts `http.Server`, and handles SIGINT/SIGTERM with a five-second graceful-shutdown timeout. The application closes its rooted filesystem handle and the caller closes the database on both normal shutdown and startup/server errors.
 
 `server.go` owns the application, route table, request handlers, and HTTP error/redirect mapping. The composed objects keep the responsibilities explicit:
 

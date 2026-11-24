@@ -27,6 +27,14 @@ func newRenderer() *renderer {
 }
 
 type pageData struct {
+	Theme              string
+	HomeURL            string
+	ThemeToggleURL     string
+	RenameAction       string
+	MkdirAction        string
+	CreateFileAction   string
+	UploadAction       string
+	DeleteAction       string
 	Current            string
 	Breadcrumbs        []breadcrumb
 	ParentURL          string
@@ -90,6 +98,82 @@ func (r *renderer) WritePage(w http.ResponseWriter, status int, data pageData) {
 	_ = r.Render(w, data)
 }
 
+func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
+	if request == nil || request.URL == nil {
+		return data
+	}
+
+	theme := requestedTheme(request)
+	data.Theme = theme
+	data.HomeURL = r.withTheme("/", theme)
+	data.ThemeToggleURL = r.toggleThemeURL(request.URL, theme)
+	data.RenameAction = r.withTheme("/rename", theme)
+	data.MkdirAction = r.withTheme("/mkdir", theme)
+	data.CreateFileAction = r.withTheme("/create-file", theme)
+	data.UploadAction = r.withTheme("/upload", theme)
+	data.DeleteAction = r.withTheme("/delete", theme)
+	data.ParentURL = r.withTheme(data.ParentURL, theme)
+	data.EditorURL = r.withTheme(data.EditorURL, theme)
+	data.PreviewReturnURL = r.withTheme(data.PreviewReturnURL, theme)
+	data.PreviewDownloadURL = r.withTheme(data.PreviewDownloadURL, theme)
+	data.ReturnURL = r.withTheme(data.ReturnURL, theme)
+	for i := range data.Breadcrumbs {
+		data.Breadcrumbs[i].URL = r.withTheme(data.Breadcrumbs[i].URL, theme)
+	}
+	for i := range data.Items {
+		item := &data.Items[i]
+		item.URL = r.withTheme(item.URL, theme)
+		item.PreviewURL = r.withTheme(item.PreviewURL, theme)
+		item.EditURL = r.withTheme(item.EditURL, theme)
+		item.DownloadURL = r.withTheme(item.DownloadURL, theme)
+		item.DeleteURL = r.withTheme(item.DeleteURL, theme)
+	}
+	return data
+}
+
+func requestedTheme(request *http.Request) string {
+	if request != nil && request.URL != nil && request.URL.Query().Get("theme") == "dark" {
+		return "dark"
+	}
+	return ""
+}
+
+func (r *renderer) withTheme(target, theme string) string {
+	if target == "" {
+		return ""
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	query := u.Query()
+	if theme == "dark" {
+		query.Set("theme", "dark")
+	} else {
+		query.Del("theme")
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func (r *renderer) toggleThemeURL(current *url.URL, theme string) string {
+	if current == nil {
+		return "/?theme=dark"
+	}
+	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	query := current.Query()
+	if theme == "dark" {
+		query.Del("theme")
+	} else {
+		query.Set("theme", "dark")
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
 func (r *renderer) Stylesheet(w http.ResponseWriter, _ *http.Request) {
 	css, err := r.assets.ReadFile("static/bootstrap.min.css")
 	if err != nil {
@@ -135,7 +219,7 @@ func (r *renderer) Editor(rel, content string, saved bool) pageData {
 	if parent == "." {
 		parent = ""
 	}
-	cancelURL := r.ParentURL(parent)
+	cancelURL := r.ParentURL(rel)
 	if cancelURL == "" {
 		cancelURL = "/"
 	}
@@ -159,7 +243,7 @@ func (r *renderer) DeleteConfirmation(rel string) pageData {
 		ConfirmDelete: true,
 		DeletePath:    rel,
 		DeleteName:    path.Base(rel),
-		ReturnURL:     r.ParentURL(parent),
+		ReturnURL:     r.ParentURL(rel),
 	}
 }
 

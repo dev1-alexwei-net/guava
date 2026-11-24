@@ -89,7 +89,7 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 func (a *application) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if requestHasTraversal(r.URL.Path) {
-			a.renderError(w, http.StatusBadRequest, "Invalid path")
+			a.renderError(w, r, http.StatusBadRequest, "Invalid path")
 			return
 		}
 		a.routes.ServeHTTP(w, r)
@@ -156,26 +156,26 @@ func (e *application) serialized(next http.HandlerFunc) http.Handler {
 }
 
 func (e *application) rootPage(w http.ResponseWriter, r *http.Request) {
-	e.renderDirectory(w, "", "", r.URL.Query().Get("error"))
+	e.renderDirectory(w, r, "", "", r.URL.Query().Get("error"))
 }
 
 func (e *application) directoryPage(w http.ResponseWriter, r *http.Request) {
-	e.renderDirectory(w, r.PathValue("path"), "", r.URL.Query().Get("error"))
+	e.renderDirectory(w, r, r.PathValue("path"), "", r.URL.Query().Get("error"))
 }
 
 func (e *application) filePage(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	info, err := e.filesystem.Stat(e.filesystem.Relative(target))
 	if err != nil {
-		e.renderReadError(w, err, "File not found", "Unable to read file")
+		e.renderReadError(w, r, err, "File not found", "Unable to read file")
 		return
 	}
 	if !info.Mode().IsRegular() {
-		e.renderError(w, http.StatusNotFound, "File not found")
+		e.renderError(w, r, http.StatusNotFound, "File not found")
 		return
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -186,50 +186,50 @@ func (e *application) filePage(w http.ResponseWriter, r *http.Request) {
 	}
 	file, err := e.filesystem.Open(e.filesystem.Relative(target))
 	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to read file")
+		e.renderError(w, r, http.StatusInternalServerError, "Unable to read file")
 		return
 	}
 	defer file.Close()
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
-func (e *application) renderReadError(w http.ResponseWriter, err error, missing, failure string) {
+func (e *application) renderReadError(w http.ResponseWriter, r *http.Request, err error, missing, failure string) {
 	if os.IsNotExist(err) {
-		e.renderError(w, http.StatusNotFound, missing)
+		e.renderError(w, r, http.StatusNotFound, missing)
 		return
 	}
-	e.renderError(w, http.StatusInternalServerError, failure)
+	e.renderError(w, r, http.StatusInternalServerError, failure)
 }
 
-func (e *application) renderDirectory(w http.ResponseWriter, requested string, previewRel string, pageError string) {
+func (e *application) renderDirectory(w http.ResponseWriter, r *http.Request, requested string, previewRel string, pageError string) {
 	dir, err := e.filesystem.Resolve(requested)
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	info, err := e.filesystem.Stat(e.filesystem.Relative(dir))
 	if err != nil {
-		e.renderReadError(w, err, "Directory not found", "Unable to read directory")
+		e.renderReadError(w, r, err, "Directory not found", "Unable to read directory")
 		return
 	}
 	if !info.IsDir() {
-		e.renderError(w, http.StatusNotFound, "Directory not found")
+		e.renderError(w, r, http.StatusNotFound, "Directory not found")
 		return
 	}
 	if _, err := e.syncer.Sync(); err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to synchronize directory")
+		e.renderError(w, r, http.StatusInternalServerError, "Unable to synchronize directory")
 		return
 	}
 
 	current := e.filesystem.Relative(dir)
 	entries, err := e.store.List(current)
 	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to list directory")
+		e.renderError(w, r, http.StatusInternalServerError, "Unable to list directory")
 		return
 	}
 	data := e.renderer.Directory(current, entries, pageError)
 	e.applyPreview(&data, current, previewRel)
-	e.writePage(w, http.StatusOK, data)
+	e.writePage(w, r, http.StatusOK, data)
 }
 
 // previewPage renders the parent directory of the requested file with the
@@ -241,23 +241,23 @@ func (e *application) previewPage(w http.ResponseWriter, r *http.Request) {
 	rel := r.PathValue("path")
 	target, err := e.filesystem.Resolve(rel)
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	info, err := e.filesystem.Stat(e.filesystem.Relative(target))
 	if err != nil {
-		e.renderReadError(w, err, "File not found", "Unable to read file")
+		e.renderReadError(w, r, err, "File not found", "Unable to read file")
 		return
 	}
 	if !info.Mode().IsRegular() {
-		e.renderError(w, http.StatusBadRequest, "Preview requires a regular file")
+		e.renderError(w, r, http.StatusBadRequest, "Preview requires a regular file")
 		return
 	}
 	parent := filepath.ToSlash(filepath.Dir(rel))
 	if parent == "." {
 		parent = ""
 	}
-	e.renderDirectory(w, parent, rel, "")
+	e.renderDirectory(w, r, parent, rel, "")
 }
 
 // applyPreview reads the selected file and delegates page-model preparation to the renderer.
@@ -400,7 +400,7 @@ func (e *application) redirectToDirectory(w http.ResponseWriter, r *http.Request
 	if current == "" {
 		target = "/"
 	}
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	http.Redirect(w, r, e.renderer.withTheme(target, requestedTheme(r)), http.StatusSeeOther)
 }
 
 func parseForm(w http.ResponseWriter, r *http.Request) error {
@@ -421,9 +421,9 @@ func pathInteraction(err error) *interactionError {
 	}
 }
 
-func (e *application) pathError(w http.ResponseWriter, err error) {
+func (e *application) pathError(w http.ResponseWriter, r *http.Request, err error) {
 	interaction := pathInteraction(err)
-	e.renderError(w, interaction.status, interaction.message)
+	e.renderError(w, r, interaction.status, interaction.message)
 }
 
 func (e *application) redirectMutationError(w http.ResponseWriter, r *http.Request, status int, message string) {
@@ -436,7 +436,7 @@ func (e *application) redirectMutationError(w http.ResponseWriter, r *http.Reque
 		target = e.renderer.ItemURL(current, true)
 	}
 	query := url.Values{"error": {message}, "status": {fmt.Sprint(status)}}
-	http.Redirect(w, r, target+"?"+query.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, e.renderer.withTheme(target+"?"+query.Encode(), requestedTheme(r)), http.StatusSeeOther)
 }
 
 func mutationParent(r *http.Request) string {
@@ -478,116 +478,116 @@ func editorSubmissionError(err error) (int, string) {
 	return http.StatusBadRequest, "Invalid editor submission"
 }
 
-func (e *application) renderError(w http.ResponseWriter, status int, message string) {
-	e.writePage(w, status, e.renderer.Error(message))
+func (e *application) renderError(w http.ResponseWriter, r *http.Request, status int, message string) {
+	e.writePage(w, r, status, e.renderer.Error(message))
 }
 
-func (e *application) writePage(w http.ResponseWriter, status int, data pageData) {
-	e.renderer.WritePage(w, status, data)
+func (e *application) writePage(w http.ResponseWriter, r *http.Request, status int, data pageData) {
+	e.renderer.WritePage(w, status, e.renderer.ForRequest(data, r))
 }
 
 func (e *application) editorPage(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	rel := e.filesystem.Relative(target)
 	file, err := e.filesystem.Open(rel)
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to read file")
+		e.renderError(w, r, http.StatusInternalServerError, "Unable to read file")
 		return
 	}
 	if !info.Mode().IsRegular() {
-		e.renderError(w, http.StatusNotFound, "File not found")
+		e.renderError(w, r, http.StatusNotFound, "File not found")
 		return
 	}
 	if info.Size() > maxEditorSize {
-		e.renderError(w, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
+		e.renderError(w, r, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
 		return
 	}
 	content, err := io.ReadAll(io.LimitReader(file, maxEditorSize+1))
 	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to read file")
+		e.renderError(w, r, http.StatusInternalServerError, "Unable to read file")
 		return
 	}
 	if len(content) > maxEditorSize {
-		e.renderError(w, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
+		e.renderError(w, r, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
 		return
 	}
 	if !utf8.Valid(content) || strings.IndexByte(string(content), 0) >= 0 {
-		e.renderError(w, http.StatusUnsupportedMediaType, "This file is not supported by the text editor")
+		e.renderError(w, r, http.StatusUnsupportedMediaType, "This file is not supported by the text editor")
 		return
 	}
-	e.writePage(w, http.StatusOK, e.renderer.Editor(rel, string(content), r.URL.Query().Get("saved") == "1"))
+	e.writePage(w, r, http.StatusOK, e.renderer.Editor(rel, string(content), r.URL.Query().Get("saved") == "1"))
 }
 
 func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	rel := e.filesystem.Relative(target)
 	file, err := e.filesystem.Open(rel)
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	info, err := file.Stat()
 	_ = file.Close()
 	if err != nil {
-		e.renderError(w, http.StatusInternalServerError, "Unable to inspect file")
+		e.renderError(w, r, http.StatusInternalServerError, "Unable to inspect file")
 		return
 	}
 	if !info.Mode().IsRegular() {
-		e.renderError(w, http.StatusNotFound, "File not found")
+		e.renderError(w, r, http.StatusNotFound, "File not found")
 		return
 	}
 	if info.Size() > maxEditorSize {
-		e.renderError(w, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
+		e.renderError(w, r, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxEditorSize*3+4096)
 	if err := r.ParseForm(); err != nil {
 		status, message := editorSubmissionError(err)
-		e.renderError(w, status, message)
+		e.renderError(w, r, status, message)
 		return
 	}
 	content := r.FormValue("content")
 	if err := e.mutations.SaveText(rel, content, info.Mode().Perm()); err != nil {
 		status, message := interactionDetails(err, "Unable to save file")
-		e.renderError(w, status, message)
+		e.renderError(w, r, status, message)
 		return
 	}
-	http.Redirect(w, r, e.renderer.EditorURL(rel)+"?saved=1", http.StatusSeeOther)
+	http.Redirect(w, r, e.renderer.withTheme(e.renderer.EditorURL(rel)+"?saved=1", requestedTheme(r)), http.StatusSeeOther)
 }
 
 func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) {
 	target, err := e.filesystem.Resolve(r.PathValue("path"))
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	if target == e.filesystem.Path() {
-		e.renderError(w, http.StatusBadRequest, "Cannot delete the root directory")
+		e.renderError(w, r, http.StatusBadRequest, "Cannot delete the root directory")
 		return
 	}
 	info, err := e.filesystem.Lstat(e.filesystem.Relative(target))
 	if err != nil {
-		e.pathError(w, err)
+		e.pathError(w, r, err)
 		return
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		e.pathError(w, errForbidden)
+		e.pathError(w, r, errForbidden)
 		return
 	}
-	e.writePage(w, http.StatusOK, e.renderer.DeleteConfirmation(e.filesystem.Relative(target)))
+	e.writePage(w, r, http.StatusOK, e.renderer.DeleteConfirmation(e.filesystem.Relative(target)))
 }

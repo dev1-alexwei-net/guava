@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -325,6 +326,167 @@ func TestPageReferencesEmbeddedBootstrapStylesheet(t *testing.T) {
 	}
 	if !strings.Contains(string(license), "The MIT License") {
 		t.Fatal("embedded Bootstrap license does not contain the MIT notice")
+	}
+}
+
+func TestThemeToggleSwitchesCurrentPageAndPreservesOtherQuery(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	dark := get(t, h, "/d/docs?theme=dark&error=problem&status=400")
+	if dark.Code != http.StatusOK {
+		t.Fatalf("dark directory status=%d body=%s", dark.Code, dark.Body.String())
+	}
+	if !strings.Contains(dark.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
+		t.Fatal("dark theme was not applied to the document")
+	}
+	if !strings.Contains(dark.Body.String(), `href="/d/docs?error=problem&amp;status=400">Light mode</a>`) {
+		t.Fatal("dark-mode toggle does not return to light on the current page while preserving other query values")
+	}
+
+	light := get(t, h, "/d/docs?error=problem&status=400")
+	if light.Code != http.StatusOK {
+		t.Fatalf("light directory status=%d body=%s", light.Code, light.Body.String())
+	}
+	if strings.Contains(light.Body.String(), "data-bs-theme") {
+		t.Fatal("light theme unexpectedly sets data-bs-theme")
+	}
+	if !strings.Contains(light.Body.String(), `href="/d/docs?error=problem&amp;status=400&amp;theme=dark">Dark mode</a>`) {
+		t.Fatal("light-mode toggle does not select dark on the current page while preserving other query values")
+	}
+}
+
+func TestDarkThemePersistsAcrossExplorerNavigation(t *testing.T) {
+	root := t.TempDir()
+	docs := filepath.Join(root, "docs")
+	if err := os.Mkdir(docs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"root.txt":                        "root",
+		filepath.Join("docs", "note.txt"): "note",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := makeTestHandler(t, root)
+
+	directory := get(t, h, "/?theme=dark")
+	if directory.Code != http.StatusOK {
+		t.Fatalf("dark root status=%d body=%s", directory.Code, directory.Body.String())
+	}
+	for _, want := range []string{
+		`<html lang="en" data-bs-theme="dark">`,
+		`href="/?theme=dark">Guava</a>`,
+		`href="/d/docs?theme=dark">docs/</a>`,
+		`href="/preview/root.txt?theme=dark">root.txt</a>`,
+		`href="/edit/root.txt?theme=dark">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;theme=dark">Download</a>`,
+		`href="/confirm-delete/root.txt?theme=dark"`,
+		`action="/rename?theme=dark"`,
+		`action="/mkdir?theme=dark"`,
+		`action="/create-file?theme=dark"`,
+		`action="/upload?theme=dark"`,
+	} {
+		if !strings.Contains(directory.Body.String(), want) {
+			t.Errorf("dark root page missing %q", want)
+		}
+	}
+
+	preview := get(t, h, "/preview/docs/note.txt?theme=dark")
+	if preview.Code != http.StatusOK {
+		t.Fatalf("dark preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	for _, want := range []string{
+		`<html lang="en" data-bs-theme="dark">`,
+		`href="/d/docs?theme=dark">Hide preview</a>`,
+		`href="/f/docs/note.txt?download=1&amp;theme=dark">Download</a>`,
+		`class="preview-content bg-body-secondary border`,
+	} {
+		if !strings.Contains(preview.Body.String(), want) {
+			t.Errorf("dark preview page missing %q", want)
+		}
+	}
+
+	editor := get(t, h, "/edit/docs/note.txt?theme=dark")
+	if editor.Code != http.StatusOK {
+		t.Fatalf("dark editor status=%d body=%s", editor.Code, editor.Body.String())
+	}
+	for _, want := range []string{
+		`<html lang="en" data-bs-theme="dark">`,
+		`action="/edit/docs/note.txt?theme=dark"`,
+		`href="/d/docs?theme=dark">Cancel</a>`,
+	} {
+		if !strings.Contains(editor.Body.String(), want) {
+			t.Errorf("dark editor page missing %q", want)
+		}
+	}
+	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?theme=dark", url.Values{"content": {"saved"}})
+	if saved.Code != http.StatusSeeOther {
+		t.Fatalf("dark editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
+	}
+	savedURL, err := url.Parse(saved.Header().Get("Location"))
+	if err != nil || savedURL.Query().Get("theme") != "dark" || savedURL.Query().Get("saved") != "1" {
+		t.Fatalf("editor save redirect did not preserve dark theme and saved state: location=%q err=%v", saved.Header().Get("Location"), err)
+	}
+	savedPage := get(t, h, saved.Header().Get("Location"))
+	if savedPage.Code != http.StatusOK || !strings.Contains(savedPage.Body.String(), `data-bs-theme="dark"`) {
+		t.Fatalf("saved editor page lost dark theme: status=%d body=%s", savedPage.Code, savedPage.Body.String())
+	}
+}
+
+func TestDarkThemePersistsAcrossMutationsAndErrors(t *testing.T) {
+	root := t.TempDir()
+	docs := filepath.Join(root, "docs")
+	if err := os.Mkdir(docs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	created := formRequest(t, h, http.MethodPost, "/mkdir?theme=dark", url.Values{"parent": {"docs"}, "name": {"created"}})
+	if created.Code != http.StatusSeeOther {
+		t.Fatalf("dark mkdir status=%d location=%q body=%s", created.Code, created.Header().Get("Location"), created.Body.String())
+	}
+	createdURL, err := url.Parse(created.Header().Get("Location"))
+	if err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("theme") != "dark" {
+		t.Fatalf("mkdir redirect lost dark theme: location=%q err=%v", created.Header().Get("Location"), err)
+	}
+	if page := get(t, h, created.Header().Get("Location")); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-bs-theme="dark"`) {
+		t.Fatalf("mkdir redirect page lost dark theme: status=%d body=%s", page.Code, page.Body.String())
+	}
+
+	duplicate := formRequest(t, h, http.MethodPost, "/mkdir?theme=dark", url.Values{"parent": {"docs"}, "name": {"created"}})
+	if duplicate.Code != http.StatusSeeOther {
+		t.Fatalf("duplicate mkdir status=%d location=%q body=%s", duplicate.Code, duplicate.Header().Get("Location"), duplicate.Body.String())
+	}
+	errorURL, err := url.Parse(duplicate.Header().Get("Location"))
+	if err != nil || errorURL.Query().Get("theme") != "dark" || errorURL.Query().Get("error") == "" {
+		t.Fatalf("mutation error redirect lost dark theme or error: location=%q err=%v", duplicate.Header().Get("Location"), err)
+	}
+	errorPage := get(t, h, duplicate.Header().Get("Location"))
+	if errorPage.Code != http.StatusOK || !strings.Contains(errorPage.Body.String(), `data-bs-theme="dark"`) || !strings.Contains(errorPage.Body.String(), "Unable to create directory") {
+		t.Fatalf("mutation error page lost dark theme: status=%d body=%s", errorPage.Code, errorPage.Body.String())
+	}
+
+	confirmation := get(t, h, "/confirm-delete/docs/created?theme=dark")
+	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `data-bs-theme="dark"`) ||
+		!strings.Contains(confirmation.Body.String(), `action="/delete?theme=dark"`) ||
+		!strings.Contains(confirmation.Body.String(), `href="/d/docs?theme=dark">Cancel</a>`) {
+		t.Fatalf("dark delete confirmation did not preserve theme: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	deleted := formRequest(t, h, http.MethodPost, "/delete?theme=dark", url.Values{"path": {"docs/created"}})
+	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
+	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("theme") != "dark" {
+		t.Fatalf("delete redirect lost dark theme: status=%d location=%q err=%v", deleted.Code, deleted.Header().Get("Location"), err)
+	}
+
+	missing := get(t, h, "/edit/missing.txt?theme=dark")
+	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), `data-bs-theme="dark"`) {
+		t.Fatalf("error page lost dark theme: status=%d body=%s", missing.Code, missing.Body.String())
 	}
 }
 

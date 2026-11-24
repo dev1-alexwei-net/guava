@@ -124,6 +124,37 @@ func TestHandlerMutationRoutes(t *testing.T) {
 	}
 }
 
+func TestCreatedDirectoriesAreWritableByOtherUsers(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	if err := os.Mkdir(existing, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(existing, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	created := formRequest(t, h, http.MethodPost, "/mkdir", url.Values{"name": {"shared"}})
+	if created.Code != http.StatusSeeOther || created.Header().Get("Location") != "/" {
+		t.Fatalf("mkdir status=%d location=%q body=%s", created.Code, created.Header().Get("Location"), created.Body.String())
+	}
+	createdInfo, err := os.Stat(filepath.Join(root, "shared"))
+	if err != nil {
+		t.Fatalf("stat new directory: %v", err)
+	}
+	if got := createdInfo.Mode().Perm(); got != 0o777 {
+		t.Fatalf("new directory permissions=%#o, want %#o", got, os.FileMode(0o777))
+	}
+	existingInfo, err := os.Stat(existing)
+	if err != nil {
+		t.Fatalf("stat existing directory: %v", err)
+	}
+	if got := existingInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("existing directory permissions changed to %#o, want %#o", got, os.FileMode(0o700))
+	}
+}
+
 func TestMutationErrorsRedirectToDirectoryWithRefreshableError(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {

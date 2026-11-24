@@ -70,6 +70,80 @@ func TestRunFileConversationContinuesUntilCompletion(t *testing.T) {
 	}
 }
 
+func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
+	var requests []responsesRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+
+		switch len(requests) {
+		case 1:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"The model was cut off after reaching the output token limit"}}`))
+		case 2:
+			if err := json.NewEncoder(w).Encode(responsesAPIResponse{
+				ID:     "resp_after_cutoff",
+				Output: assistantText(completionMarker),
+			}); err != nil {
+				t.Errorf("encode response: %v", err)
+			}
+		default:
+			t.Errorf("unexpected request %d", len(requests))
+			http.Error(w, "too many requests", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	executor := &Executor{config: config}
+	if err := executor.runFileConversation(context.Background(), "initial input"); err != nil {
+		t.Fatalf("runFileConversation() error = %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(requests))
+	}
+	if requests[0].Input != "initial input" {
+		t.Errorf("first input = %q, want initial input", requests[0].Input)
+	}
+	if requests[1].Input != continueMessage {
+		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continueMessage)
+	}
+	if requests[1].PreviousResponseID != "" {
+		t.Errorf("follow-up previous_response_id = %q, want empty after an error response", requests[1].PreviousResponseID)
+	}
+}
+
+func TestRunFileConversationReturnsNonCutoffResponseError(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	executor := &Executor{config: config}
+	err := executor.runFileConversation(context.Background(), "initial input")
+	if err == nil || err.Error() != "OpenResponses returned HTTP 429: rate limit exceeded" {
+		t.Fatalf("runFileConversation() error = %v, want the non-cutoff API error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
 func TestRunFileConversationCompletesOnFirstResponse(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

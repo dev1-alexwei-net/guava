@@ -25,7 +25,7 @@
       <div class="col-12">
         <nav aria-label="Breadcrumb">
           <ol class="breadcrumb mb-3">
-            <li class="breadcrumb-item"><a href="/">Root</a></li>
+            <li class="breadcrumb-item"><a href="{{.HomeURL}}">Root</a></li>
             {{range .Breadcrumbs}}<li class="breadcrumb-item"><a href="{{.URL}}">{{.Name}}</a></li>{{end}}
           </ol>
         </nav>

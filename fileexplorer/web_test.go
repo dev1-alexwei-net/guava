@@ -506,6 +506,188 @@ func TestDarkThemePersistsAcrossExplorerNavigation(t *testing.T) {
 	}
 }
 
+// TestWrapToggleSwitchesPreviewRendering pins the rendered wrap states: wrap
+// is on by default (matching the small-display behavior from #141), and
+// wrap=off switches the preview to raw pre rendering with horizontal pane
+// scrolling while the header control reflects the current state.
+func TestWrapToggleSwitchesPreviewRendering(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte(strings.Repeat("a long line without spaces ", 4)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	on := get(t, h, "/preview/a.txt")
+	if on.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt status=%d", on.Code)
+	}
+	body := on.Body.String()
+	if !strings.Contains(body, "white-space: pre-wrap") || !strings.Contains(body, "overflow-wrap: anywhere") {
+		t.Error("default preview state does not render wrapped")
+	}
+	if !strings.Contains(body, `<a class="btn btn-sm btn-secondary" href="/preview/a.txt?wrap=off" aria-pressed="true">Wrap</a>`) {
+		t.Errorf("default preview header does not offer a toggle to non-wrapped: %s", body)
+	}
+	if !strings.Contains(body, `class="btn btn-sm btn-secondary"`) {
+		t.Error("default wrap toggle is not rendered in its active state")
+	}
+	if !strings.Contains(body, `aria-pressed="true"`) {
+		t.Error("default wrap toggle does not expose the current state")
+	}
+	// Only the toggle may mention wrap=off on a default page.
+	if count := strings.Count(body, "wrap=off"); count != 1 {
+		t.Errorf("default page mentions wrap=off %d times, want exactly the toggle", count)
+	}
+	assertNoClientSideJavaScript(t, body)
+
+	off := get(t, h, "/preview/a.txt?wrap=off")
+	if off.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt?wrap=off status=%d", off.Code)
+	}
+	body = off.Body.String()
+	if !strings.Contains(body, "white-space: pre;") || strings.Contains(body, "pre-wrap") || strings.Contains(body, "overflow-wrap: anywhere") {
+		t.Error("non-wrapped preview does not keep raw line width without the wrap styles")
+	}
+	if !strings.Contains(body, `<a class="btn btn-sm btn-outline-secondary" href="/preview/a.txt" aria-pressed="false">Wrap</a>`) {
+		t.Errorf("non-wrapped header does not offer a toggle back to wrapped: %s", body)
+	}
+	if !strings.Contains(body, `class="btn btn-sm btn-outline-secondary"`) {
+		t.Error("non-wrapped toggle is not rendered inactive")
+	}
+	if !strings.Contains(body, `aria-pressed="false"`) {
+		t.Error("non-wrapped toggle does not expose the current state")
+	}
+	// Long lines scroll horizontally inside the pane and stay keyboard-scrollable.
+	if !strings.Contains(body, `overflow-auto`) || !strings.Contains(body, `tabindex="0"`) {
+		t.Error("non-wrapped preview lost the pane scrolling or keyboard access")
+	}
+	assertNoClientSideJavaScript(t, body)
+}
+
+// TestWrapTogglePreservesThemeAndOtherQuery pins that the wrap toggle flips
+// only the wrap parameter on the current page, keeping the theme and any
+// other query values, exactly like the theme toggle.
+func TestWrapTogglePreservesThemeAndOtherQuery(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	off := get(t, h, "/preview/a.txt?theme=dark&wrap=off&saved=1")
+	if off.Code != http.StatusOK {
+		t.Fatalf("wrap-off dark preview status=%d body=%s", off.Code, off.Body.String())
+	}
+	if !strings.Contains(off.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
+		t.Fatal("wrap-off preview did not keep the dark theme")
+	}
+	if !strings.Contains(off.Body.String(), `<a class="btn btn-sm btn-outline-secondary" href="/preview/a.txt?saved=1&amp;theme=dark" aria-pressed="false">Wrap</a>`) {
+		t.Error("wrap-off toggle does not return to wrapped while preserving theme and other query values")
+	}
+
+	on := get(t, h, "/preview/a.txt?theme=dark&saved=1")
+	if on.Code != http.StatusOK {
+		t.Fatalf("wrapped dark preview status=%d body=%s", on.Code, on.Body.String())
+	}
+	if !strings.Contains(on.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
+		t.Fatal("wrapped preview did not keep the dark theme")
+	}
+	if !strings.Contains(on.Body.String(), `<a class="btn btn-sm btn-secondary" href="/preview/a.txt?saved=1&amp;theme=dark&amp;wrap=off" aria-pressed="true">Wrap</a>`) {
+		t.Error("wrapped toggle does not select non-wrapped while preserving theme and other query values")
+	}
+}
+
+// TestWrapStatePersistsAcrossNavigation pins that wrap=off rides every
+// explorer link, redirect, and mutation the way theme=dark already does, so
+// toggling wrap preserves the selected file, directory, and active theme.
+func TestWrapStatePersistsAcrossNavigation(t *testing.T) {
+	root := t.TempDir()
+	docs := filepath.Join(root, "docs")
+	if err := os.Mkdir(docs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"root.txt":                        "root",
+		filepath.Join("docs", "note.txt"): "note",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := makeTestHandler(t, root)
+
+	directory := get(t, h, "/?wrap=off")
+	if directory.Code != http.StatusOK {
+		t.Fatalf("wrap-off root status=%d body=%s", directory.Code, directory.Body.String())
+	}
+	for _, want := range []string{
+		`href="/?wrap=off">Guava</a>`,
+		`href="/?wrap=off">Root</a>`,
+		`href="/d/docs?wrap=off">docs/</a>`,
+		`href="/preview/root.txt?wrap=off">root.txt</a>`,
+		`href="/edit/root.txt?wrap=off">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;wrap=off">Download</a>`,
+		`href="/confirm-delete/root.txt?wrap=off"`,
+		`action="/rename?wrap=off"`,
+		`action="/mkdir?wrap=off"`,
+		`action="/create-file?wrap=off"`,
+		`action="/upload?wrap=off"`,
+	} {
+		if !strings.Contains(directory.Body.String(), want) {
+			t.Errorf("wrap-off root page missing %q", want)
+		}
+	}
+
+	preview := get(t, h, "/preview/docs/note.txt?wrap=off")
+	if preview.Code != http.StatusOK {
+		t.Fatalf("wrap-off preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	for _, want := range []string{
+		`white-space: pre;`,
+		`<a class="btn btn-sm btn-outline-secondary" href="/preview/docs/note.txt" aria-pressed="false">Wrap</a>`,
+		`href="/d/docs?wrap=off">Hide preview</a>`,
+		`href="/f/docs/note.txt?download=1&amp;wrap=off">Download</a>`,
+	} {
+		if !strings.Contains(preview.Body.String(), want) {
+			t.Errorf("wrap-off preview page missing %q", want)
+		}
+	}
+
+	editor := get(t, h, "/edit/docs/note.txt?wrap=off")
+	if editor.Code != http.StatusOK {
+		t.Fatalf("wrap-off editor status=%d body=%s", editor.Code, editor.Body.String())
+	}
+	if !strings.Contains(editor.Body.String(), `action="/edit/docs/note.txt?wrap=off"`) ||
+		!strings.Contains(editor.Body.String(), `href="/d/docs?wrap=off">Cancel</a>`) {
+		t.Fatalf("editor page lost wrap state: body=%s", editor.Body.String())
+	}
+	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?wrap=off", url.Values{"content": {"saved"}})
+	if saved.Code != http.StatusSeeOther {
+		t.Fatalf("wrap-off editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
+	}
+	savedURL, err := url.Parse(saved.Header().Get("Location"))
+	if err != nil || savedURL.Query().Get("wrap") != "off" || savedURL.Query().Get("saved") != "1" {
+		t.Fatalf("editor save redirect did not preserve wrap state: location=%q err=%v", saved.Header().Get("Location"), err)
+	}
+
+	created := formRequest(t, h, http.MethodPost, "/mkdir?wrap=off", url.Values{"parent": {"docs"}, "name": {"created"}})
+	createdURL, err := url.Parse(created.Header().Get("Location"))
+	if created.Code != http.StatusSeeOther || err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("wrap") != "off" {
+		t.Fatalf("mkdir redirect lost wrap state: location=%q err=%v", created.Header().Get("Location"), err)
+	}
+
+	confirmation := get(t, h, "/confirm-delete/docs/created?wrap=off")
+	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?wrap=off"`) ||
+		!strings.Contains(confirmation.Body.String(), `href="/d/docs?wrap=off">Cancel</a>`) {
+		t.Fatalf("wrap-off delete confirmation lost wrap state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	deleted := formRequest(t, h, http.MethodPost, "/delete?wrap=off", url.Values{"path": {"docs/created"}})
+	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
+	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("wrap") != "off" {
+		t.Fatalf("delete redirect lost wrap state: location=%q err=%v", deleted.Header().Get("Location"), err)
+	}
+}
+
 func TestDarkThemePersistsAcrossMutationsAndErrors(t *testing.T) {
 	root := t.TempDir()
 	docs := filepath.Join(root, "docs")

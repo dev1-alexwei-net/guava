@@ -28,8 +28,10 @@ func newRenderer() *renderer {
 
 type pageData struct {
 	Theme              string
+	Wrap               string
 	HomeURL            string
 	ThemeToggleURL     string
+	WrapToggleURL      string
 	RenameAction       string
 	MkdirAction        string
 	CreateFileAction   string
@@ -104,29 +106,32 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	}
 
 	theme := requestedTheme(request)
+	wrap := requestedWrap(request)
 	data.Theme = theme
-	data.HomeURL = r.withTheme("/", theme)
+	data.Wrap = wrap
+	data.HomeURL = r.withState("/", theme, wrap)
 	data.ThemeToggleURL = r.toggleThemeURL(request.URL, theme)
-	data.RenameAction = r.withTheme("/rename", theme)
-	data.MkdirAction = r.withTheme("/mkdir", theme)
-	data.CreateFileAction = r.withTheme("/create-file", theme)
-	data.UploadAction = r.withTheme("/upload", theme)
-	data.DeleteAction = r.withTheme("/delete", theme)
-	data.ParentURL = r.withTheme(data.ParentURL, theme)
-	data.EditorURL = r.withTheme(data.EditorURL, theme)
-	data.PreviewReturnURL = r.withTheme(data.PreviewReturnURL, theme)
-	data.PreviewDownloadURL = r.withTheme(data.PreviewDownloadURL, theme)
-	data.ReturnURL = r.withTheme(data.ReturnURL, theme)
+	data.WrapToggleURL = r.toggleWrapURL(request.URL, wrap)
+	data.RenameAction = r.withState("/rename", theme, wrap)
+	data.MkdirAction = r.withState("/mkdir", theme, wrap)
+	data.CreateFileAction = r.withState("/create-file", theme, wrap)
+	data.UploadAction = r.withState("/upload", theme, wrap)
+	data.DeleteAction = r.withState("/delete", theme, wrap)
+	data.ParentURL = r.withState(data.ParentURL, theme, wrap)
+	data.EditorURL = r.withState(data.EditorURL, theme, wrap)
+	data.PreviewReturnURL = r.withState(data.PreviewReturnURL, theme, wrap)
+	data.PreviewDownloadURL = r.withState(data.PreviewDownloadURL, theme, wrap)
+	data.ReturnURL = r.withState(data.ReturnURL, theme, wrap)
 	for i := range data.Breadcrumbs {
-		data.Breadcrumbs[i].URL = r.withTheme(data.Breadcrumbs[i].URL, theme)
+		data.Breadcrumbs[i].URL = r.withState(data.Breadcrumbs[i].URL, theme, wrap)
 	}
 	for i := range data.Items {
 		item := &data.Items[i]
-		item.URL = r.withTheme(item.URL, theme)
-		item.PreviewURL = r.withTheme(item.PreviewURL, theme)
-		item.EditURL = r.withTheme(item.EditURL, theme)
-		item.DownloadURL = r.withTheme(item.DownloadURL, theme)
-		item.DeleteURL = r.withTheme(item.DeleteURL, theme)
+		item.URL = r.withState(item.URL, theme, wrap)
+		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap)
+		item.EditURL = r.withState(item.EditURL, theme, wrap)
+		item.DownloadURL = r.withState(item.DownloadURL, theme, wrap)
+		item.DeleteURL = r.withState(item.DeleteURL, theme, wrap)
 	}
 	return data
 }
@@ -138,7 +143,20 @@ func requestedTheme(request *http.Request) string {
 	return ""
 }
 
-func (r *renderer) withTheme(target, theme string) string {
+// requestedWrap reports the preview wrap preference from the URL. Wrap is on
+// by default; "off" is the only explicit state, mirroring requestedTheme.
+func requestedWrap(request *http.Request) string {
+	if request != nil && request.URL != nil && request.URL.Query().Get("wrap") == "off" {
+		return "off"
+	}
+	return ""
+}
+
+// withState applies the URL-driven page preferences to a link the way the
+// theme parameter already rides every explorer link: each preference is
+// present only in its non-default state (theme=dark, wrap=off), so defaults
+// stay out of the URL and navigation carries the user's choices forward.
+func (r *renderer) withState(target string, theme, wrap string) string {
 	if target == "" {
 		return ""
 	}
@@ -151,6 +169,11 @@ func (r *renderer) withTheme(target, theme string) string {
 		query.Set("theme", "dark")
 	} else {
 		query.Del("theme")
+	}
+	if wrap == "off" {
+		query.Set("wrap", "off")
+	} else {
+		query.Del("wrap")
 	}
 	u.RawQuery = query.Encode()
 	return u.String()
@@ -169,6 +192,26 @@ func (r *renderer) toggleThemeURL(current *url.URL, theme string) string {
 		query.Del("theme")
 	} else {
 		query.Set("theme", "dark")
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// toggleWrapURL flips the wrap preference on the current page's URL, keeping
+// every other query value, mirroring toggleThemeURL.
+func (r *renderer) toggleWrapURL(current *url.URL, wrap string) string {
+	if current == nil {
+		return "/?wrap=off"
+	}
+	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	query := current.Query()
+	if wrap == "off" {
+		query.Del("wrap")
+	} else {
+		query.Set("wrap", "off")
 	}
 	u.RawQuery = query.Encode()
 	return u.String()

@@ -9,10 +9,16 @@
   <style>
     /* Give the keyboard-focusable preview content a visible focus indicator. */
     .preview-content:focus { outline: 2px solid var(--bs-primary, #0d6efd); outline-offset: 2px; }
-    /* Wrap long lines in the preview pane so narrow viewports do not overflow;
-       overflow-wrap: anywhere breaks even unbreakable tokens. overflow-auto
-       remains on the element as a fallback. */
+    /* Wrap is a user choice: on by default (matching the small-display
+       behavior), and the pane header can switch it off. With wrap on, long
+       lines, including unbreakable tokens, wrap inside the pane; with wrap
+       off they keep their raw width and the element's overflow-auto class
+       scrolls them horizontally. */
+    {{if eq .Wrap "off"}}
+    .preview-content { white-space: pre; }
+    {{else}}
     .preview-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+    {{end}}
     /* Keep the preview pane a stable, bounded height on small displays so long
        files scroll vertically inside the pane (overflow-auto on the element)
        instead of pushing the directory listing and action cards off-screen.
@@ -136,6 +142,9 @@
               <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
             <h2 class="h6 mb-0 text-break" id="preview-heading">Preview · {{.PreviewName}}</h2>
             <div class="d-flex flex-wrap gap-2">
+              {{if not .PreviewNote}}
+              <a class="btn btn-sm {{if eq .Wrap "off"}}btn-outline-secondary{{else}}btn-secondary{{end}}" href="{{.WrapToggleURL}}" aria-pressed="{{if eq .Wrap "off"}}false{{else}}true{{end}}">Wrap</a>
+              {{end}}
               <a class="btn btn-outline-primary btn-sm" href="{{.PreviewDownloadURL}}">Download</a>
               <a class="btn btn-outline-secondary btn-sm" href="{{.PreviewReturnURL}}">Hide preview</a>
             </div>

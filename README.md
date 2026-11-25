@@ -17,7 +17,7 @@ GitHub Actions publishes two images to GHCR:
 - `ghcr.io/dev1-alexwei-net/guava/fileexplorer`
 - `ghcr.io/dev1-alexwei-net/guava/executor`
 
-Each tag is a multi-platform image index for `linux/amd64` and `linux/arm64`; Docker selects the matching platform when pulling. Pushes to `main` publish `main` and `latest`. A stable `vMAJOR.MINOR.PATCH` tag publishes `vMAJOR.MINOR.PATCH`, `MAJOR.MINOR.PATCH`, `MAJOR.MINOR`, `MAJOR`, and `latest`.
+Each tag is a multi-platform image index for `linux/amd64` and `linux/arm64`; Docker selects the matching platform when pulling. Pushes to `main` publish `main` and `latest`.
 
 Run the file explorer with its files and database persisted outside the container:
 

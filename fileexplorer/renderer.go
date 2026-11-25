@@ -42,7 +42,6 @@ type pageData struct {
 	WrapToggleURL        string
 	PreviewPaneToggleURL string
 	ColumnToggleURL      string
-	RenameAction         string
 	MkdirAction          string
 	CreateFileAction     string
 	UploadAction         string
@@ -75,16 +74,63 @@ type breadcrumb struct {
 }
 
 type pageItem struct {
-	Name        string
-	Path        string
-	URL         string
-	PreviewURL  string
-	EditURL     string
-	DownloadURL string
-	DeleteURL   string
-	IsDir       bool
-	Size        int64
+	Name       string
+	Path       string
+	URL        string
+	PreviewURL string
+	// Actions are the per-entry actions rendered in order. The template
+	// renders whatever the data describes, so a new action is a change
+	// here, not a template change.
+	Actions []rowAction
+	IsDir   bool
+	Size    int64
 }
+
+// rowAction describes one action rendered on a row.
+type rowAction struct {
+	// Kind selects the rendering: "link" or "form".
+	Kind string
+	// Label is the visible button text.
+	Label string
+	// Class is the button's CSS class.
+	Class string
+	// AriaLabel is an optional accessible label for the button.
+	AriaLabel string
+	// Href is the link target for "link" actions.
+	Href string
+	// Form is the submitted form for "form" actions.
+	Form rowForm
+}
+
+// rowForm describes the form rendered for a "form" action.
+type rowForm struct {
+	// Action is the form's target URL.
+	Action string
+	// Fields are the inputs rendered before the submit button.
+	Fields []rowFormField
+}
+
+// rowFormField describes one input in a form action.
+type rowFormField struct {
+	// Type is "hidden" or "text".
+	Type string
+	// Name is the submitted field name.
+	Name string
+	// Value is the initial field value.
+	Value string
+	// AriaLabel is the accessible label for text fields.
+	AriaLabel string
+	// Required marks the field as required.
+	Required bool
+}
+
+// Row action and field kinds.
+const (
+	rowActionLink  = "link"
+	rowActionForm  = "form"
+	rowFieldHidden = "hidden"
+	rowFieldText   = "text"
+)
 
 type previewProblem uint8
 
@@ -130,7 +176,6 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	data.WrapToggleURL = r.toggleWrapURL(request.URL, wrap)
 	data.PreviewPaneToggleURL = r.togglePreviewPaneURL(request.URL, pane)
 	data.ColumnToggleURL = r.toggleColumnURL(request.URL, column)
-	data.RenameAction = r.withState("/rename", theme, wrap, pane, column)
 	data.MkdirAction = r.withState("/mkdir", theme, wrap, pane, column)
 	data.CreateFileAction = r.withState("/create-file", theme, wrap, pane, column)
 	data.UploadAction = r.withState("/upload", theme, wrap, pane, column)
@@ -147,9 +192,14 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 		item := &data.Items[i]
 		item.URL = r.withState(item.URL, theme, wrap, pane, column)
 		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap, pane, column)
-		item.EditURL = r.withState(item.EditURL, theme, wrap, pane, column)
-		item.DownloadURL = r.withState(item.DownloadURL, theme, wrap, pane, column)
-		item.DeleteURL = r.withState(item.DeleteURL, theme, wrap, pane, column)
+		for a := range item.Actions {
+			action := &item.Actions[a]
+			if action.Kind == rowActionLink {
+				action.Href = r.withState(action.Href, theme, wrap, pane, column)
+			} else if action.Form.Action != "" {
+				action.Form.Action = r.withState(action.Form.Action, theme, wrap, pane, column)
+			}
+		}
 	}
 	return data
 }
@@ -398,14 +448,12 @@ func (r *renderer) Directory(current string, entries []Entry, pageError string) 
 	}
 	for _, entry := range entries {
 		item := pageItem{
-			Name:        entry.Name,
-			Path:        entry.Path,
-			URL:         r.ItemURL(entry.Path, entry.IsDir),
-			EditURL:     r.EditorURL(entry.Path),
-			DownloadURL: r.ItemURL(entry.Path, false) + "?download=1",
-			DeleteURL:   "/confirm-delete/" + r.EscapedPath(entry.Path),
-			IsDir:       entry.IsDir,
-			Size:        entry.Size,
+			Name:    entry.Name,
+			Path:    entry.Path,
+			URL:     r.ItemURL(entry.Path, entry.IsDir),
+			Actions: r.entryActions(entry),
+			IsDir:   entry.IsDir,
+			Size:    entry.Size,
 		}
 		if !entry.IsDir {
 			item.PreviewURL = "/preview/" + r.EscapedPath(entry.Path)
@@ -413,6 +461,36 @@ func (r *renderer) Directory(current string, entries []Entry, pageError string) 
 		data.Items = append(data.Items, item)
 	}
 	return data
+}
+
+// entryActions returns the actions for an entry, in display order. Files
+// offer Edit and Download in addition to the shared Rename and Delete.
+// Adding a new action is a data change in this method, not a template
+// change.
+func (r *renderer) entryActions(entry Entry) []rowAction {
+	var actions []rowAction
+	if !entry.IsDir {
+		actions = append(actions,
+			rowAction{Kind: rowActionLink, Label: "Edit", Class: "btn btn-outline-primary btn-sm", Href: r.EditorURL(entry.Path)},
+			rowAction{Kind: rowActionLink, Label: "Download", Class: "btn btn-outline-secondary btn-sm", Href: r.ItemURL(entry.Path, false) + "?download=1"},
+		)
+	}
+	actions = append(actions,
+		rowAction{
+			Kind:  rowActionForm,
+			Label: "Rename",
+			Class: "btn btn-outline-secondary btn-sm",
+			Form: rowForm{
+				Action: "/rename",
+				Fields: []rowFormField{
+					{Type: rowFieldHidden, Name: "old", Value: entry.Path},
+					{Type: rowFieldText, Name: "new", Value: entry.Name, AriaLabel: "New name for " + entry.Name, Required: true},
+				},
+			},
+		},
+		rowAction{Kind: rowActionLink, Label: "Delete", Class: "btn btn-outline-danger btn-sm", AriaLabel: "Delete " + entry.Name, Href: "/confirm-delete/" + r.EscapedPath(entry.Path)},
+	)
+	return actions
 }
 
 func (r *renderer) Editor(rel, content string, saved bool) pageData {

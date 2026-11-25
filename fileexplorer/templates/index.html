@@ -44,7 +44,7 @@
        is already always visible here because its only hidden state is gated
        behind @media (hover: hover) — so touch users are never limited. */
     @media (hover: none) {
-      li.list-group-item .row-actions .btn, li.list-group-item .row-actions .form-control { min-height: 44px; }
+      li.list-group-item .row-actions .btn { min-height: 44px; }
       li.list-group-item .row-actions .btn { display: inline-flex; align-items: center; justify-content: center; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -75,6 +75,7 @@
           <div>
             {{if .Editor}}<h1 class="h3 mb-1">Edit file</h1>
             {{else if .ConfirmDelete}}<h1 class="h3 mb-1">Confirm deletion</h1>
+            {{else if .ConfirmRename}}<h1 class="h3 mb-1">Rename entry</h1>
             {{else}}<h1 class="h3 mb-1">Files</h1>{{end}}
             <p class="text-body-secondary mb-0">Browse and manage this directory.</p>
           </div>
@@ -113,6 +114,19 @@
             </form>
           </div>
         </section>
+        {{else if .ConfirmRename}}
+        <section class="card shadow-sm border-0 mb-4" aria-labelledby="rename-heading">
+          <div class="card-body">
+            <h2 class="h4" id="rename-heading">Rename {{.RenameName}}</h2>
+            <p class="text-body-secondary">Choose a new name for this entry. It keeps its current location; only the name changes.</p>
+            <form action="{{.RenameAction}}" method="post" class="d-flex flex-column flex-sm-row gap-2">
+              <input type="hidden" name="old" value="{{.RenamePath}}">
+              <input class="form-control form-control-sm" name="new" value="{{.RenameName}}" aria-label="New name for {{.RenameName}}" required>
+              <button class="btn btn-primary" type="submit">Confirm rename</button>
+              <a class="btn btn-outline-secondary" href="{{.ReturnURL}}">Cancel</a>
+            </form>
+          </div>
+        </section>
         {{else}}
         <div class="row g-4">
           <!-- Keyboard focus follows DOM order: the listing comes first so rows precede the
@@ -144,18 +158,9 @@
                   </div>
                 </div>
                 <div class="row-actions d-flex flex-column flex-sm-row flex-wrap align-items-center gap-2">
-                  {{range .Actions}}{{if eq .Kind "link"}}
+                  {{range .Actions}}
                   <a class="{{.Class}}" href="{{.Href}}"{{if .AriaLabel}} aria-label="{{.AriaLabel}}"{{end}}>{{.Label}}</a>
-                  {{else}}
-                  <form action="{{.Form.Action}}" method="post" class="d-flex flex-column flex-sm-row gap-2">
-                    {{range .Form.Fields}}{{if eq .Type "hidden"}}
-                    <input type="hidden" name="{{.Name}}" value="{{.Value}}">
-                    {{else}}
-                    <input class="form-control form-control-sm" name="{{.Name}}" value="{{.Value}}" aria-label="{{.AriaLabel}}"{{if .Required}} required{{end}}>
-                    {{end}}{{end}}
-                    <button class="{{.Class}}" type="submit">{{.Label}}</button>
-                  </form>
-                  {{end}}{{end}}
+                  {{end}}
                 </div>
               </div>
             </li>

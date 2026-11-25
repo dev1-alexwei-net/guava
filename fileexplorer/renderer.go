@@ -46,6 +46,7 @@ type pageData struct {
 	CreateFileAction     string
 	UploadAction         string
 	DeleteAction         string
+	RenameAction         string
 	Current              string
 	Breadcrumbs          []breadcrumb
 	ParentURL            string
@@ -65,6 +66,9 @@ type pageData struct {
 	ConfirmDelete        bool
 	DeletePath           string
 	DeleteName           string
+	ConfirmRename        bool
+	RenamePath           string
+	RenameName           string
 	ReturnURL            string
 }
 
@@ -86,51 +90,19 @@ type pageItem struct {
 	Size    int64
 }
 
-// rowAction describes one action rendered on a row.
+// rowAction describes one link action rendered on a row. Multi-step
+// mutations (rename, delete) run through their dedicated GET/POST flows, so
+// every row action is a link to a target page or a dedicated form page.
 type rowAction struct {
-	// Kind selects the rendering: "link" or "form".
-	Kind string
 	// Label is the visible button text.
 	Label string
 	// Class is the button's CSS class.
 	Class string
-	// AriaLabel is an optional accessible label for the button.
+	// AriaLabel is the accessible label identifying the entry.
 	AriaLabel string
-	// Href is the link target for "link" actions.
+	// Href is the link target.
 	Href string
-	// Form is the submitted form for "form" actions.
-	Form rowForm
 }
-
-// rowForm describes the form rendered for a "form" action.
-type rowForm struct {
-	// Action is the form's target URL.
-	Action string
-	// Fields are the inputs rendered before the submit button.
-	Fields []rowFormField
-}
-
-// rowFormField describes one input in a form action.
-type rowFormField struct {
-	// Type is "hidden" or "text".
-	Type string
-	// Name is the submitted field name.
-	Name string
-	// Value is the initial field value.
-	Value string
-	// AriaLabel is the accessible label for text fields.
-	AriaLabel string
-	// Required marks the field as required.
-	Required bool
-}
-
-// Row action and field kinds.
-const (
-	rowActionLink  = "link"
-	rowActionForm  = "form"
-	rowFieldHidden = "hidden"
-	rowFieldText   = "text"
-)
 
 type previewProblem uint8
 
@@ -180,6 +152,7 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	data.CreateFileAction = r.withState("/create-file", theme, wrap, pane, column)
 	data.UploadAction = r.withState("/upload", theme, wrap, pane, column)
 	data.DeleteAction = r.withState("/delete", theme, wrap, pane, column)
+	data.RenameAction = r.withState("/rename", theme, wrap, pane, column)
 	data.ParentURL = r.withState(data.ParentURL, theme, wrap, pane, column)
 	data.EditorURL = r.withState(data.EditorURL, theme, wrap, pane, column)
 	data.PreviewReturnURL = r.withState(data.PreviewReturnURL, theme, wrap, pane, column)
@@ -193,12 +166,7 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 		item.URL = r.withState(item.URL, theme, wrap, pane, column)
 		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap, pane, column)
 		for a := range item.Actions {
-			action := &item.Actions[a]
-			if action.Kind == rowActionLink {
-				action.Href = r.withState(action.Href, theme, wrap, pane, column)
-			} else if action.Form.Action != "" {
-				action.Form.Action = r.withState(action.Form.Action, theme, wrap, pane, column)
-			}
+			item.Actions[a].Href = r.withState(item.Actions[a].Href, theme, wrap, pane, column)
 		}
 	}
 	return data
@@ -464,31 +432,23 @@ func (r *renderer) Directory(current string, entries []Entry, pageError string) 
 }
 
 // entryActions returns the actions for an entry, in display order. Files
-// offer Edit and Download in addition to the shared Rename and Delete.
+// offer Edit and Download in addition to the shared Rename and Delete. Each
+// action is a link; Rename and Delete open their dedicated form pages. Each
+// carries an aria-label of the form "<verb> <entry>" so the four actions
+// label consistently across rows.
 // Adding a new action is a data change in this method, not a template
 // change.
 func (r *renderer) entryActions(entry Entry) []rowAction {
 	var actions []rowAction
 	if !entry.IsDir {
 		actions = append(actions,
-			rowAction{Kind: rowActionLink, Label: "Edit", Class: "btn btn-outline-primary btn-sm", Href: r.EditorURL(entry.Path)},
-			rowAction{Kind: rowActionLink, Label: "Download", Class: "btn btn-outline-secondary btn-sm", Href: r.ItemURL(entry.Path, false) + "?download=1"},
+			rowAction{Label: "Edit", Class: "btn btn-outline-primary btn-sm", AriaLabel: "Edit " + entry.Name, Href: r.EditorURL(entry.Path)},
+			rowAction{Label: "Download", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Download " + entry.Name, Href: r.ItemURL(entry.Path, false) + "?download=1"},
 		)
 	}
 	actions = append(actions,
-		rowAction{
-			Kind:  rowActionForm,
-			Label: "Rename",
-			Class: "btn btn-outline-secondary btn-sm",
-			Form: rowForm{
-				Action: "/rename",
-				Fields: []rowFormField{
-					{Type: rowFieldHidden, Name: "old", Value: entry.Path},
-					{Type: rowFieldText, Name: "new", Value: entry.Name, AriaLabel: "New name for " + entry.Name, Required: true},
-				},
-			},
-		},
-		rowAction{Kind: rowActionLink, Label: "Delete", Class: "btn btn-outline-danger btn-sm", AriaLabel: "Delete " + entry.Name, Href: "/confirm-delete/" + r.EscapedPath(entry.Path)},
+		rowAction{Label: "Rename", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Rename " + entry.Name, Href: "/rename/" + r.EscapedPath(entry.Path)},
+		rowAction{Label: "Delete", Class: "btn btn-outline-danger btn-sm", AriaLabel: "Delete " + entry.Name, Href: "/confirm-delete/" + r.EscapedPath(entry.Path)},
 	)
 	return actions
 }
@@ -524,6 +484,18 @@ func (r *renderer) DeleteConfirmation(rel string) pageData {
 		Version:       version.SemVer,
 		DeletePath:    rel,
 		DeleteName:    path.Base(rel),
+		ReturnURL:     r.ParentURL(rel),
+	}
+}
+
+// RenameConfirmation builds the dedicated rename page for an entry, mirroring
+// DeleteConfirmation: GET presents the form, POST /rename commits it.
+func (r *renderer) RenameConfirmation(rel string) pageData {
+	return pageData{
+		ConfirmRename: true,
+		Version:       version.SemVer,
+		RenamePath:    rel,
+		RenameName:    path.Base(rel),
 		ReturnURL:     r.ParentURL(rel),
 	}
 }

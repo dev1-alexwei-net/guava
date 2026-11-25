@@ -1,19 +1,35 @@
 name: Publish container images
 
-# Push to main publishes the next automatic patch release:
-#   - resolve-release computes the next patch version from the highest
-#     vMAJOR.MINOR.PATCH git tag, seeded with 0.1.0 when none exists yet,
-#   - publish tags both images with that version (no v prefix) in addition to
-#     main and latest, so both images always carry the identical version set,
-#   - cut-release-tag then creates the matching v-prefixed git tag on the
-#     pushed commit, making it the base for the next increment.
+# Two release paths share this workflow:
+#   - push to main: the automatic patch release. resolve-release computes
+#     MAJOR.MINOR.(PATCH+1) from the highest vMAJOR.MINOR.PATCH git tag,
+#     seeded with 0.1.0 when no release tag exists yet.
+#   - workflow_dispatch with bump: minor | major: the manual escape hatch for
+#     deliberate releases. resolve-release computes MAJOR.(MINOR+1).0 or
+#     (MAJOR+1).0.0 from the highest vMAJOR.MINOR.PATCH git tag (or from
+#     0.0.0 when no release tag exists yet).
 #
-# Publishes are serialized so two consecutive pushes to main each resolve a
+# Both paths then tag both images with that version (no v prefix) in addition
+# to main and latest, so both images always carry the identical version set,
+# and cut-release-tag creates the matching v-prefixed git tag on the pushed
+# commit, making it the base for the next increment.
+#
+# Publishes are serialized so two consecutive publishes each resolve a
 # distinct version and never race on the release tag.
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump the release version and publish it"
+        required: true
+        default: minor
+        type: choice
+        options:
+          - minor
+          - major
 
 concurrency:
   group: publish-ghcr
@@ -36,16 +52,36 @@ jobs:
 
       - name: Resolve release version
         id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
           base=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
           if [ -n "$base" ]; then
             v=${base#v}
             IFS='.' read -r major minor patch <<<"$v"
-            version="${major}.${minor}.$((10#$patch + 1))"
+            major=$((10#$major))
+            minor=$((10#$minor))
+            patch=$((10#$patch))
           else
-            version="0.1.0"
+            major=0
+            minor=0
+            patch=0
           fi
+          if [ "$EVENT" == "workflow_dispatch" ]; then
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              *) echo "::error::Unsupported bump '$BUMP' (expected minor or major)"; exit 1 ;;
+            esac
+          elif [ -n "$base" ]; then
+            patch=$((patch + 1))
+          else
+            # Seed the first automatic release at 0.1.0.
+            minor=1
+          fi
+          version="${major}.${minor}.${patch}"
           tag="v${version}"
           echo "version=${version}" >>"$GITHUB_OUTPUT"
           echo "tag=${tag}" >>"$GITHUB_OUTPUT"

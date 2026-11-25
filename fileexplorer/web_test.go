@@ -164,6 +164,66 @@ func TestPreviewPaneKeepsBoundedHeightWithInternalScroll(t *testing.T) {
 	assertNoClientSideJavaScript(t, body)
 }
 
+// TestRowActionsRevealOnHoverAndFocusForDesktop pins the #180 interaction
+// contract from #178: on hover-capable devices the row action cluster rests
+// calm and is revealed by the row's :hover or :focus-within. The hidden rest
+// state uses opacity/visibility, not display, so the cluster keeps its layout
+// box and the row never reflows when the menu appears. Outside the hover
+// query the cluster stays visible for non-hover devices (#181).
+func TestRowActionsRevealOnHoverAndFocusForDesktop(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status=%d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// The cluster is one named group, present in the DOM on every row.
+	if !strings.Contains(body, `class="row-actions`) {
+		t.Error("row action cluster is missing the row-actions hook")
+	}
+	// The rest state is gated behind the hover-capable query…
+	gate := strings.Index(body, "@media (hover: hover)")
+	if gate < 0 {
+		t.Fatal("reveal styles are not gated behind @media (hover: hover)")
+	}
+	rest := strings.Index(body, "li.list-group-item .row-actions { opacity: 0; visibility: hidden;")
+	if rest < 0 {
+		t.Fatal("rest state is missing the calm hidden rule")
+	}
+	if rest < gate {
+		t.Error("hidden rest state is not inside the @media (hover: hover) query")
+	}
+	// …and it hides with opacity/visibility so the layout box is preserved
+	// (no row reflow), never with display.
+	if strings.Contains(body, "display: none") {
+		t.Error("hidden rest state uses display, which would reflow the row")
+	}
+	// Row :hover and :focus-within both reveal the cluster.
+	if !strings.Contains(body, "li.list-group-item:hover .row-actions { opacity: 1; visibility: visible; }") {
+		t.Error("row :hover reveal rule is missing")
+	}
+	// Focus must reveal immediately — no transition, no debounced state.
+	if !strings.Contains(body, "li.list-group-item:focus-within .row-actions { opacity: 1; visibility: visible; transition: none; }") {
+		t.Error(":focus-within reveal must be immediate, with no transition")
+	}
+	// Every action stays present, labeled, and reachable in both entry kinds.
+	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</button>`, `>Delete</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("row action %q missing from the listing", want)
+		}
+	}
+	assertNoClientSideJavaScript(t, body)
+}
+
 func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 	cases := []struct {
 		name string

@@ -65,9 +65,6 @@ func TestRunFileConversationContinuesUntilCompletion(t *testing.T) {
 	if requests[1].PreviousResponseID != "resp_first" {
 		t.Errorf("follow-up previous_response_id = %q, want resp_first", requests[1].PreviousResponseID)
 	}
-	if requests[0].User != requests[1].User {
-		t.Errorf("user routing changed between turns: %q and %q", requests[0].User, requests[1].User)
-	}
 }
 
 func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
@@ -121,7 +118,7 @@ func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
 	}
 }
 
-func TestConversationUserMapsPathToStableSessionKey(t *testing.T) {
+func TestConversationSessionKeyMapsPathToStableKey(t *testing.T) {
 	tests := []struct {
 		path string
 		want string
@@ -131,8 +128,8 @@ func TestConversationUserMapsPathToStableSessionKey(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
-			if got := conversationUser(test.path); got != test.want {
-				t.Errorf("conversationUser(%q) = %q, want %q", test.path, got, test.want)
+			if got := conversationSessionKey(test.path); got != test.want {
+				t.Errorf("conversationSessionKey(%q) = %q, want %q", test.path, got, test.want)
 			}
 		})
 	}
@@ -140,6 +137,7 @@ func TestConversationUserMapsPathToStableSessionKey(t *testing.T) {
 
 func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 	var requests []responsesRequest
+	var sessionKeys []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request responsesRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -148,11 +146,12 @@ func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 			return
 		}
 		requests = append(requests, request)
+		sessionKeys = append(sessionKeys, r.Header.Get("x-openclaw-session-key"))
 
 		switch len(requests) {
 		case 1:
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
+			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":{"message":"The model was cut off after reaching the output token limit"}}`))
 		case 2:
 			if err := json.NewEncoder(w).Encode(responsesAPIResponse{
@@ -181,11 +180,9 @@ func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 	if requests[1].Input != continueMessage {
 		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continueMessage)
 	}
-	if requests[0].User == "" {
-		t.Fatal("first request has no user routing key, want a stable per-file session key")
-	}
-	if requests[1].User != requests[0].User {
-		t.Errorf("follow-up user = %q, want the same stable session %q", requests[1].User, requests[0].User)
+	wantSessionKey := "guava:project/0-135-reuse-conversation-bug.md"
+	if sessionKeys[0] != wantSessionKey || sessionKeys[1] != wantSessionKey {
+		t.Errorf("session keys = %q, %q; want %q on both requests", sessionKeys[0], sessionKeys[1], wantSessionKey)
 	}
 	if requests[1].PreviousResponseID != "" {
 		t.Errorf("follow-up previous_response_id = %q, want empty after an error response", requests[1].PreviousResponseID)
@@ -201,7 +198,7 @@ func TestRunFileConversationIsolatesSessionsPerFile(t *testing.T) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		seen = append(seen, request.User)
+		seen = append(seen, r.Header.Get("x-openclaw-session-key"))
 		if err := json.NewEncoder(w).Encode(responsesAPIResponse{
 			ID:     "resp_done",
 			Output: assistantText(completionMarker),

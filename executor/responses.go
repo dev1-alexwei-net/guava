@@ -20,7 +20,6 @@ type responsesRequest struct {
 	Model              string `json:"model"`
 	Input              string `json:"input"`
 	Stream             bool   `json:"stream"`
-	User               string `json:"user,omitempty"`
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 }
 
@@ -57,11 +56,11 @@ type responsesClient struct {
 	config Config
 }
 
-func (c responsesClient) create(ctx context.Context, input, user, previousResponseID string) (agentResponse, error) {
-	return c.createObserved(ctx, input, user, previousResponseID, "", 0)
+func (c responsesClient) create(ctx context.Context, input, sessionKey, previousResponseID string) (agentResponse, error) {
+	return c.createObserved(ctx, input, sessionKey, previousResponseID, "", 0)
 }
 
-func (c responsesClient) createObserved(ctx context.Context, input, user, previousResponseID, filePath string, turn int) (agentResponse, error) {
+func (c responsesClient) createObserved(ctx context.Context, input, sessionKey, previousResponseID, filePath string, turn int) (agentResponse, error) {
 	endpoint, err := responsesEndpoint(c.config.GatewayURL)
 	if err != nil {
 		return agentResponse{}, err
@@ -71,7 +70,6 @@ func (c responsesClient) createObserved(ctx context.Context, input, user, previo
 		Model:              "openclaw",
 		Input:              input,
 		Stream:             false,
-		User:               user,
 		PreviousResponseID: previousResponseID,
 	}
 	body, err := json.Marshal(payload)
@@ -86,6 +84,9 @@ func (c responsesClient) createObserved(ctx context.Context, input, user, previo
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-openclaw-agent-id", c.config.AgentID)
+	if sessionKey != "" {
+		req.Header.Set("x-openclaw-session-key", sessionKey)
+	}
 	if c.config.AuthToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.config.AuthToken)
 	}

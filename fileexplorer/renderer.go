@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/dev1-alexwei-net/guava/internal/version"
 )
 
 //go:embed templates/index.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
@@ -29,6 +31,7 @@ func newRenderer() *renderer {
 
 type pageData struct {
 	Theme                string
+	Version              string
 	Wrap                 string
 	PreviewPane          string
 	Column               string
@@ -387,6 +390,7 @@ func (r *renderer) Stylesheet(w http.ResponseWriter, _ *http.Request) {
 func (r *renderer) Directory(current string, entries []Entry, pageError string) pageData {
 	data := pageData{
 		Current:     current,
+		Version:     version.SemVer,
 		Breadcrumbs: r.Breadcrumbs(current),
 		ParentURL:   r.ParentURL(current),
 		Items:       make([]pageItem, 0, len(entries)),
@@ -422,6 +426,7 @@ func (r *renderer) Editor(rel, content string, saved bool) pageData {
 	}
 	return pageData{
 		Editor:      true,
+		Version:     version.SemVer,
 		EditorPath:  rel,
 		EditorURL:   r.EditorURL(rel),
 		Content:     content,
@@ -438,6 +443,7 @@ func (r *renderer) DeleteConfirmation(rel string) pageData {
 	}
 	return pageData{
 		ConfirmDelete: true,
+		Version:       version.SemVer,
 		DeletePath:    rel,
 		DeleteName:    path.Base(rel),
 		ReturnURL:     r.ParentURL(rel),
@@ -470,7 +476,9 @@ func (r *renderer) Preview(data *pageData, current, rel string, preview previewC
 	}
 }
 
-func (r *renderer) Error(message string) pageData { return pageData{Error: message} }
+func (r *renderer) Error(message string) pageData {
+	return pageData{Error: message, Version: version.SemVer}
+}
 
 func (r *renderer) Breadcrumbs(current string) []breadcrumb {
 	if current == "" {

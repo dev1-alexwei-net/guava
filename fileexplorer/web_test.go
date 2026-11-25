@@ -877,6 +877,179 @@ func TestPreviewPaneStatePersistsAcrossNavigation(t *testing.T) {
 	}
 }
 
+// TestPreviewColumnWidthSwitchesLayout pins the discrete large-screen preview
+// widths: each offered width takes the preview column, the listing takes the
+// remainder of the row, and the width control reflects the current width and
+// cycles to the next, wrapping from the widest back to the narrowest.
+func TestPreviewColumnWidthSwitchesLayout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	for _, test := range []struct {
+		width    string
+		preview  string
+		listing  string
+		next     string
+		nextHref string
+	}{
+		{preview: "5", listing: "7", next: "6", nextHref: "/preview/a.txt?width=6"},
+		{width: "4", preview: "4", listing: "8", next: "5", nextHref: "/preview/a.txt"},
+		{width: "6", preview: "6", listing: "6", next: "8", nextHref: "/preview/a.txt?width=8"},
+		{width: "8", preview: "8", listing: "4", next: "9", nextHref: "/preview/a.txt?width=9"},
+		{width: "9", preview: "9", listing: "3", next: "4", nextHref: "/preview/a.txt?width=4"},
+	} {
+		target := "/preview/a.txt"
+		if test.width != "" {
+			target += "?width=" + test.width
+		}
+		rec := get(t, h, target)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status=%d body=%s", target, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `class="col-12 col-lg-`+test.preview+` order-1 order-lg-2"`) {
+			t.Errorf("GET %s: preview column is not col-lg-%s", target, test.preview)
+		}
+		if !strings.Contains(body, `class="col-12 col-lg-`+test.listing+` order-2 order-lg-1"`) {
+			t.Errorf("GET %s: listing column is not col-lg-%s", target, test.listing)
+		}
+		control := `<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="` + test.nextHref + `" aria-label="Preview width is ` + test.preview + ` of 12 columns; activate to change to ` + test.next + ` of 12">Width ` + test.preview + `</a>`
+		if !strings.Contains(body, control) {
+			t.Errorf("GET %s: width control missing or wrong: %q", target, control)
+		}
+	}
+}
+
+// TestPreviewColumnTogglePreservesOtherPreferences pins that the width
+// control changes only the width parameter, and that the width rides the
+// theme, wrap, and pane toggles the way the other preferences ride each
+// other, so one round trip loses no state.
+func TestPreviewColumnTogglePreservesOtherPreferences(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	page := get(t, h, "/preview/a.txt?theme=dark&wrap=off&width=6")
+	if page.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+	if !strings.Contains(body, `<html lang="en" data-bs-theme="dark">`) {
+		t.Fatal("dark theme was not applied to the document")
+	}
+	for _, want := range []string{
+		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/a.txt?theme=dark&amp;width=8&amp;wrap=off" aria-label="Preview width is 6 of 12 columns; activate to change to 8 of 12">Width 6</a>`,
+		`href="/preview/a.txt?width=6&amp;wrap=off">Light mode</a>`,
+		`<a class="btn btn-sm btn-outline-secondary" href="/preview/a.txt?theme=dark&amp;width=6" aria-pressed="false">Wrap</a>`,
+		`href="/preview/a.txt?pane=collapsed&amp;theme=dark&amp;width=6&amp;wrap=off" aria-pressed="true">Collapse preview</a>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("width page missing %q", want)
+		}
+	}
+	assertNoClientSideJavaScript(t, body)
+}
+
+// TestPreviewColumnStatePersistsAcrossNavigation pins that the selected
+// width rides every explorer link, redirect, and mutation the way theme,
+// wrap, and pane do, so it survives navigation, file selection, and edits.
+func TestPreviewColumnStatePersistsAcrossNavigation(t *testing.T) {
+	root := t.TempDir()
+	docs := filepath.Join(root, "docs")
+	if err := os.Mkdir(docs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"root.txt":                        "root",
+		filepath.Join("docs", "note.txt"): "note",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := makeTestHandler(t, root)
+
+	directory := get(t, h, "/?width=8")
+	if directory.Code != http.StatusOK {
+		t.Fatalf("width directory status=%d body=%s", directory.Code, directory.Body.String())
+	}
+	for _, want := range []string{
+		`class="col-12 col-lg-8 order-1 order-lg-2"`,
+		`class="col-12 col-lg-4 order-2 order-lg-1"`,
+		`href="/?width=8">Guava</a>`,
+		`href="/?width=8">Root</a>`,
+		`href="/d/docs?width=8">docs/</a>`,
+		`href="/preview/root.txt?width=8">root.txt</a>`,
+		`href="/edit/root.txt?width=8">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;width=8">Download</a>`,
+		`href="/confirm-delete/root.txt?width=8"`,
+		`action="/rename?width=8"`,
+		`action="/mkdir?width=8"`,
+		`action="/create-file?width=8"`,
+		`action="/upload?width=8"`,
+		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/?width=9" aria-label="Preview width is 8 of 12 columns; activate to change to 9 of 12">Width 8</a>`,
+	} {
+		if !strings.Contains(directory.Body.String(), want) {
+			t.Errorf("width directory page missing %q", want)
+		}
+	}
+
+	preview := get(t, h, "/preview/docs/note.txt?width=8")
+	if preview.Code != http.StatusOK {
+		t.Fatalf("width preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	for _, want := range []string{
+		`class="col-12 col-lg-8 order-1 order-lg-2"`,
+		`class="col-12 col-lg-4 order-2 order-lg-1"`,
+		`href="/d/docs?width=8">Hide preview</a>`,
+		`href="/f/docs/note.txt?download=1&amp;width=8">Download</a>`,
+		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/docs/note.txt?width=9" aria-label="Preview width is 8 of 12 columns; activate to change to 9 of 12">Width 8</a>`,
+	} {
+		if !strings.Contains(preview.Body.String(), want) {
+			t.Errorf("width preview page missing %q", want)
+		}
+	}
+
+	editor := get(t, h, "/edit/docs/note.txt?width=8")
+	if editor.Code != http.StatusOK {
+		t.Fatalf("width editor status=%d body=%s", editor.Code, editor.Body.String())
+	}
+	if !strings.Contains(editor.Body.String(), `action="/edit/docs/note.txt?width=8"`) ||
+		!strings.Contains(editor.Body.String(), `href="/d/docs?width=8">Cancel</a>`) {
+		t.Fatalf("editor page lost width state: body=%s", editor.Body.String())
+	}
+	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?width=8", url.Values{"content": {"saved"}})
+	if saved.Code != http.StatusSeeOther {
+		t.Fatalf("width editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
+	}
+	savedURL, err := url.Parse(saved.Header().Get("Location"))
+	if err != nil || savedURL.Query().Get("width") != "8" || savedURL.Query().Get("saved") != "1" {
+		t.Fatalf("editor save redirect did not preserve width state: location=%q err=%v", saved.Header().Get("Location"), err)
+	}
+
+	created := formRequest(t, h, http.MethodPost, "/mkdir?width=8", url.Values{"parent": {"docs"}, "name": {"created"}})
+	createdURL, err := url.Parse(created.Header().Get("Location"))
+	if created.Code != http.StatusSeeOther || err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("width") != "8" {
+		t.Fatalf("mkdir redirect lost width state: location=%q err=%v", created.Header().Get("Location"), err)
+	}
+
+	confirmation := get(t, h, "/confirm-delete/docs/created?width=8")
+	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?width=8"`) ||
+		!strings.Contains(confirmation.Body.String(), `href="/d/docs?width=8">Cancel</a>`) {
+		t.Fatalf("width delete confirmation lost width state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	deleted := formRequest(t, h, http.MethodPost, "/delete?width=8", url.Values{"path": {"docs/created"}})
+	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
+	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("width") != "8" {
+		t.Fatalf("delete redirect lost width state: location=%q err=%v", deleted.Header().Get("Location"), err)
+	}
+}
+
 func TestDarkThemePersistsAcrossMutationsAndErrors(t *testing.T) {
 	root := t.TempDir()
 	docs := filepath.Join(root, "docs")

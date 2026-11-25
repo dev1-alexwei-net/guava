@@ -92,7 +92,7 @@
         <div class="row g-4">
           <!-- Keyboard focus follows DOM order: the listing comes first so rows precede the
      preview pane; the order utilities below keep the visual layout unchanged. -->
-          <div class="col-12{{if ne .PreviewPane "collapsed"}} col-lg-7{{end}} order-2 order-lg-1">
+          <div class="col-12{{if and (ne .PreviewPane "collapsed") .Column}} col-lg-{{.ListingColumn}}{{end}} order-2 order-lg-1">
             <section class="card shadow-sm border-0" aria-label="Directory contents">
           <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">
             <h2 class="h6 mb-0">Contents</h2>
@@ -141,7 +141,10 @@
             </section>
           </div>
 
-          <div class="col-12{{if ne .PreviewPane "collapsed"}} col-lg-5{{end}} order-1 order-lg-2{{if eq .PreviewPane "collapsed"}} d-lg-none{{end}}">
+          <!-- The preview column takes a discrete width (col-lg-N) and the listing takes the
+     remaining twelve minus N, so the row always reflows without breaking. The width control
+     in the preview header cycles the offered widths server-side. -->
+          <div class="col-12{{if and (ne .PreviewPane "collapsed") .Column}} col-lg-{{.Column}}{{end}} order-1 order-lg-2{{if eq .PreviewPane "collapsed"}} d-lg-none{{end}}">
             {{if .PreviewPath}}
             <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
               <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -153,6 +156,7 @@
               <a class="btn btn-outline-primary btn-sm" href="{{.PreviewDownloadURL}}">Download</a>
               <a class="btn btn-outline-secondary btn-sm" href="{{.PreviewReturnURL}}">Hide preview</a>
               {{if ne .PreviewPane "collapsed"}}
+              <a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="{{.ColumnToggleURL}}" aria-label="Preview width is {{.Column}} of 12 columns; activate to change to {{.NextColumn}} of 12">Width {{.Column}}</a>
               <a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-secondary" href="{{.PreviewPaneToggleURL}}" aria-pressed="true">Collapse preview</a>
               {{end}}
             </div>
@@ -168,8 +172,11 @@
         </section>
             {{else}}
             <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
-              <div class="card-header bg-body">
+              <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <h2 class="h6 mb-0" id="preview-heading">Preview</h2>
+                {{if ne .PreviewPane "collapsed"}}
+                <a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="{{.ColumnToggleURL}}" aria-label="Preview width is {{.Column}} of 12 columns; activate to change to {{.NextColumn}} of 12">Width {{.Column}}</a>
+                {{end}}
               </div>
               <div class="card-body">
                 <p class="text-body-secondary mb-1">No file selected.</p>

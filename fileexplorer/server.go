@@ -400,7 +400,7 @@ func (e *application) redirectToDirectory(w http.ResponseWriter, r *http.Request
 	if current == "" {
 		target = "/"
 	}
-	http.Redirect(w, r, e.renderer.withState(target, requestedTheme(r), requestedWrap(r), requestedPreviewPane(r)), http.StatusSeeOther)
+	http.Redirect(w, r, e.renderer.withState(target, requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
 }
 
 func parseForm(w http.ResponseWriter, r *http.Request) error {
@@ -436,7 +436,7 @@ func (e *application) redirectMutationError(w http.ResponseWriter, r *http.Reque
 		target = e.renderer.ItemURL(current, true)
 	}
 	query := url.Values{"error": {message}, "status": {fmt.Sprint(status)}}
-	http.Redirect(w, r, e.renderer.withState(target+"?"+query.Encode(), requestedTheme(r), requestedWrap(r), requestedPreviewPane(r)), http.StatusSeeOther)
+	http.Redirect(w, r, e.renderer.withState(target+"?"+query.Encode(), requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
 }
 
 func mutationParent(r *http.Request) string {
@@ -567,7 +567,7 @@ func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, r, status, message)
 		return
 	}
-	http.Redirect(w, r, e.renderer.withState(e.renderer.EditorURL(rel)+"?saved=1", requestedTheme(r), requestedWrap(r), requestedPreviewPane(r)), http.StatusSeeOther)
+	http.Redirect(w, r, e.renderer.withState(e.renderer.EditorURL(rel)+"?saved=1", requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
 }
 
 func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) {

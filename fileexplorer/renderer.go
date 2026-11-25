@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -27,34 +28,42 @@ func newRenderer() *renderer {
 }
 
 type pageData struct {
-	Theme              string
-	HomeURL            string
-	ThemeToggleURL     string
-	RenameAction       string
-	MkdirAction        string
-	CreateFileAction   string
-	UploadAction       string
-	DeleteAction       string
-	Current            string
-	Breadcrumbs        []breadcrumb
-	ParentURL          string
-	Items              []pageItem
-	Error              string
-	Editor             bool
-	EditorPath         string
-	EditorURL          string
-	Content            string
-	Saved              bool
-	PreviewPath        string
-	PreviewName        string
-	PreviewContent     string
-	PreviewNote        string
-	PreviewReturnURL   string
-	PreviewDownloadURL string
-	ConfirmDelete      bool
-	DeletePath         string
-	DeleteName         string
-	ReturnURL          string
+	Theme                string
+	Wrap                 string
+	PreviewPane          string
+	Column               string
+	ListingColumn        string
+	NextColumn           string
+	HomeURL              string
+	ThemeToggleURL       string
+	WrapToggleURL        string
+	PreviewPaneToggleURL string
+	ColumnToggleURL      string
+	RenameAction         string
+	MkdirAction          string
+	CreateFileAction     string
+	UploadAction         string
+	DeleteAction         string
+	Current              string
+	Breadcrumbs          []breadcrumb
+	ParentURL            string
+	Items                []pageItem
+	Error                string
+	Editor               bool
+	EditorPath           string
+	EditorURL            string
+	Content              string
+	Saved                bool
+	PreviewPath          string
+	PreviewName          string
+	PreviewContent       string
+	PreviewNote          string
+	PreviewReturnURL     string
+	PreviewDownloadURL   string
+	ConfirmDelete        bool
+	DeletePath           string
+	DeleteName           string
+	ReturnURL            string
 }
 
 type breadcrumb struct {
@@ -104,29 +113,40 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	}
 
 	theme := requestedTheme(request)
+	wrap := requestedWrap(request)
+	pane := requestedPreviewPane(request)
+	column := requestedColumn(request)
 	data.Theme = theme
-	data.HomeURL = r.withTheme("/", theme)
+	data.Wrap = wrap
+	data.PreviewPane = pane
+	data.Column = column
+	data.ListingColumn = listingColumn(column)
+	data.NextColumn = nextColumn(column)
+	data.HomeURL = r.withState("/", theme, wrap, pane, column)
 	data.ThemeToggleURL = r.toggleThemeURL(request.URL, theme)
-	data.RenameAction = r.withTheme("/rename", theme)
-	data.MkdirAction = r.withTheme("/mkdir", theme)
-	data.CreateFileAction = r.withTheme("/create-file", theme)
-	data.UploadAction = r.withTheme("/upload", theme)
-	data.DeleteAction = r.withTheme("/delete", theme)
-	data.ParentURL = r.withTheme(data.ParentURL, theme)
-	data.EditorURL = r.withTheme(data.EditorURL, theme)
-	data.PreviewReturnURL = r.withTheme(data.PreviewReturnURL, theme)
-	data.PreviewDownloadURL = r.withTheme(data.PreviewDownloadURL, theme)
-	data.ReturnURL = r.withTheme(data.ReturnURL, theme)
+	data.WrapToggleURL = r.toggleWrapURL(request.URL, wrap)
+	data.PreviewPaneToggleURL = r.togglePreviewPaneURL(request.URL, pane)
+	data.ColumnToggleURL = r.toggleColumnURL(request.URL, column)
+	data.RenameAction = r.withState("/rename", theme, wrap, pane, column)
+	data.MkdirAction = r.withState("/mkdir", theme, wrap, pane, column)
+	data.CreateFileAction = r.withState("/create-file", theme, wrap, pane, column)
+	data.UploadAction = r.withState("/upload", theme, wrap, pane, column)
+	data.DeleteAction = r.withState("/delete", theme, wrap, pane, column)
+	data.ParentURL = r.withState(data.ParentURL, theme, wrap, pane, column)
+	data.EditorURL = r.withState(data.EditorURL, theme, wrap, pane, column)
+	data.PreviewReturnURL = r.withState(data.PreviewReturnURL, theme, wrap, pane, column)
+	data.PreviewDownloadURL = r.withState(data.PreviewDownloadURL, theme, wrap, pane, column)
+	data.ReturnURL = r.withState(data.ReturnURL, theme, wrap, pane, column)
 	for i := range data.Breadcrumbs {
-		data.Breadcrumbs[i].URL = r.withTheme(data.Breadcrumbs[i].URL, theme)
+		data.Breadcrumbs[i].URL = r.withState(data.Breadcrumbs[i].URL, theme, wrap, pane, column)
 	}
 	for i := range data.Items {
 		item := &data.Items[i]
-		item.URL = r.withTheme(item.URL, theme)
-		item.PreviewURL = r.withTheme(item.PreviewURL, theme)
-		item.EditURL = r.withTheme(item.EditURL, theme)
-		item.DownloadURL = r.withTheme(item.DownloadURL, theme)
-		item.DeleteURL = r.withTheme(item.DeleteURL, theme)
+		item.URL = r.withState(item.URL, theme, wrap, pane, column)
+		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap, pane, column)
+		item.EditURL = r.withState(item.EditURL, theme, wrap, pane, column)
+		item.DownloadURL = r.withState(item.DownloadURL, theme, wrap, pane, column)
+		item.DeleteURL = r.withState(item.DeleteURL, theme, wrap, pane, column)
 	}
 	return data
 }
@@ -138,7 +158,84 @@ func requestedTheme(request *http.Request) string {
 	return ""
 }
 
-func (r *renderer) withTheme(target, theme string) string {
+// requestedWrap reports the preview wrap preference from the URL. Wrap is on
+// by default; "off" is the only explicit state, mirroring requestedTheme.
+func requestedWrap(request *http.Request) string {
+	if request != nil && request.URL != nil && request.URL.Query().Get("wrap") == "off" {
+		return "off"
+	}
+	return ""
+}
+
+// requestedPreviewPane reports the large-screen preview pane state from the
+// URL. The pane is expanded by default; "collapsed" is the only explicit
+// state, mirroring requestedWrap.
+func requestedPreviewPane(request *http.Request) string {
+	if request != nil && request.URL != nil && request.URL.Query().Get("pane") == "collapsed" {
+		return "collapsed"
+	}
+	return ""
+}
+
+// previewColumns are the discrete large-screen preview column widths offered
+// by the width control, in cycle order from narrowest to widest. The
+// directory listing takes the remainder of Bootstrap's twelve-column row, so
+// the two always share the full row.
+var previewColumns = []string{"4", "5", "6", "8", "9"}
+
+// defaultColumn is the preview width of the current layout (col-lg-5); it
+// stays out of the URL the way the other defaults do.
+const defaultColumn = "5"
+
+// requestedColumn reports the large-screen preview column width from the
+// URL. The default width stays out of the URL, mirroring the other
+// preferences; values outside the offered set fall back to the default so a
+// hand-edited URL can never break the row.
+func requestedColumn(request *http.Request) string {
+	if request != nil && request.URL != nil {
+		if width := request.URL.Query().Get("width"); isValidColumn(width) {
+			return width
+		}
+	}
+	return defaultColumn
+}
+
+func isValidColumn(width string) bool {
+	for _, candidate := range previewColumns {
+		if candidate == width {
+			return true
+		}
+	}
+	return false
+}
+
+// listingColumn reports the width the directory listing takes while the
+// preview column takes width: together they must fill the twelve-column row.
+func listingColumn(width string) string {
+	value, err := strconv.Atoi(width)
+	if err != nil || value < 1 || value > 11 {
+		return strconv.Itoa(12 - 5)
+	}
+	return strconv.Itoa(12 - value)
+}
+
+// nextColumn reports the width that follows width in the cycle, wrapping from
+// the widest back to the narrowest.
+func nextColumn(width string) string {
+	for i, candidate := range previewColumns {
+		if candidate == width {
+			return previewColumns[(i+1)%len(previewColumns)]
+		}
+	}
+	return previewColumns[0]
+}
+
+// withState applies the URL-driven page preferences to a link the way the
+// theme parameter already rides every explorer link: each preference is
+// present only in its non-default state (theme=dark, wrap=off,
+// pane=collapsed, width=N), so defaults stay out of the URL and navigation
+// carries the user's choices forward.
+func (r *renderer) withState(target string, theme, wrap, pane, column string) string {
 	if target == "" {
 		return ""
 	}
@@ -152,8 +249,35 @@ func (r *renderer) withTheme(target, theme string) string {
 	} else {
 		query.Del("theme")
 	}
+	if wrap == "off" {
+		query.Set("wrap", "off")
+	} else {
+		query.Del("wrap")
+	}
+	if pane == "collapsed" {
+		query.Set("pane", "collapsed")
+	} else {
+		query.Del("pane")
+	}
+	if column != defaultColumn {
+		query.Set("width", column)
+	} else {
+		query.Del("width")
+	}
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+// canonicalQuery aligns the width parameter with what the page actually
+// rendered: an invalid value and the default drop out of the URL the way the
+// other defaults do, since the page falls back to the default width for both
+// anyway. A valid non-default width is kept so the preference survives the
+// round trip.
+func canonicalQuery(query url.Values) {
+	width := query.Get("width")
+	if !isValidColumn(width) || width == defaultColumn {
+		query.Del("width")
+	}
 }
 
 func (r *renderer) toggleThemeURL(current *url.URL, theme string) string {
@@ -170,6 +294,79 @@ func (r *renderer) toggleThemeURL(current *url.URL, theme string) string {
 	} else {
 		query.Set("theme", "dark")
 	}
+	canonicalQuery(query)
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// toggleWrapURL flips the wrap preference on the current page's URL, keeping
+// every other query value, mirroring toggleThemeURL.
+func (r *renderer) toggleWrapURL(current *url.URL, wrap string) string {
+	if current == nil {
+		return "/?wrap=off"
+	}
+	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	query := current.Query()
+	if wrap == "off" {
+		query.Del("wrap")
+	} else {
+		query.Set("wrap", "off")
+	}
+	canonicalQuery(query)
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// toggleColumnURL advances the large-screen preview column width through the
+// offered set on the current page's URL, keeping every other query value,
+// mirroring togglePreviewPaneURL. The toggle always targets the page's own
+// path, so the selected file survives the round trip, and the default width
+// drops out of the URL the way the other defaults do.
+func (r *renderer) toggleColumnURL(current *url.URL, column string) string {
+	next := nextColumn(column)
+	if current == nil {
+		if next == defaultColumn {
+			return "/"
+		}
+		return "/?width=" + next
+	}
+	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	query := current.Query()
+	if next == defaultColumn {
+		query.Del("width")
+	} else {
+		query.Set("width", next)
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// togglePreviewPaneURL flips the large-screen preview pane state on the
+// current page's URL, keeping every other query value, mirroring
+// toggleWrapURL. The toggle always targets the page's own path, so expanding
+// restores the preview for the same file the page rendered and the selected
+// file survives the round trip.
+func (r *renderer) togglePreviewPaneURL(current *url.URL, pane string) string {
+	if current == nil {
+		return "/?pane=collapsed"
+	}
+	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	query := current.Query()
+	if pane == "collapsed" {
+		query.Del("pane")
+	} else {
+		query.Set("pane", "collapsed")
+	}
+	canonicalQuery(query)
 	u.RawQuery = query.Encode()
 	return u.String()
 }

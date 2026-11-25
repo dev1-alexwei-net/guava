@@ -17,7 +17,7 @@ GitHub Actions publishes two images to GHCR:
 - `ghcr.io/dev1-alexwei-net/guava/fileexplorer`
 - `ghcr.io/dev1-alexwei-net/guava/executor`
 
-Each tag is a multi-platform image index for `linux/amd64` and `linux/arm64`; Docker selects the matching platform when pulling. Pushes to `main` publish `main` and `latest`.
+Each tag is a multi-platform image index for `linux/amd64` and `linux/arm64`; Docker selects the matching platform when pulling. Pushes to `main` publish the next automatic patch release: both images carry that version tag (for example `1.0.3`) in addition to `main` and `latest`, and the workflow then creates the matching `v1.0.3` git tag on the pushed commit. The next patch version is one above the highest existing `vMAJOR.MINOR.PATCH` git tag, seeded at `0.1.0` until the first release tag exists.
 
 Run the file explorer with its files and database persisted outside the container:
 

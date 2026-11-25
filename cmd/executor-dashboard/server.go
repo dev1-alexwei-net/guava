@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dev1-alexwei-net/guava/executor"
+	"github.com/dev1-alexwei-net/guava/internal/version"
 )
 
 //go:embed templates/index.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
@@ -23,6 +24,7 @@ type dashboard struct {
 
 type dashboardPageData struct {
 	Status           string
+	Version          string
 	Logs             string
 	LastErr          string
 	Error            string
@@ -97,6 +99,7 @@ func pageData(snapshot executorSnapshot, query url.Values) dashboardPageData {
 
 	return dashboardPageData{
 		Status:           snapshot.Status,
+		Version:          version.SemVer,
 		Logs:             snapshot.Logs,
 		LastErr:          snapshot.LastErr,
 		Refresh:          refresh,

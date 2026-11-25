@@ -3,14 +3,20 @@ FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 
+# Package version injected into both binaries' version package. Defaults to
+# "dev" so local docker builds are clearly development builds; the publish
+# workflow passes the resolved release version.
+ARG VERSION=dev
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY executor/ ./executor/
 COPY cmd/executor/ ./cmd/executor/
 COPY cmd/executor-dashboard/ ./cmd/executor-dashboard/
-RUN mkdir -p /out && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/executor ./cmd/executor
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/executor-dashboard ./cmd/executor-dashboard
+COPY internal/ ./internal/
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/dev1-alexwei-net/guava/internal/version.SemVer=${VERSION}" -o /out/executor ./cmd/executor
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/dev1-alexwei-net/guava/internal/version.SemVer=${VERSION}" -o /out/executor-dashboard ./cmd/executor-dashboard
 
 FROM alpine:3.23
 

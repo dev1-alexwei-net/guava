@@ -13,6 +13,12 @@
        overflow-wrap: anywhere breaks even unbreakable tokens. overflow-auto
        remains on the element as a fallback. */
     .preview-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+    /* Keep the preview pane a stable, bounded height on small displays so long
+       files scroll vertically inside the pane (overflow-auto on the element)
+       instead of pushing the directory listing and action cards off-screen.
+       The bound is kept at lg and up, so the sticky two-column layout is
+       unchanged. */
+    .preview-content { max-height: 480px; }
   </style>
 </head>
 <body class="bg-body-tertiary">
@@ -139,7 +145,7 @@
             <div class="alert alert-secondary mb-3" role="note">{{.PreviewNote}}</div>
             <a class="btn btn-primary" href="{{.PreviewDownloadURL}}">Download file</a>
             {{else}}
-            <pre class="preview-content bg-body-secondary border rounded p-3 mb-0 overflow-auto font-monospace small" style="max-height: 480px;" tabindex="0">{{.PreviewContent}}</pre>
+            <pre class="preview-content bg-body-secondary border rounded p-3 mb-0 overflow-auto font-monospace small" tabindex="0">{{.PreviewContent}}</pre>
             {{end}}
           </div>
         </section>

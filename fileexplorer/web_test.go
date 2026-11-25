@@ -126,6 +126,44 @@ func TestUnpreviewableFileOffersDownloadFromPreviewState(t *testing.T) {
 	}
 }
 
+// TestPreviewPaneKeepsBoundedHeightWithInternalScroll pins the fixed-size
+// small-screen behavior: the preview content has a stylesheet-bounded height
+// and scrolls vertically inside the pane, so long files do not push the
+// directory listing and action cards off-screen.
+func TestPreviewPaneKeepsBoundedHeightWithInternalScroll(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "long.txt"), []byte(strings.Repeat("a line of file content\n", 400)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/preview/long.txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /preview/long.txt status=%d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "a line of file content") {
+		t.Fatal("preview did not render the long file content")
+	}
+	// The bounded height must live in the stylesheet where it is documented
+	// for small displays, not in a fragile inline attribute.
+	if !strings.Contains(body, ".preview-content { max-height: 480px; }") {
+		t.Error("preview pane is missing the bounded-height stylesheet rule")
+	}
+	if strings.Contains(body, `style="max-height: 480px;"`) {
+		t.Error("bounded height is set inline instead of in the stylesheet")
+	}
+	// Vertical scrolling inside the pane is what keeps the listing and action
+	// cards reachable, and the content must stay keyboard-scrollable.
+	if !strings.Contains(body, `overflow-auto`) {
+		t.Error("preview content lost its overflow-auto in-pane scrolling")
+	}
+	if !strings.Contains(body, `tabindex="0"`) {
+		t.Error("preview content is no longer keyboard-scrollable")
+	}
+	assertNoClientSideJavaScript(t, body)
+}
+
 func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 	cases := []struct {
 		name string

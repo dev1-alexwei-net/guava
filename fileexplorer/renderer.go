@@ -27,36 +27,38 @@ func newRenderer() *renderer {
 }
 
 type pageData struct {
-	Theme              string
-	Wrap               string
-	HomeURL            string
-	ThemeToggleURL     string
-	WrapToggleURL      string
-	RenameAction       string
-	MkdirAction        string
-	CreateFileAction   string
-	UploadAction       string
-	DeleteAction       string
-	Current            string
-	Breadcrumbs        []breadcrumb
-	ParentURL          string
-	Items              []pageItem
-	Error              string
-	Editor             bool
-	EditorPath         string
-	EditorURL          string
-	Content            string
-	Saved              bool
-	PreviewPath        string
-	PreviewName        string
-	PreviewContent     string
-	PreviewNote        string
-	PreviewReturnURL   string
-	PreviewDownloadURL string
-	ConfirmDelete      bool
-	DeletePath         string
-	DeleteName         string
-	ReturnURL          string
+	Theme                string
+	Wrap                 string
+	PreviewPane          string
+	HomeURL              string
+	ThemeToggleURL       string
+	WrapToggleURL        string
+	PreviewPaneToggleURL string
+	RenameAction         string
+	MkdirAction          string
+	CreateFileAction     string
+	UploadAction         string
+	DeleteAction         string
+	Current              string
+	Breadcrumbs          []breadcrumb
+	ParentURL            string
+	Items                []pageItem
+	Error                string
+	Editor               bool
+	EditorPath           string
+	EditorURL            string
+	Content              string
+	Saved                bool
+	PreviewPath          string
+	PreviewName          string
+	PreviewContent       string
+	PreviewNote          string
+	PreviewReturnURL     string
+	PreviewDownloadURL   string
+	ConfirmDelete        bool
+	DeletePath           string
+	DeleteName           string
+	ReturnURL            string
 }
 
 type breadcrumb struct {
@@ -107,31 +109,34 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 
 	theme := requestedTheme(request)
 	wrap := requestedWrap(request)
+	pane := requestedPreviewPane(request)
 	data.Theme = theme
 	data.Wrap = wrap
-	data.HomeURL = r.withState("/", theme, wrap)
+	data.PreviewPane = pane
+	data.HomeURL = r.withState("/", theme, wrap, pane)
 	data.ThemeToggleURL = r.toggleThemeURL(request.URL, theme)
 	data.WrapToggleURL = r.toggleWrapURL(request.URL, wrap)
-	data.RenameAction = r.withState("/rename", theme, wrap)
-	data.MkdirAction = r.withState("/mkdir", theme, wrap)
-	data.CreateFileAction = r.withState("/create-file", theme, wrap)
-	data.UploadAction = r.withState("/upload", theme, wrap)
-	data.DeleteAction = r.withState("/delete", theme, wrap)
-	data.ParentURL = r.withState(data.ParentURL, theme, wrap)
-	data.EditorURL = r.withState(data.EditorURL, theme, wrap)
-	data.PreviewReturnURL = r.withState(data.PreviewReturnURL, theme, wrap)
-	data.PreviewDownloadURL = r.withState(data.PreviewDownloadURL, theme, wrap)
-	data.ReturnURL = r.withState(data.ReturnURL, theme, wrap)
+	data.PreviewPaneToggleURL = r.togglePreviewPaneURL(request.URL, pane)
+	data.RenameAction = r.withState("/rename", theme, wrap, pane)
+	data.MkdirAction = r.withState("/mkdir", theme, wrap, pane)
+	data.CreateFileAction = r.withState("/create-file", theme, wrap, pane)
+	data.UploadAction = r.withState("/upload", theme, wrap, pane)
+	data.DeleteAction = r.withState("/delete", theme, wrap, pane)
+	data.ParentURL = r.withState(data.ParentURL, theme, wrap, pane)
+	data.EditorURL = r.withState(data.EditorURL, theme, wrap, pane)
+	data.PreviewReturnURL = r.withState(data.PreviewReturnURL, theme, wrap, pane)
+	data.PreviewDownloadURL = r.withState(data.PreviewDownloadURL, theme, wrap, pane)
+	data.ReturnURL = r.withState(data.ReturnURL, theme, wrap, pane)
 	for i := range data.Breadcrumbs {
-		data.Breadcrumbs[i].URL = r.withState(data.Breadcrumbs[i].URL, theme, wrap)
+		data.Breadcrumbs[i].URL = r.withState(data.Breadcrumbs[i].URL, theme, wrap, pane)
 	}
 	for i := range data.Items {
 		item := &data.Items[i]
-		item.URL = r.withState(item.URL, theme, wrap)
-		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap)
-		item.EditURL = r.withState(item.EditURL, theme, wrap)
-		item.DownloadURL = r.withState(item.DownloadURL, theme, wrap)
-		item.DeleteURL = r.withState(item.DeleteURL, theme, wrap)
+		item.URL = r.withState(item.URL, theme, wrap, pane)
+		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap, pane)
+		item.EditURL = r.withState(item.EditURL, theme, wrap, pane)
+		item.DownloadURL = r.withState(item.DownloadURL, theme, wrap, pane)
+		item.DeleteURL = r.withState(item.DeleteURL, theme, wrap, pane)
 	}
 	return data
 }
@@ -152,11 +157,22 @@ func requestedWrap(request *http.Request) string {
 	return ""
 }
 
+// requestedPreviewPane reports the large-screen preview pane state from the
+// URL. The pane is expanded by default; "collapsed" is the only explicit
+// state, mirroring requestedWrap.
+func requestedPreviewPane(request *http.Request) string {
+	if request != nil && request.URL != nil && request.URL.Query().Get("pane") == "collapsed" {
+		return "collapsed"
+	}
+	return ""
+}
+
 // withState applies the URL-driven page preferences to a link the way the
 // theme parameter already rides every explorer link: each preference is
-// present only in its non-default state (theme=dark, wrap=off), so defaults
-// stay out of the URL and navigation carries the user's choices forward.
-func (r *renderer) withState(target string, theme, wrap string) string {
+// present only in its non-default state (theme=dark, wrap=off,
+// pane=collapsed), so defaults stay out of the URL and navigation carries
+// the user's choices forward.
+func (r *renderer) withState(target string, theme, wrap, pane string) string {
 	if target == "" {
 		return ""
 	}
@@ -174,6 +190,11 @@ func (r *renderer) withState(target string, theme, wrap string) string {
 		query.Set("wrap", "off")
 	} else {
 		query.Del("wrap")
+	}
+	if pane == "collapsed" {
+		query.Set("pane", "collapsed")
+	} else {
+		query.Del("pane")
 	}
 	u.RawQuery = query.Encode()
 	return u.String()
@@ -212,6 +233,29 @@ func (r *renderer) toggleWrapURL(current *url.URL, wrap string) string {
 		query.Del("wrap")
 	} else {
 		query.Set("wrap", "off")
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// togglePreviewPaneURL flips the large-screen preview pane state on the
+// current page's URL, keeping every other query value, mirroring
+// toggleWrapURL. The toggle always targets the page's own path, so expanding
+// restores the preview for the same file the page rendered and the selected
+// file survives the round trip.
+func (r *renderer) togglePreviewPaneURL(current *url.URL, pane string) string {
+	if current == nil {
+		return "/?pane=collapsed"
+	}
+	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	query := current.Query()
+	if pane == "collapsed" {
+		query.Del("pane")
+	} else {
+		query.Set("pane", "collapsed")
 	}
 	u.RawQuery = query.Encode()
 	return u.String()

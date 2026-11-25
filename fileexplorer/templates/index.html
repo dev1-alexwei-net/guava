@@ -92,11 +92,16 @@
         <div class="row g-4">
           <!-- Keyboard focus follows DOM order: the listing comes first so rows precede the
      preview pane; the order utilities below keep the visual layout unchanged. -->
-          <div class="col-12 col-lg-7 order-2 order-lg-1">
+          <div class="col-12{{if ne .PreviewPane "collapsed"}} col-lg-7{{end}} order-2 order-lg-1">
             <section class="card shadow-sm border-0" aria-label="Directory contents">
           <div class="card-header bg-body d-flex justify-content-between align-items-center gap-2">
             <h2 class="h6 mb-0">Contents</h2>
-            <span class="badge rounded-pill text-bg-secondary">{{len .Items}} items</span>
+            <span class="d-inline-flex align-items-center gap-2">
+              <span class="badge rounded-pill text-bg-secondary">{{len .Items}} items</span>
+              {{if eq .PreviewPane "collapsed"}}
+              <a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="{{.PreviewPaneToggleURL}}" aria-pressed="false">Expand preview</a>
+              {{end}}
+            </span>
           </div>
           <ul class="list-group list-group-flush">
             {{range .Items}}
@@ -136,7 +141,7 @@
             </section>
           </div>
 
-          <div class="col-12 col-lg-5 order-1 order-lg-2">
+          <div class="col-12{{if ne .PreviewPane "collapsed"}} col-lg-5{{end}} order-1 order-lg-2{{if eq .PreviewPane "collapsed"}} d-lg-none{{end}}">
             {{if .PreviewPath}}
             <section class="card shadow-sm border-0 sticky-lg-top" aria-labelledby="preview-heading">
               <div class="card-header bg-body d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -147,6 +152,9 @@
               {{end}}
               <a class="btn btn-outline-primary btn-sm" href="{{.PreviewDownloadURL}}">Download</a>
               <a class="btn btn-outline-secondary btn-sm" href="{{.PreviewReturnURL}}">Hide preview</a>
+              {{if ne .PreviewPane "collapsed"}}
+              <a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-secondary" href="{{.PreviewPaneToggleURL}}" aria-pressed="true">Collapse preview</a>
+              {{end}}
             </div>
           </div>
           <div class="card-body">

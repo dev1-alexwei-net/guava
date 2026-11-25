@@ -688,6 +688,195 @@ func TestWrapStatePersistsAcrossNavigation(t *testing.T) {
 	}
 }
 
+func TestPreviewPaneCollapseSwitchesLayout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	expanded := get(t, h, "/preview/a.txt")
+	if expanded.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt status=%d", expanded.Code)
+	}
+	body := expanded.Body.String()
+	// The default layout keeps the two-column large-screen arrangement.
+	if !strings.Contains(body, `class="col-12 col-lg-7 order-2 order-lg-1"`) {
+		t.Error("expanded page does not keep the large-screen listing column")
+	}
+	if !strings.Contains(body, `class="col-12 col-lg-5 order-1 order-lg-2"`) {
+		t.Error("expanded page does not keep the large-screen preview column")
+	}
+	// The header offers a collapse control whose URL records the state.
+	if !strings.Contains(body, `<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-secondary" href="/preview/a.txt?pane=collapsed" aria-pressed="true">Collapse preview</a>`) {
+		t.Errorf("expanded header does not offer a collapse control: %s", body)
+	}
+	if !strings.Contains(body, `>Hide preview</a>`) {
+		t.Error("expanded header lost the small-screen hide control")
+	}
+	if strings.Contains(body, "Expand preview") {
+		t.Error("expanded header renders the expand control")
+	}
+	// Only the control may mention pane=collapsed on a default page.
+	if count := strings.Count(body, "pane=collapsed"); count != 1 {
+		t.Errorf("expanded page mentions pane=collapsed %d times, want exactly the control", count)
+	}
+	assertNoClientSideJavaScript(t, body)
+
+	collapsed := get(t, h, "/preview/a.txt?pane=collapsed")
+	if collapsed.Code != http.StatusOK {
+		t.Fatalf("GET /preview/a.txt?pane=collapsed status=%d", collapsed.Code)
+	}
+	body = collapsed.Body.String()
+	// The collapsed layout gives the listing the full large-screen row and hides
+	// the preview column at lg and up, while small screens keep the stacked pane.
+	if !strings.Contains(body, `class="col-12 order-2 order-lg-1"`) {
+		t.Error("collapsed page does not give the listing the full large-screen row")
+	}
+	if !strings.Contains(body, `class="col-12 order-1 order-lg-2 d-lg-none"`) {
+		t.Error("collapsed page does not hide the preview column on large screens")
+	}
+	// Restoring keeps the selected file: the control targets the same preview URL.
+	if !strings.Contains(body, `<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/a.txt" aria-pressed="false">Expand preview</a>`) {
+		t.Errorf("collapsed page does not offer an expand control back to the selected file: %s", body)
+	}
+	if strings.Contains(body, "Collapse preview") {
+		t.Error("collapsed page renders the collapse control")
+	}
+	// The selection and its state still render for the small-screen pane.
+	if !strings.Contains(body, `aria-current="true"`) || !strings.Contains(body, `>Selected</span>`) {
+		t.Error("collapsed page lost the selected-file state")
+	}
+	if !strings.Contains(body, `>Hide preview</a>`) {
+		t.Error("collapsed page lost the small-screen hide control")
+	}
+	assertNoClientSideJavaScript(t, body)
+}
+
+func TestPreviewPaneTogglePreservesThemeAndOtherQuery(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	expanded := get(t, h, "/preview/a.txt?theme=dark&saved=1")
+	if expanded.Code != http.StatusOK {
+		t.Fatalf("expanded dark preview status=%d body=%s", expanded.Code, expanded.Body.String())
+	}
+	if !strings.Contains(expanded.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
+		t.Fatal("expanded preview did not keep the dark theme")
+	}
+	if !strings.Contains(expanded.Body.String(), `<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-secondary" href="/preview/a.txt?pane=collapsed&amp;saved=1&amp;theme=dark" aria-pressed="true">Collapse preview</a>`) {
+		t.Error("collapse control does not record the state while preserving theme and other query values")
+	}
+
+	collapsed := get(t, h, "/preview/a.txt?theme=dark&wrap=off&saved=1&pane=collapsed")
+	if collapsed.Code != http.StatusOK {
+		t.Fatalf("collapsed dark preview status=%d body=%s", collapsed.Code, collapsed.Body.String())
+	}
+	if !strings.Contains(collapsed.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
+		t.Fatal("collapsed preview did not keep the dark theme")
+	}
+	if !strings.Contains(collapsed.Body.String(), `<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/a.txt?saved=1&amp;theme=dark&amp;wrap=off" aria-pressed="false">Expand preview</a>`) {
+		t.Error("expand control does not restore the pane while preserving theme, wrap, and other query values")
+	}
+	// The theme toggle from the collapsed page keeps the collapsed state, so the
+	// pane state survives theme toggles.
+	if !strings.Contains(collapsed.Body.String(), `href="/preview/a.txt?pane=collapsed&amp;saved=1&amp;wrap=off">Light mode</a>`) {
+		t.Error("theme toggle does not preserve the collapsed pane state")
+	}
+}
+
+func TestPreviewPaneStatePersistsAcrossNavigation(t *testing.T) {
+	root := t.TempDir()
+	docs := filepath.Join(root, "docs")
+	if err := os.Mkdir(docs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"root.txt":                        "root",
+		filepath.Join("docs", "note.txt"): "note",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := makeTestHandler(t, root)
+
+	directory := get(t, h, "/?pane=collapsed")
+	if directory.Code != http.StatusOK {
+		t.Fatalf("collapsed root status=%d body=%s", directory.Code, directory.Body.String())
+	}
+	for _, want := range []string{
+		`href="/?pane=collapsed">Guava</a>`,
+		`href="/?pane=collapsed">Root</a>`,
+		`href="/d/docs?pane=collapsed">docs/</a>`,
+		`href="/preview/root.txt?pane=collapsed">root.txt</a>`,
+		`href="/edit/root.txt?pane=collapsed">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;pane=collapsed">Download</a>`,
+		`href="/confirm-delete/root.txt?pane=collapsed"`,
+		`action="/rename?pane=collapsed"`,
+		`action="/mkdir?pane=collapsed"`,
+		`action="/create-file?pane=collapsed"`,
+		`action="/upload?pane=collapsed"`,
+	} {
+		if !strings.Contains(directory.Body.String(), want) {
+			t.Errorf("collapsed root page missing %q", want)
+		}
+	}
+
+	preview := get(t, h, "/preview/docs/note.txt?pane=collapsed")
+	if preview.Code != http.StatusOK {
+		t.Fatalf("collapsed preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	for _, want := range []string{
+		`class="col-12 order-2 order-lg-1"`,
+		`class="col-12 order-1 order-lg-2 d-lg-none"`,
+		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/docs/note.txt" aria-pressed="false">Expand preview</a>`,
+		`href="/d/docs?pane=collapsed">Hide preview</a>`,
+		`href="/f/docs/note.txt?download=1&amp;pane=collapsed">Download</a>`,
+	} {
+		if !strings.Contains(preview.Body.String(), want) {
+			t.Errorf("collapsed preview page missing %q", want)
+		}
+	}
+
+	editor := get(t, h, "/edit/docs/note.txt?pane=collapsed")
+	if editor.Code != http.StatusOK {
+		t.Fatalf("collapsed editor status=%d body=%s", editor.Code, editor.Body.String())
+	}
+	if !strings.Contains(editor.Body.String(), `action="/edit/docs/note.txt?pane=collapsed"`) ||
+		!strings.Contains(editor.Body.String(), `href="/d/docs?pane=collapsed">Cancel</a>`) {
+		t.Fatalf("editor page lost pane state: body=%s", editor.Body.String())
+	}
+	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?pane=collapsed", url.Values{"content": {"saved"}})
+	if saved.Code != http.StatusSeeOther {
+		t.Fatalf("collapsed editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
+	}
+	savedURL, err := url.Parse(saved.Header().Get("Location"))
+	if err != nil || savedURL.Query().Get("pane") != "collapsed" || savedURL.Query().Get("saved") != "1" {
+		t.Fatalf("editor save redirect did not preserve pane state: location=%q err=%v", saved.Header().Get("Location"), err)
+	}
+
+	created := formRequest(t, h, http.MethodPost, "/mkdir?pane=collapsed", url.Values{"parent": {"docs"}, "name": {"created"}})
+	createdURL, err := url.Parse(created.Header().Get("Location"))
+	if created.Code != http.StatusSeeOther || err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("pane") != "collapsed" {
+		t.Fatalf("mkdir redirect lost pane state: location=%q err=%v", created.Header().Get("Location"), err)
+	}
+
+	confirmation := get(t, h, "/confirm-delete/docs/created?pane=collapsed")
+	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?pane=collapsed"`) ||
+		!strings.Contains(confirmation.Body.String(), `href="/d/docs?pane=collapsed">Cancel</a>`) {
+		t.Fatalf("collapsed delete confirmation lost pane state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	deleted := formRequest(t, h, http.MethodPost, "/delete?pane=collapsed", url.Values{"path": {"docs/created"}})
+	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
+	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("pane") != "collapsed" {
+		t.Fatalf("delete redirect lost pane state: location=%q err=%v", deleted.Header().Get("Location"), err)
+	}
+}
+
 func TestDarkThemePersistsAcrossMutationsAndErrors(t *testing.T) {
 	root := t.TempDir()
 	docs := filepath.Join(root, "docs")

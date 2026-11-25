@@ -65,6 +65,7 @@ func run() error {
 		AuthToken:        os.Getenv("OPENCLAW_AUTH_TOKEN"),
 		HTTPClient:       newGatewayHTTPClient(*verifyTLS),
 		Logger:           newLogger(os.Stderr, parsedLogLevel),
+		CLIArgs:          strings.Join(os.Args, " "),
 	})
 	if err != nil {
 		return err

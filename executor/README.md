@@ -15,6 +15,7 @@ Create an `executor.Config` with:
 - `AuthToken`: optional bearer token. Leave it empty when authentication is provided by a trusted proxy or private no-auth ingress.
 - `HTTPClient`: optional HTTP client override; the package uses `http.DefaultClient` when omitted.
 - `Logger`: optional structured logger. A nil logger disables package logging.
+- `CLIArgs`: optional raw dump of the command line the server was started with, for example `strings.Join(os.Args, " ")`. It is carried as-is in the session summary and never parsed; leave it empty when the executor has no command line to report.
 
 ## Library example
 
@@ -119,6 +120,24 @@ for !queue.Empty() {
 	// process path
 }
 ```
+
+## Session summary
+
+`Summary` is a read-only snapshot of the executor session, returned by `Executor.SessionSummary`. The accessor is guarded by a mutex, so it is safe to call from any goroutine, and before, during, or after a run:
+
+- `AgentID`: the OpenClaw agent the executor was configured with.
+- `CLIArgs`: the raw dump of the command line the server was started with, carried exactly as configured and never parsed into fields.
+- `Status`: one of `idle` (before the first run), `running` (while `Run` is active), and the terminal state after a run ends: `completed`, `failed`, or `stopped` (a run canceled through its context).
+- `StartedAt`: when the most recent run started; zero before the first run.
+
+```go
+summary := runner.SessionSummary()
+if summary.Status == executor.StatusRunning {
+	// session is active
+}
+```
+
+Per-file outcomes, discovered/processed/queued counts, current file, and turn counters are not part of the summary and are deferred to a follow-up story.
 
 ## Processing behavior
 

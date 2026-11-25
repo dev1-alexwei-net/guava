@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Config describes the file source and OpenClaw Gateway used by an Executor.
@@ -44,11 +46,21 @@ type Config struct {
 	// Logger receives structured progress and Gateway request details. A nil
 	// logger disables package logging.
 	Logger *slog.Logger
+
+	// CLIArgs is a raw dump of the command line the server was started with,
+	// for example strings.Join(os.Args, " "). It is carried as-is in the
+	// session summary and never parsed; leave it empty when the executor has
+	// no command line to report.
+	CLIArgs string
 }
 
 // Executor holds validated configuration for a file-processing run.
 type Executor struct {
 	config Config
+
+	mu        sync.Mutex
+	status    string
+	startedAt time.Time
 }
 
 // New validates config and returns an Executor.
@@ -63,7 +75,10 @@ func New(config Config) (*Executor, error) {
 		config.HTTPClient = http.DefaultClient
 	}
 
-	return &Executor{config: config}, nil
+	return &Executor{
+		config: config,
+		status: StatusIdle,
+	}, nil
 }
 
 // Validate reports missing required values or an invalid Gateway or

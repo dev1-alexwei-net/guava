@@ -216,7 +216,7 @@ func TestRowActionsRevealOnHoverAndFocusForDesktop(t *testing.T) {
 		t.Error(":focus-within reveal must be immediate, with no transition")
 	}
 	// Every action stays present, labeled, and reachable in both entry kinds.
-	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</button>`, `>Delete</a>`} {
+	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</a>`, `>Delete</a>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("row action %q missing from the listing", want)
 		}
@@ -250,10 +250,9 @@ func TestRowActionsTouchContract(t *testing.T) {
 	if touchGate < 0 {
 		t.Fatal("touch sizing styles are missing their @media (hover: none) gate")
 	}
-	// …and the >= 44 px hit-target rule for every row action control — the
-	// link buttons and the rename form's input — is inside that gate, so
-	// desktop sizing is untouched.
-	rule := "li.list-group-item .row-actions .btn, li.list-group-item .row-actions .form-control { min-height: 44px; }"
+	// …and the >= 44 px hit-target rule for the row's link buttons is inside
+	// that gate, so desktop sizing is untouched.
+	rule := "li.list-group-item .row-actions .btn { min-height: 44px; }"
 	pos := strings.Index(body, rule)
 	if pos < 0 {
 		t.Fatal("row action controls are missing the >= 44 px touch hit-target rule")
@@ -272,7 +271,7 @@ func TestRowActionsTouchContract(t *testing.T) {
 		t.Error("the only hidden rest state must stay inside the @media (hover: hover) gate")
 	}
 	// Touch targets keep their visible text labels — no icon-only fallback.
-	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</button>`, `>Delete</a>`} {
+	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</a>`, `>Delete</a>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("row action %q missing from the listing", want)
 		}
@@ -567,10 +566,10 @@ func TestDarkThemePersistsAcrossExplorerNavigation(t *testing.T) {
 		`href="/?theme=dark">Root</a>`,
 		`href="/d/docs?theme=dark">docs/</a>`,
 		`href="/preview/root.txt?theme=dark">root.txt</a>`,
-		`href="/edit/root.txt?theme=dark">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;theme=dark">Download</a>`,
+		`href="/edit/root.txt?theme=dark" aria-label="Edit root.txt">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;theme=dark" aria-label="Download root.txt">Download</a>`,
 		`href="/confirm-delete/root.txt?theme=dark"`,
-		`action="/rename?theme=dark"`,
+		`href="/rename/root.txt?theme=dark"`,
 		`action="/mkdir?theme=dark"`,
 		`action="/create-file?theme=dark"`,
 		`action="/upload?theme=dark"`,
@@ -741,10 +740,10 @@ func TestWrapStatePersistsAcrossNavigation(t *testing.T) {
 		`href="/?wrap=off">Root</a>`,
 		`href="/d/docs?wrap=off">docs/</a>`,
 		`href="/preview/root.txt?wrap=off">root.txt</a>`,
-		`href="/edit/root.txt?wrap=off">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;wrap=off">Download</a>`,
+		`href="/edit/root.txt?wrap=off" aria-label="Edit root.txt">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;wrap=off" aria-label="Download root.txt">Download</a>`,
 		`href="/confirm-delete/root.txt?wrap=off"`,
-		`action="/rename?wrap=off"`,
+		`href="/rename/root.txt?wrap=off"`,
 		`action="/mkdir?wrap=off"`,
 		`action="/create-file?wrap=off"`,
 		`action="/upload?wrap=off"`,
@@ -796,6 +795,11 @@ func TestWrapStatePersistsAcrossNavigation(t *testing.T) {
 	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?wrap=off"`) ||
 		!strings.Contains(confirmation.Body.String(), `href="/d/docs?wrap=off">Cancel</a>`) {
 		t.Fatalf("wrap-off delete confirmation lost wrap state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	renamePage := get(t, h, "/rename/docs/created?wrap=off")
+	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `action="/rename?wrap=off"`) ||
+		!strings.Contains(renamePage.Body.String(), `href="/d/docs?wrap=off">Cancel</a>`) {
+		t.Fatalf("wrap-off rename page lost wrap state: status=%d body=%s", renamePage.Code, renamePage.Body.String())
 	}
 	deleted := formRequest(t, h, http.MethodPost, "/delete?wrap=off", url.Values{"path": {"docs/created"}})
 	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
@@ -929,10 +933,10 @@ func TestPreviewPaneStatePersistsAcrossNavigation(t *testing.T) {
 		`href="/?pane=collapsed">Root</a>`,
 		`href="/d/docs?pane=collapsed">docs/</a>`,
 		`href="/preview/root.txt?pane=collapsed">root.txt</a>`,
-		`href="/edit/root.txt?pane=collapsed">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;pane=collapsed">Download</a>`,
+		`href="/edit/root.txt?pane=collapsed" aria-label="Edit root.txt">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;pane=collapsed" aria-label="Download root.txt">Download</a>`,
 		`href="/confirm-delete/root.txt?pane=collapsed"`,
-		`action="/rename?pane=collapsed"`,
+		`href="/rename/root.txt?pane=collapsed"`,
 		`action="/mkdir?pane=collapsed"`,
 		`action="/create-file?pane=collapsed"`,
 		`action="/upload?pane=collapsed"`,
@@ -985,6 +989,11 @@ func TestPreviewPaneStatePersistsAcrossNavigation(t *testing.T) {
 	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?pane=collapsed"`) ||
 		!strings.Contains(confirmation.Body.String(), `href="/d/docs?pane=collapsed">Cancel</a>`) {
 		t.Fatalf("collapsed delete confirmation lost pane state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	renamePage := get(t, h, "/rename/docs/created?pane=collapsed")
+	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `action="/rename?pane=collapsed"`) ||
+		!strings.Contains(renamePage.Body.String(), `href="/d/docs?pane=collapsed">Cancel</a>`) {
+		t.Fatalf("collapsed rename page lost pane state: status=%d body=%s", renamePage.Code, renamePage.Body.String())
 	}
 	deleted := formRequest(t, h, http.MethodPost, "/delete?pane=collapsed", url.Values{"path": {"docs/created"}})
 	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
@@ -1101,10 +1110,10 @@ func TestPreviewColumnStatePersistsAcrossNavigation(t *testing.T) {
 		`href="/?width=8">Root</a>`,
 		`href="/d/docs?width=8">docs/</a>`,
 		`href="/preview/root.txt?width=8">root.txt</a>`,
-		`href="/edit/root.txt?width=8">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;width=8">Download</a>`,
+		`href="/edit/root.txt?width=8" aria-label="Edit root.txt">Edit</a>`,
+		`href="/f/root.txt?download=1&amp;width=8" aria-label="Download root.txt">Download</a>`,
 		`href="/confirm-delete/root.txt?width=8"`,
-		`action="/rename?width=8"`,
+		`href="/rename/root.txt?width=8"`,
 		`action="/mkdir?width=8"`,
 		`action="/create-file?width=8"`,
 		`action="/upload?width=8"`,
@@ -1158,6 +1167,11 @@ func TestPreviewColumnStatePersistsAcrossNavigation(t *testing.T) {
 	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?width=8"`) ||
 		!strings.Contains(confirmation.Body.String(), `href="/d/docs?width=8">Cancel</a>`) {
 		t.Fatalf("width delete confirmation lost width state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	renamePage := get(t, h, "/rename/docs/created?width=8")
+	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `action="/rename?width=8"`) ||
+		!strings.Contains(renamePage.Body.String(), `href="/d/docs?width=8">Cancel</a>`) {
+		t.Fatalf("width rename page lost width state: status=%d body=%s", renamePage.Code, renamePage.Body.String())
 	}
 	deleted := formRequest(t, h, http.MethodPost, "/delete?width=8", url.Values{"path": {"docs/created"}})
 	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
@@ -1236,6 +1250,12 @@ func TestDarkThemePersistsAcrossMutationsAndErrors(t *testing.T) {
 		!strings.Contains(confirmation.Body.String(), `action="/delete?theme=dark"`) ||
 		!strings.Contains(confirmation.Body.String(), `href="/d/docs?theme=dark">Cancel</a>`) {
 		t.Fatalf("dark delete confirmation did not preserve theme: status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	renamePage := get(t, h, "/rename/docs/created?theme=dark")
+	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `data-bs-theme="dark"`) ||
+		!strings.Contains(renamePage.Body.String(), `action="/rename?theme=dark"`) ||
+		!strings.Contains(renamePage.Body.String(), `href="/d/docs?theme=dark">Cancel</a>`) {
+		t.Fatalf("dark rename page did not preserve theme: status=%d body=%s", renamePage.Code, renamePage.Body.String())
 	}
 	deleted := formRequest(t, h, http.MethodPost, "/delete?theme=dark", url.Values{"path": {"docs/created"}})
 	deletedURL, err := url.Parse(deleted.Header().Get("Location"))

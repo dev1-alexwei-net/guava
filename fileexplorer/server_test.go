@@ -397,6 +397,75 @@ func TestCreateFileAndDeleteConfirmation(t *testing.T) {
 	}
 }
 
+func TestRenameConfirmationPage(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "note.txt"), []byte("note"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	// GET /rename/{path} presents the dedicated rename form with the entry's
+	// current name prefilled, and it must not touch the filesystem.
+	confirmation := httptest.NewRecorder()
+	h.ServeHTTP(confirmation, httptest.NewRequest(http.MethodGet, "/rename/docs/note.txt", nil))
+	if confirmation.Code != http.StatusOK {
+		t.Fatalf("rename page status=%d body=%s", confirmation.Code, confirmation.Body.String())
+	}
+	body := confirmation.Body.String()
+	for _, want := range []string{
+		`<h1 class="h3 mb-1">Rename entry</h1>`,
+		`<h2 class="h4" id="rename-heading">Rename note.txt</h2>`,
+		`<form action="/rename" method="post" class="d-flex flex-column flex-sm-row gap-2">`,
+		`<input type="hidden" name="old" value="docs/note.txt">`,
+		`<input class="form-control form-control-sm" name="new" value="note.txt" aria-label="New name for note.txt" required>`,
+		`<button class="btn btn-primary" type="submit">Confirm rename</button>`,
+		`<a class="btn btn-outline-secondary" href="/d/docs">Cancel</a>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rename page missing %q", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", "note.txt")); err != nil {
+		t.Fatalf("GET rename page changed the filesystem: %v", err)
+	}
+
+	// The listing links the row's Rename action to the dedicated page.
+	docsPage := get(t, h, "/d/docs")
+	if docsPage.Code != http.StatusOK ||
+		!strings.Contains(docsPage.Body.String(), `<a class="btn btn-outline-secondary btn-sm" href="/rename/docs/note.txt" aria-label="Rename note.txt">Rename</a>`) {
+		t.Errorf("directory listing does not link to the rename page: status=%d body=%s", docsPage.Code, docsPage.Body.String())
+	}
+
+	// The rename page preserves the listing's link state, mirroring the
+	// confirm-delete page.
+	styled := get(t, h, "/rename/docs/note.txt?theme=dark")
+	if styled.Code != http.StatusOK ||
+		!strings.Contains(styled.Body.String(), `<form action="/rename?theme=dark"`) ||
+		!strings.Contains(styled.Body.String(), `href="/d/docs?theme=dark">Cancel</a>`) {
+		t.Errorf("rename page lost theme state: status=%d body=%s", styled.Code, styled.Body.String())
+	}
+
+	// The form's POST commits the rename and lands back on the parent
+	// directory.
+	renamed := formRequest(t, h, http.MethodPost, "/rename", url.Values{"old": {"docs/note.txt"}, "new": {"renamed.txt"}})
+	if renamed.Code != http.StatusSeeOther || renamed.Header().Get("Location") != "/d/docs" {
+		t.Fatalf("rename redirect: status=%d location=%q body=%s", renamed.Code, renamed.Header().Get("Location"), renamed.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", "renamed.txt")); err != nil {
+		t.Fatalf("renamed file: %v", err)
+	}
+
+	// The root directory cannot be renamed, mirroring the delete page.
+	rootRename := httptest.NewRecorder()
+	h.ServeHTTP(rootRename, httptest.NewRequest(http.MethodGet, "/rename/", nil))
+	if rootRename.Code != http.StatusBadRequest {
+		t.Fatalf("rename root page status=%d want=%d body=%s", rootRename.Code, http.StatusBadRequest, rootRename.Body.String())
+	}
+}
+
 func TestDirectoryPageReflectsExternalFilesystemChanges(t *testing.T) {
 	root := t.TempDir()
 	h := makeTestHandler(t, root)

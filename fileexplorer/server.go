@@ -106,6 +106,7 @@ func (a *application) buildRoutes() http.Handler {
 	mux.Handle("GET /edit/{path...}", a.serialized(a.editorPage))
 	mux.Handle("POST /edit/{path...}", a.serialized(a.saveFile))
 	mux.Handle("GET /confirm-delete/{path...}", a.serialized(a.confirmDeletePage))
+	mux.Handle("GET /rename/{path...}", a.serialized(a.renamePage))
 	mux.Handle("GET /preview/{path...}", a.serialized(a.previewPage))
 	mux.HandleFunc("GET /static/bootstrap.min.css", a.renderer.Stylesheet)
 	mutations := []struct {
@@ -590,4 +591,31 @@ func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	e.writePage(w, r, http.StatusOK, e.renderer.DeleteConfirmation(e.filesystem.Relative(target)))
+}
+
+// renamePage presents the dedicated rename form for an entry, mirroring
+// confirmDeletePage: GET presents the form and POST /rename commits it. The
+// root directory cannot be renamed for the same reason it cannot be
+// deleted, and symbolic links stay read-only entries like on the delete
+// page.
+func (e *application) renamePage(w http.ResponseWriter, r *http.Request) {
+	target, err := e.filesystem.Resolve(r.PathValue("path"))
+	if err != nil {
+		e.pathError(w, r, err)
+		return
+	}
+	if target == e.filesystem.Path() {
+		e.renderError(w, r, http.StatusBadRequest, "Cannot rename the root directory")
+		return
+	}
+	info, err := e.filesystem.Lstat(e.filesystem.Relative(target))
+	if err != nil {
+		e.pathError(w, r, err)
+		return
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		e.pathError(w, r, errForbidden)
+		return
+	}
+	e.writePage(w, r, http.StatusOK, e.renderer.RenameConfirmation(e.filesystem.Relative(target)))
 }

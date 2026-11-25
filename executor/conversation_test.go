@@ -1,11 +1,14 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -307,6 +310,8 @@ func TestRunFileConversationRetriesHTTP500WithBackoffAndTokens(t *testing.T) {
 	config := validConfig()
 	config.GatewayURL = server.URL
 	config.HTTPClient = server.Client()
+	var logOutput bytes.Buffer
+	config.Logger = NewTextLogger(&logOutput, slog.LevelInfo)
 	fixedNow := time.Now()
 	executor := &Executor{
 		config:             config,
@@ -338,6 +343,24 @@ func TestRunFileConversationRetriesHTTP500WithBackoffAndTokens(t *testing.T) {
 	executor.conversationTokens.mu.Unlock()
 	if remainingTokens != 6 {
 		t.Errorf("remaining tokens = %v, want 6 after four requests", remainingTokens)
+	}
+	logs := logOutput.String()
+	if got := strings.Count(logs, `msg="Spent conversation token for OpenResponses request"`); got != 4 {
+		t.Errorf("token-spending log count = %d, want 4; logs:\n%s", got, logs)
+	}
+	for _, want := range []string{
+		"tokens_spent=1",
+		`msg="Retrying OpenResponses after HTTP 500"`,
+		"retry_attempt=1",
+		"retry_attempt=2",
+		"retry_attempt=3",
+		"retry_delay=1s",
+		"retry_delay=5s",
+		"retry_delay=30s",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs do not contain %q:\n%s", want, logs)
+		}
 	}
 }
 

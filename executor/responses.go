@@ -107,6 +107,9 @@ func (c responsesClient) createObserved(ctx context.Context, input, sessionKey, 
 		if err := c.tokens.Wait(ctx); err != nil {
 			return agentResponse{}, fmt.Errorf("wait for OpenResponses token: %w", err)
 		}
+		tokenAttrs := responseLogAttrs(filePath, turn)
+		tokenAttrs = append(tokenAttrs, slog.Int("tokens_spent", 1))
+		logAttrs(c.config.Logger, ctx, slog.LevelInfo, "Spent conversation token for OpenResponses request", tokenAttrs...)
 	}
 
 	httpClient := c.config.HTTPClient

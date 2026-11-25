@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/dev1-alexwei-net/guava/executor"
 )
@@ -23,9 +24,12 @@ type executorController struct {
 }
 
 type executorSnapshot struct {
-	Status  string
-	Logs    string
-	LastErr string
+	Status    string
+	Logs      string
+	LastErr   string
+	AgentID   string
+	CLIArgs   string
+	StartedAt time.Time
 }
 
 type tailLogBuffer struct {
@@ -136,10 +140,18 @@ func (c *executorController) Stop() error {
 func (c *executorController) Snapshot() executorSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// SessionSummary takes the executor's own lock; nesting it under the
+	// controller lock is safe because the executor never calls back into the
+	// dashboard.
+	summary := c.runner.SessionSummary()
 	return executorSnapshot{
-		Status:  c.status,
-		Logs:    c.logs.String(),
-		LastErr: c.lastErr,
+		Status:    c.status,
+		Logs:      c.logs.String(),
+		LastErr:   c.lastErr,
+		AgentID:   summary.AgentID,
+		CLIArgs:   summary.CLIArgs,
+		StartedAt: summary.StartedAt,
 	}
 }
 

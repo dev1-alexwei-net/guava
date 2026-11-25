@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/dev1-alexwei-net/guava/executor"
 )
@@ -30,6 +31,9 @@ type dashboardPageData struct {
 	NextTheme string
 	Running   bool
 	Busy      bool
+	AgentID   string
+	CLIArgs   string
+	StartedAt time.Time
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
@@ -62,14 +66,24 @@ func (d *dashboard) Close() {
 }
 
 func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
-	snapshot := d.controller.Snapshot()
-	refresh := parseRefresh(r.URL.Query().Get("refresh"))
-	theme := parseTheme(r.URL.Query().Get("theme"))
+	data := pageData(d.controller.Snapshot(), r.URL.Query())
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if err := d.page.ExecuteTemplate(w, "dashboard.html", data); err != nil {
+		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
+	}
+}
+
+func pageData(snapshot executorSnapshot, query url.Values) dashboardPageData {
+	refresh := parseRefresh(query.Get("refresh"))
+	theme := parseTheme(query.Get("theme"))
 	nextTheme := "dark"
 	if theme == "dark" {
 		nextTheme = "light"
 	}
-	data := dashboardPageData{
+	return dashboardPageData{
 		Status:    snapshot.Status,
 		Logs:      snapshot.Logs,
 		LastErr:   snapshot.LastErr,
@@ -78,14 +92,10 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 		NextTheme: nextTheme,
 		Running:   snapshot.Status == "running",
 		Busy:      snapshot.Status == "running" || snapshot.Status == "stopping",
-		Error:     r.URL.Query().Get("error"),
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if err := d.page.ExecuteTemplate(w, "dashboard.html", data); err != nil {
-		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
+		Error:     query.Get("error"),
+		AgentID:   snapshot.AgentID,
+		CLIArgs:   snapshot.CLIArgs,
+		StartedAt: snapshot.StartedAt,
 	}
 }
 

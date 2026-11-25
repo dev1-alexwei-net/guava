@@ -68,6 +68,7 @@ func run() error {
 		AgentID:          *agentID,
 		AuthToken:        os.Getenv("OPENCLAW_AUTH_TOKEN"),
 		HTTPClient:       executor.NewGatewayHTTPClient(*verifyTLS),
+		CLIArgs:          strings.Join(os.Args, " "),
 	}, parsedLogLevel)
 	if err != nil {
 		return fmt.Errorf("configure executor dashboard: %w", err)

@@ -15,6 +15,7 @@ Create an `executor.Config` with:
 - `AuthToken`: optional bearer token. Leave it empty when authentication is provided by a trusted proxy or private no-auth ingress.
 - `HTTPClient`: optional HTTP client override; the package uses `http.DefaultClient` when omitted.
 - `Logger`: optional structured logger. A nil logger disables package logging.
+- `CLIArgs`: optional raw dump of the command line the server was started with, for example `strings.Join(os.Args, " ")`. It is carried as-is in the session summary and never parsed; leave it empty when the executor has no command line to report.
 
 ## Library example
 
@@ -80,7 +81,7 @@ Run the separate server-rendered dashboard with:
 go run ./cmd/executor-dashboard -database ./fileexplorer.sqlite -root ./files -instructions ./instructions.md -gateway-url http://127.0.0.1:18789 -fileexplorer-url http://127.0.0.1:8080 -agent-id main -log-level info
 ```
 
-Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8081` by default. Set `-host` and `-port` to bind elsewhere; these default to the `HOST` and `PORT` environment variables, or `127.0.0.1` and `8081` when unset. For example, use `-host 0.0.0.0 -port 8081` in a container. The `-database` and `-root` flags are required. `-fileexplorer-url` defaults to `http://127.0.0.1:8080` and takes the same HTTP(S) base URL as the executor CLI. `-addr` remains as a deprecated compatibility option and overrides `-host` and `-port` when supplied. The dashboard starts one executor run at a time, shows its status and the most recent 64 KiB of logs in a text area, and cancels an active run when the dashboard shuts down. It uses bundled Bootstrap for responsive styling, with a server-rendered light/dark toggle and no JavaScript. Its optional full-page refresh is off by default, and `-log-level` selects the same levels as the executor CLI. It is a separate command and does not add routes to `fileexplorer`. Set `OPENCLAW_AUTH_TOKEN` when Gateway authentication is required; pass `-verify-tls` to enable certificate and hostname verification.
+Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8081` by default. Set `-host` and `-port` to bind elsewhere; these default to the `HOST` and `PORT` environment variables, or `127.0.0.1` and `8081` when unset. For example, use `-host 0.0.0.0 -port 8081` in a container. The `-database` and `-root` flags are required. `-fileexplorer-url` defaults to `http://127.0.0.1:8080` and takes the same HTTP(S) base URL as the executor CLI. `-addr` remains as a deprecated compatibility option and overrides `-host` and `-port` when supplied. The dashboard starts one executor run at a time, shows a session summary card (agent-id, raw CLI-args dump, status, started time, and duration) and the most recent 64 KiB of logs in a text area, and cancels an active run when the dashboard shuts down. It uses bundled Bootstrap for responsive styling, with a server-rendered light/dark toggle and no JavaScript. Its optional full-page refresh is off by default, and `-log-level` selects the same levels as the executor CLI. It is a separate command and does not add routes to `fileexplorer`. Set `OPENCLAW_AUTH_TOKEN` when Gateway authentication is required; pass `-verify-tls` to enable certificate and hostname verification.
 
 ## Refreshing the fileexplorer index
 
@@ -119,6 +120,24 @@ for !queue.Empty() {
 	// process path
 }
 ```
+
+## Session summary
+
+`Summary` is a read-only snapshot of the executor session, returned by `Executor.SessionSummary`. The accessor is guarded by a mutex, so it is safe to call from any goroutine, and before, during, or after a run:
+
+- `AgentID`: the OpenClaw agent the executor was configured with.
+- `CLIArgs`: the raw dump of the command line the server was started with, carried exactly as configured and never parsed into fields.
+- `Status`: one of `idle` (before the first run), `running` (while `Run` is active), and the terminal state after a run ends: `completed`, `failed`, or `stopped` (a run canceled through its context).
+- `StartedAt`: when the most recent run started; zero before the first run.
+
+```go
+summary := runner.SessionSummary()
+if summary.Status == executor.StatusRunning {
+	// session is active
+}
+```
+
+Per-file outcomes, discovered/processed/queued counts, current file, and turn counters are not part of the summary and are deferred to a follow-up story.
 
 ## Processing behavior
 

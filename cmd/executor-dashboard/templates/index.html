@@ -59,6 +59,40 @@
       </div>
     </section>
 
+    <section class="card shadow-sm mb-4" aria-labelledby="session-heading">
+      <div class="card-header bg-body">
+        <h2 class="h5 mb-0" id="session-heading">Session summary</h2>
+      </div>
+      <div class="card-body">
+        {{if .HasSession}}
+        <ul class="list-group list-group-flush">
+          <li class="list-group-item d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1" aria-label="Agent ID: {{.AgentID}}">
+            <span class="text-body-secondary">Agent ID</span>
+            <span class="text-break">{{.AgentID}}</span>
+          </li>
+          <li class="list-group-item" aria-label="CLI args: {{.CLIArgs}}">
+            <span class="text-body-secondary d-block">CLI args</span>
+            <span class="font-monospace text-break">{{.CLIArgs}}</span>
+          </li>
+          <li class="list-group-item d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1" aria-label="Status: {{.Status}}">
+            <span class="text-body-secondary">Status</span>
+            <span>{{.Status}}</span>
+          </li>
+          <li class="list-group-item d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1" aria-label="Started: {{.StartedFormatted}}">
+            <span class="text-body-secondary">Started</span>
+            <span>{{.StartedFormatted}}</span>
+          </li>
+          <li class="list-group-item d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1" aria-label="Duration: {{.Duration}}">
+            <span class="text-body-secondary">Duration</span>
+            <span>{{.Duration}}</span>
+          </li>
+        </ul>
+        {{else}}
+        <p class="mb-0 text-body-secondary">No session yet</p>
+        {{end}}
+      </div>
+    </section>
+
     <section class="card shadow-sm" aria-labelledby="logs-heading">
       <div class="card-header bg-body d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1">
         <h2 class="h5 mb-0" id="logs-heading">Logs</h2>

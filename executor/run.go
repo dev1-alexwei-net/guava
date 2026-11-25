@@ -19,6 +19,9 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		return err
 	}
 
+	e.startRun()
+	defer func() { e.finishRun(err) }()
+
 	logger := e.config.Logger
 	runStarted := time.Now()
 	logAttrs(logger, ctx, slog.LevelInfo, "Executor run started",

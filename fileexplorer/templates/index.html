@@ -38,6 +38,15 @@
       /* Focus must reveal immediately — no transition, no debounced state. */
       li.list-group-item:focus-within .row-actions { opacity: 1; visibility: visible; transition: none; }
     }
+    /* Touch targets (#181): on touch devices (hover: none) every row action
+       control presents a >= 44 px hit target, per the #178 contract. Outside
+       this query the buttons keep their calm desktop sizing, and the cluster
+       is already always visible here because its only hidden state is gated
+       behind @media (hover: hover) — so touch users are never limited. */
+    @media (hover: none) {
+      li.list-group-item .row-actions .btn, li.list-group-item .row-actions .form-control { min-height: 44px; }
+      li.list-group-item .row-actions .btn { display: inline-flex; align-items: center; justify-content: center; }
+    }
     @media (prefers-reduced-motion: reduce) {
       li.list-group-item .row-actions { transition: none; }
     }

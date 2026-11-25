@@ -224,6 +224,62 @@ func TestRowActionsRevealOnHoverAndFocusForDesktop(t *testing.T) {
 	assertNoClientSideJavaScript(t, body)
 }
 
+// TestRowActionsTouchContract pins the #181 contract from #178 items 4–5:
+// on touch devices (hover: none) the row action cluster is always visible —
+// its only hidden state is the one gated behind @media (hover: hover), which
+// such devices never match — and every row action control presents a
+// >= 44 px hit target. Touch users are not limited in any way.
+func TestRowActionsTouchContract(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status=%d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// The touch sizing lives behind its own hover: none gate…
+	touchGate := strings.Index(body, "@media (hover: none)")
+	if touchGate < 0 {
+		t.Fatal("touch sizing styles are missing their @media (hover: none) gate")
+	}
+	// …and the >= 44 px hit-target rule for every row action control — the
+	// link buttons and the rename form's input — is inside that gate, so
+	// desktop sizing is untouched.
+	rule := "li.list-group-item .row-actions .btn, li.list-group-item .row-actions .form-control { min-height: 44px; }"
+	pos := strings.Index(body, rule)
+	if pos < 0 {
+		t.Fatal("row action controls are missing the >= 44 px touch hit-target rule")
+	}
+	if pos < touchGate {
+		t.Error("44 px touch hit-target rule is not inside the @media (hover: none) gate")
+	}
+	// The cluster has exactly one hidden rest state, the hover-gated one,
+	// which hover: none devices never match — so on touch every action is
+	// always visible and reachable without hover or JavaScript.
+	if strings.Count(body, ".row-actions { opacity: 0") != 1 {
+		t.Error("row action cluster must have exactly one hidden rest state (the hover-gated one)")
+	}
+	hoverGate := strings.Index(body, "@media (hover: hover)")
+	if hoverGate < 0 || strings.Index(body, ".row-actions { opacity: 0") < hoverGate {
+		t.Error("the only hidden rest state must stay inside the @media (hover: hover) gate")
+	}
+	// Touch targets keep their visible text labels — no icon-only fallback.
+	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</button>`, `>Delete</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("row action %q missing from the listing", want)
+		}
+	}
+	assertNoClientSideJavaScript(t, body)
+}
+
 func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 	cases := []struct {
 		name string

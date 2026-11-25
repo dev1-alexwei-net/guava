@@ -279,6 +279,52 @@ func TestRowActionsTouchContract(t *testing.T) {
 	assertNoClientSideJavaScript(t, body)
 }
 
+// TestRowActionsSmallScreenAlignment pins the #209 contract: below the sm
+// breakpoint the row action cluster is a column whose buttons stretch to the
+// full row width (equal size, aligned edges, regardless of label), while at
+// sm and up it hands back to the side-by-side row with centered buttons — the
+// desktop layout is unchanged.
+func TestRowActionsSmallScreenAlignment(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status=%d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// The cluster is a column below sm (flex-column) and a row at sm and up
+	// (flex-sm-row), exactly as before…
+	cluster := `<div class="row-actions d-flex flex-column flex-sm-row flex-wrap align-items-stretch align-items-sm-center gap-2">`
+	if !strings.Contains(body, cluster) {
+		t.Error("row action cluster does not pin the #209 alignment contract")
+	}
+	// …with stretch alignment as the base (mobile column: every button takes
+	// the full row width, so Edit/Download/Rename/Delete all render at the
+	// same size with aligned edges)…
+	if !strings.Contains(body, "align-items-stretch") {
+		t.Error("small-screen column mode is missing align-items-stretch, so label widths would differ")
+	}
+	// …and the sm-prefixed override restores the desktop row's centering.
+	if !strings.Contains(body, "align-items-sm-center") {
+		t.Error("sm-and-up row mode is missing align-items-sm-center; the desktop layout would change")
+	}
+	// Every action is still rendered in both entry kinds.
+	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</a>`, `>Delete</a>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("row action %q missing from the listing", want)
+		}
+	}
+	assertNoClientSideJavaScript(t, body)
+}
+
 func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 	cases := []struct {
 		name string

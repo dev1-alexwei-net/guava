@@ -256,6 +256,7 @@ func TestAccessiblePreviewFlowEndToEnd(t *testing.T) {
 		`aria-current="true"`, `href="/f/a.txt?download=1">Download`,
 		`class="col-12 col-lg-5 order-1 order-lg-2"`,
 		`class="col-12 col-lg-7 order-2 order-lg-1"`, `tabindex="0"`, ".preview-content:focus",
+		"white-space: pre-wrap", "overflow-wrap: anywhere",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("preview page missing %q", want)

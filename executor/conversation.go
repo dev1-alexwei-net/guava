@@ -10,16 +10,16 @@ import (
 const completionMarker = "<complete />"
 const continueMessage = "Continue"
 
-// conversationSessionKey returns the explicit Gateway session key for a file
-// conversation, or "" for a conversation with no file. The custom "guava:"
-// namespace keeps the key outside Gateway-reserved namespaces, and the same
-// key routes every turn for this file to one agent session even when a turn
-// fails without returning a response id, such as an output-token cutoff.
-func conversationSessionKey(filePath string) string {
-	if filePath == "" {
+// conversationSessionKey returns the explicit agent-scoped Gateway session
+// key for a file conversation, or "" for a conversation with no file. The
+// custom "guava:" namespace keeps the key outside Gateway-reserved
+// namespaces, and the same key routes every turn for this file to one agent
+// session even when a turn fails without returning a response id.
+func conversationSessionKey(agentID, filePath string) string {
+	if agentID == "" || filePath == "" {
 		return ""
 	}
-	return "guava:" + filePath
+	return "agent:" + agentID + ":guava:" + filePath
 }
 
 func (e *Executor) runFileConversation(ctx context.Context, initialInput string) error {
@@ -32,7 +32,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 	}
 	client := responsesClient{config: e.config}
 	input := initialInput
-	sessionKey := conversationSessionKey(filePath)
+	sessionKey := conversationSessionKey(e.config.AgentID, filePath)
 	previousResponseID := ""
 	turn := 0
 

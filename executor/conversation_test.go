@@ -118,18 +118,31 @@ func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
 	}
 }
 
-func TestConversationSessionKeyMapsPathToStableKey(t *testing.T) {
+func TestConversationSessionKeyIncludesAgentAndPath(t *testing.T) {
 	tests := []struct {
-		path string
-		want string
+		name    string
+		agentID string
+		path    string
+		want    string
 	}{
-		{path: "", want: ""},
-		{path: "project/0-135-reuse-conversation-bug.md", want: "guava:project/0-135-reuse-conversation-bug.md"},
+		{name: "empty file path", agentID: "writer", path: "", want: ""},
+		{
+			name:    "writer file session",
+			agentID: "writer",
+			path:    "project/0-135-reuse-conversation-bug.md",
+			want:    "agent:writer:guava:project/0-135-reuse-conversation-bug.md",
+		},
+		{
+			name:    "same file under another agent",
+			agentID: "reader",
+			path:    "project/0-135-reuse-conversation-bug.md",
+			want:    "agent:reader:guava:project/0-135-reuse-conversation-bug.md",
+		},
 	}
 	for _, test := range tests {
-		t.Run(test.path, func(t *testing.T) {
-			if got := conversationSessionKey(test.path); got != test.want {
-				t.Errorf("conversationSessionKey(%q) = %q, want %q", test.path, got, test.want)
+		t.Run(test.name, func(t *testing.T) {
+			if got := conversationSessionKey(test.agentID, test.path); got != test.want {
+				t.Errorf("conversationSessionKey(%q, %q) = %q, want %q", test.agentID, test.path, got, test.want)
 			}
 		})
 	}
@@ -180,7 +193,7 @@ func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 	if requests[1].Input != continueMessage {
 		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continueMessage)
 	}
-	wantSessionKey := "guava:project/0-135-reuse-conversation-bug.md"
+	wantSessionKey := "agent:default:guava:project/0-135-reuse-conversation-bug.md"
 	if sessionKeys[0] != wantSessionKey || sessionKeys[1] != wantSessionKey {
 		t.Errorf("session keys = %q, %q; want %q on both requests", sessionKeys[0], sessionKeys[1], wantSessionKey)
 	}
@@ -224,7 +237,7 @@ func TestRunFileConversationIsolatesSessionsPerFile(t *testing.T) {
 	if seen[0] == "" || seen[0] == seen[1] {
 		t.Errorf("sessions = %v, want distinct stable keys per file", seen)
 	}
-	if seen[0] != "guava:project/0-135-reuse-conversation-bug.md" || seen[1] != "guava:project/0-136-another-bug.md" {
+	if seen[0] != "agent:default:guava:project/0-135-reuse-conversation-bug.md" || seen[1] != "agent:default:guava:project/0-136-another-bug.md" {
 		t.Errorf("sessions = %v, want keys derived from each file path", seen)
 	}
 }

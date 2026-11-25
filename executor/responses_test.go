@@ -25,8 +25,8 @@ func TestResponsesClientSendsRoutedJSONRequestAndReadsOutput(t *testing.T) {
 		if got := r.Header.Get("x-openclaw-agent-id"); got != "writer" {
 			t.Errorf("x-openclaw-agent-id = %q, want writer", got)
 		}
-		if got := r.Header.Get("x-openclaw-session-key"); got != "file-session" {
-			t.Errorf("x-openclaw-session-key = %q, want file-session", got)
+		if got := r.Header.Get("x-openclaw-session-key"); got != "agent:writer:file-session" {
+			t.Errorf("x-openclaw-session-key = %q, want agent:writer:file-session", got)
 		}
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Errorf("Content-Type = %q, want application/json", got)
@@ -69,7 +69,7 @@ func TestResponsesClientSendsRoutedJSONRequestAndReadsOutput(t *testing.T) {
 	config.HTTPClient = server.Client()
 
 	got, err := (responsesClient{config: config}).create(
-		context.Background(), "instructions plus file", "file-session", "resp_previous")
+		context.Background(), "instructions plus file", "agent:writer:file-session", "resp_previous")
 	if err != nil {
 		t.Fatal(err)
 	}

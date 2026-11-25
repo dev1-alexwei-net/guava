@@ -268,6 +268,18 @@ func (r *renderer) withState(target string, theme, wrap, pane, column string) st
 	return u.String()
 }
 
+// canonicalQuery aligns the width parameter with what the page actually
+// rendered: an invalid value and the default drop out of the URL the way the
+// other defaults do, since the page falls back to the default width for both
+// anyway. A valid non-default width is kept so the preference survives the
+// round trip.
+func canonicalQuery(query url.Values) {
+	width := query.Get("width")
+	if !isValidColumn(width) || width == defaultColumn {
+		query.Del("width")
+	}
+}
+
 func (r *renderer) toggleThemeURL(current *url.URL, theme string) string {
 	if current == nil {
 		return "/?theme=dark"
@@ -282,6 +294,7 @@ func (r *renderer) toggleThemeURL(current *url.URL, theme string) string {
 	} else {
 		query.Set("theme", "dark")
 	}
+	canonicalQuery(query)
 	u.RawQuery = query.Encode()
 	return u.String()
 }
@@ -302,6 +315,7 @@ func (r *renderer) toggleWrapURL(current *url.URL, wrap string) string {
 	} else {
 		query.Set("wrap", "off")
 	}
+	canonicalQuery(query)
 	u.RawQuery = query.Encode()
 	return u.String()
 }
@@ -352,6 +366,7 @@ func (r *renderer) togglePreviewPaneURL(current *url.URL, pane string) string {
 	} else {
 		query.Set("pane", "collapsed")
 	}
+	canonicalQuery(query)
 	u.RawQuery = query.Encode()
 	return u.String()
 }

@@ -1050,6 +1050,38 @@ func TestPreviewColumnStatePersistsAcrossNavigation(t *testing.T) {
 	}
 }
 
+// TestPreviewColumnRejectsUnknownWidths pins that a hand-edited width outside
+// the offered set falls back to the default instead of breaking the row, so
+// the page and every link render the default layout.
+func TestPreviewColumnRejectsUnknownWidths(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	for _, bad := range []string{"", "abc", "12", "7", "0", "99"} {
+		target := "/preview/a.txt?width=" + bad
+		rec := get(t, h, target)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status=%d body=%s", target, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		for _, want := range []string{
+			`class="col-12 col-lg-5 order-1 order-lg-2"`,
+			`class="col-12 col-lg-7 order-2 order-lg-1"`,
+			`href="/preview/a.txt?width=6" aria-label="Preview width is 5 of 12 columns; activate to change to 6 of 12">Width 5</a>`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("GET %s: expected default layout, missing %q", target, want)
+			}
+		}
+		if strings.Contains(body, "width="+bad) && bad != "" {
+			t.Errorf("GET %s: unknown width %q leaked into links", target, bad)
+		}
+	}
+}
+
 func TestDarkThemePersistsAcrossMutationsAndErrors(t *testing.T) {
 	root := t.TempDir()
 	docs := filepath.Join(root, "docs")

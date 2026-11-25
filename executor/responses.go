@@ -47,6 +47,18 @@ type responsesAPIError struct {
 	} `json:"error"`
 }
 
+type responsesHTTPError struct {
+	statusCode int
+	message    string
+}
+
+func (e *responsesHTTPError) Error() string {
+	if e.message == "" {
+		return fmt.Sprintf("OpenResponses returned HTTP %d", e.statusCode)
+	}
+	return fmt.Sprintf("OpenResponses returned HTTP %d: %s", e.statusCode, e.message)
+}
+
 type agentResponse struct {
 	id         string
 	outputText string
@@ -54,6 +66,7 @@ type agentResponse struct {
 
 type responsesClient struct {
 	config Config
+	tokens *tokenBucket
 }
 
 func (c responsesClient) create(ctx context.Context, input, sessionKey, previousResponseID string) (agentResponse, error) {
@@ -89,6 +102,11 @@ func (c responsesClient) createObserved(ctx context.Context, input, sessionKey, 
 	}
 	if c.config.AuthToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.config.AuthToken)
+	}
+	if c.tokens != nil {
+		if err := c.tokens.Wait(ctx); err != nil {
+			return agentResponse{}, fmt.Errorf("wait for OpenResponses token: %w", err)
+		}
 	}
 
 	httpClient := c.config.HTTPClient
@@ -161,9 +179,9 @@ func (c responsesClient) createObserved(ctx context.Context, input, sessionKey, 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiError responsesAPIError
 		if json.Unmarshal(responseBody, &apiError) == nil && strings.TrimSpace(apiError.Error.Message) != "" {
-			return agentResponse{}, fmt.Errorf("OpenResponses returned HTTP %d: %s", resp.StatusCode, apiError.Error.Message)
+			return agentResponse{}, &responsesHTTPError{statusCode: resp.StatusCode, message: apiError.Error.Message}
 		}
-		return agentResponse{}, fmt.Errorf("OpenResponses returned HTTP %d", resp.StatusCode)
+		return agentResponse{}, &responsesHTTPError{statusCode: resp.StatusCode}
 	}
 
 	var decoded responsesAPIResponse

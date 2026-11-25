@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 )
 
 const completionMarker = "<complete />"
@@ -30,7 +31,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 	if e == nil {
 		return errors.New("executor is nil")
 	}
-	client := responsesClient{config: e.config}
+	client := responsesClient{config: e.config, tokens: e.conversationTokenBucket()}
 	input := initialInput
 	sessionKey := conversationSessionKey(e.config.AgentID, filePath)
 	previousResponseID := ""
@@ -41,8 +42,25 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 			return err
 		}
 		turn++
-		response, err := client.createObserved(ctx, input, sessionKey, previousResponseID, filePath, turn)
-		if err != nil && !containsOutputLimitMessage(err.Error()) && !containsAgentRunCancellationMsg(err.Error()) {
+		var response agentResponse
+		var err error
+		consecutiveFailures := 0
+		for {
+			response, err = client.createObserved(ctx, input, sessionKey, previousResponseID, filePath, turn)
+			if err == nil {
+				break
+			}
+			var responseErr *responsesHTTPError
+			if errors.As(err, &responseErr) && responseErr.statusCode == 500 {
+				consecutiveFailures++
+				if err := e.waitBeforeRetry(ctx, openResponsesRetryDelay(consecutiveFailures)); err != nil {
+					return err
+				}
+				continue
+			}
+			if containsOutputLimitMessage(err.Error()) || containsAgentRunCancellationMsg(err.Error()) {
+				break
+			}
 			return err
 		}
 		attrs := []slog.Attr{slog.Int("turn", turn), slog.String("response_id", response.id)}
@@ -59,16 +77,48 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 	}
 }
 
+func (e *Executor) conversationTokenBucket() *tokenBucket {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.conversationTokens == nil {
+		e.conversationTokens = newConversationTokenBucket()
+	}
+	return e.conversationTokens
+}
+
+func (e *Executor) waitBeforeRetry(ctx context.Context, delay time.Duration) error {
+	if e.retryWait != nil {
+		return e.retryWait(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func openResponsesRetryDelay(consecutiveFailures int) time.Duration {
+	switch consecutiveFailures {
+	case 1:
+		return time.Second
+	case 2:
+		return 5 * time.Second
+	default:
+		return 30 * time.Second
+	}
+}
+
 func containsCompletionMarker(text string) bool {
 	return strings.Contains(text, completionMarker)
 }
 
 func containsOutputLimitMessage(text string) bool {
-	// should responses api handle this?
 	return strings.Contains(text, "The model was cut off")
 }
 
 func containsAgentRunCancellationMsg(text string) bool {
-	// example of a cause is stalled model, kv cache read drops to zero, etc.
 	return strings.Contains(text, "agent run was cancelled")
 }

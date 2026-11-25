@@ -1,14 +1,58 @@
 name: Publish container images
 
+# Push to main publishes the next automatic patch release:
+#   - resolve-release computes the next patch version from the highest
+#     vMAJOR.MINOR.PATCH git tag, seeded with 0.1.0 when none exists yet,
+#   - publish tags both images with that version (no v prefix) in addition to
+#     main and latest, so both images always carry the identical version set,
+#   - cut-release-tag then creates the matching v-prefixed git tag on the
+#     pushed commit, making it the base for the next increment.
+#
+# Publishes are serialized so two consecutive pushes to main each resolve a
+# distinct version and never race on the release tag.
+
 on:
   push:
     branches: [main]
+
+concurrency:
+  group: publish-ghcr
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  resolve-release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Fetch tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: resolve
+        run: |
+          set -euo pipefail
+          base=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+          if [ -n "$base" ]; then
+            v=${base#v}
+            IFS='.' read -r major minor patch <<<"$v"
+            version="${major}.${minor}.$((10#$patch + 1))"
+          else
+            version="0.1.0"
+          fi
+          tag="v${version}"
+          echo "version=${version}" >>"$GITHUB_OUTPUT"
+          echo "tag=${tag}" >>"$GITHUB_OUTPUT"
+          echo "Base tag: ${base:-<none>}; publishing ${version} as ${tag}"
+
   publish:
+    needs: [resolve-release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,6 +91,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=raw,value=latest
+            type=raw,value=${{ needs.resolve-release.outputs.version }}
 
       - name: Build and push multi-platform image
         uses: docker/build-push-action@v6
@@ -59,3 +104,34 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  cut-release-tag:
+    needs: [resolve-release, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push release tag
+        env:
+          TAG: ${{ needs.resolve-release.outputs.tag }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            echo "No release tag to create."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists on origin; leaving it unchanged."
+          else
+            git tag -a "$TAG" "$COMMIT" -m "Release ${TAG}"
+            git push origin "$TAG"
+            echo "Created and pushed ${TAG} at ${COMMIT}."
+          fi

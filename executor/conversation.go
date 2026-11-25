@@ -8,7 +8,7 @@ import (
 )
 
 const completionMarker = "<complete />"
-const continueMessage = "Continue"
+const continueMessage = "Continue. Remember to output the completion marker <complete /> only if you have finished."
 
 // conversationSessionKey returns the explicit agent-scoped Gateway session
 // key for a file conversation, or "" for a conversation with no file. The
@@ -42,7 +42,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 		}
 		turn++
 		response, err := client.createObserved(ctx, input, sessionKey, previousResponseID, filePath, turn)
-		if err != nil && !containsOutputLimitMessage(err.Error()) {
+		if err != nil && !containsOutputLimitMessage(err.Error()) && !containsAgentRunCancellationMsg(err.Error()) {
 			return err
 		}
 		attrs := []slog.Attr{slog.Int("turn", turn), slog.String("response_id", response.id)}
@@ -64,5 +64,11 @@ func containsCompletionMarker(text string) bool {
 }
 
 func containsOutputLimitMessage(text string) bool {
-	return strings.Contains(text, "The model was cut off") // should responses api handle this?
+	// should responses api handle this?
+	return strings.Contains(text, "The model was cut off")
+}
+
+func containsAgentRunCancellationMsg(text string) bool {
+	// example of a cause is stalled model, kv cache read drops to zero, etc.
+	return strings.Contains(text, "agent run was cancelled")
 }

@@ -13,23 +13,25 @@ import (
 const maxLogBytes = 64 << 10
 
 type executorController struct {
-	mu      sync.Mutex
-	runner  *executor.Executor
-	logger  *slog.Logger
-	logs    *tailLogBuffer
-	status  string
-	lastErr string
-	cancel  context.CancelFunc
-	done    chan struct{}
+	mu         sync.Mutex
+	runner     *executor.Executor
+	logger     *slog.Logger
+	logs       *tailLogBuffer
+	status     string
+	lastErr    string
+	cancel     context.CancelFunc
+	done       chan struct{}
+	finishedAt time.Time
 }
 
 type executorSnapshot struct {
-	Status    string
-	Logs      string
-	LastErr   string
-	AgentID   string
-	CLIArgs   string
-	StartedAt time.Time
+	Status     string
+	Logs       string
+	LastErr    string
+	AgentID    string
+	CLIArgs    string
+	StartedAt  time.Time
+	FinishedAt time.Time
 }
 
 type tailLogBuffer struct {
@@ -85,6 +87,7 @@ func (c *executorController) Start() error {
 		return errors.New("executor is already running")
 	}
 	c.logs.Reset()
+	c.finishedAt = time.Time{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	c.cancel = cancel
@@ -103,6 +106,7 @@ func (c *executorController) run(ctx context.Context, done chan struct{}) {
 	cancel := c.cancel
 	c.cancel = nil
 	c.done = nil
+	c.finishedAt = time.Now()
 	switch {
 	case errors.Is(err, context.Canceled):
 		c.status = "stopped"
@@ -146,12 +150,13 @@ func (c *executorController) Snapshot() executorSnapshot {
 	// dashboard.
 	summary := c.runner.SessionSummary()
 	return executorSnapshot{
-		Status:    c.status,
-		Logs:      c.logs.String(),
-		LastErr:   c.lastErr,
-		AgentID:   summary.AgentID,
-		CLIArgs:   summary.CLIArgs,
-		StartedAt: summary.StartedAt,
+		Status:     c.status,
+		Logs:       c.logs.String(),
+		LastErr:    c.lastErr,
+		AgentID:    summary.AgentID,
+		CLIArgs:    summary.CLIArgs,
+		StartedAt:  summary.StartedAt,
+		FinishedAt: c.finishedAt,
 	}
 }
 

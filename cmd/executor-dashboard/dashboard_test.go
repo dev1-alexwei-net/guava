@@ -157,6 +157,65 @@ func TestPageDataCarriesSessionSummaryForEveryStatus(t *testing.T) {
 			if !data.StartedAt.Equal(startedAt) {
 				t.Errorf("StartedAt = %v, want %v", data.StartedAt, startedAt)
 			}
+			if !data.HasSession {
+				t.Error("HasSession = false, want true")
+			}
+			if want := "2026-11-24 12:30:05"; data.StartedFormatted != want {
+				t.Errorf("StartedFormatted = %q, want %q", data.StartedFormatted, want)
+			}
+			if data.Duration == "" {
+				t.Error("Duration empty, want the live elapsed time")
+			}
+		})
+	}
+}
+
+func TestPageDataWithoutSessionShowsEmptyState(t *testing.T) {
+	snapshot := executorSnapshot{
+		Status:  "idle",
+		AgentID: "executor-agent",
+		CLIArgs: rawCLIArgs,
+	}
+	data := pageData(snapshot, url.Values{})
+
+	if data.HasSession {
+		t.Error("HasSession = true, want false before the first run")
+	}
+	if data.Duration != "" {
+		t.Errorf("Duration = %q, want empty before the first run", data.Duration)
+	}
+	if data.StartedFormatted != "" {
+		t.Errorf("StartedFormatted = %q, want empty before the first run", data.StartedFormatted)
+	}
+	if !data.FinishedAt.IsZero() {
+		t.Errorf("FinishedAt = %v, want zero before the first run", data.FinishedAt)
+	}
+}
+
+func TestSessionDuration(t *testing.T) {
+	startedAt := time.Date(2026, 11, 24, 12, 30, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		snapshot executorSnapshot
+		want     string
+	}{
+		{name: "before first run", snapshot: executorSnapshot{}, want: ""},
+		{
+			name:     "finished run",
+			snapshot: executorSnapshot{StartedAt: startedAt, FinishedAt: startedAt.Add(3*time.Minute + 24*time.Second)},
+			want:     "3m24s",
+		},
+		{
+			name:     "clamps negative elapsed to zero",
+			snapshot: executorSnapshot{StartedAt: startedAt, FinishedAt: startedAt.Add(-time.Minute)},
+			want:     "0s",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sessionDuration(tc.snapshot); got != tc.want {
+				t.Errorf("sessionDuration = %q, want %q", got, tc.want)
+			}
 		})
 	}
 }
@@ -182,10 +241,51 @@ func TestShowRendersDashboardPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Executor dashboard", "idle", "refresh", "dark"} {
+	for _, want := range []string{"Executor dashboard", "idle", "refresh", "dark", "Session summary", "No session yet"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("rendered page missing %q", want)
 		}
+	}
+}
+
+func TestShowRendersSessionSummaryCard(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	if err := app.controller.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForControllerStatus(t, app.controller, "failed")
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	app.show(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Session summary",
+		"Agent ID",
+		"executor-agent",
+		"CLI args",
+		"fileexplorer.sqlite",
+		"-root /srv/files",
+		"Status",
+		"failed",
+		"Started",
+		"Duration",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "No session yet") {
+		t.Error("rendered page shows the idle empty state, want the session values")
 	}
 }
 

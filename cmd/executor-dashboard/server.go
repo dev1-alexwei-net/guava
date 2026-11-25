@@ -22,18 +22,22 @@ type dashboard struct {
 }
 
 type dashboardPageData struct {
-	Status    string
-	Logs      string
-	LastErr   string
-	Error     string
-	Refresh   int
-	Theme     string
-	NextTheme string
-	Running   bool
-	Busy      bool
-	AgentID   string
-	CLIArgs   string
-	StartedAt time.Time
+	Status           string
+	Logs             string
+	LastErr          string
+	Error            string
+	Refresh          int
+	Theme            string
+	NextTheme        string
+	Running          bool
+	Busy             bool
+	AgentID          string
+	CLIArgs          string
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	StartedFormatted string
+	Duration         string
+	HasSession       bool
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
@@ -83,20 +87,51 @@ func pageData(snapshot executorSnapshot, query url.Values) dashboardPageData {
 	if theme == "dark" {
 		nextTheme = "light"
 	}
-	return dashboardPageData{
-		Status:    snapshot.Status,
-		Logs:      snapshot.Logs,
-		LastErr:   snapshot.LastErr,
-		Refresh:   refresh,
-		Theme:     theme,
-		NextTheme: nextTheme,
-		Running:   snapshot.Status == "running",
-		Busy:      snapshot.Status == "running" || snapshot.Status == "stopping",
-		Error:     query.Get("error"),
-		AgentID:   snapshot.AgentID,
-		CLIArgs:   snapshot.CLIArgs,
-		StartedAt: snapshot.StartedAt,
+	hasSession := !snapshot.StartedAt.IsZero()
+	duration := sessionDuration(snapshot)
+
+	var startedFormatted string
+	if hasSession {
+		startedFormatted = snapshot.StartedAt.Format(time.DateTime)
 	}
+
+	return dashboardPageData{
+		Status:           snapshot.Status,
+		Logs:             snapshot.Logs,
+		LastErr:          snapshot.LastErr,
+		Refresh:          refresh,
+		Theme:            theme,
+		NextTheme:        nextTheme,
+		Running:          snapshot.Status == "running",
+		Busy:             snapshot.Status == "running" || snapshot.Status == "stopping",
+		Error:            query.Get("error"),
+		AgentID:          snapshot.AgentID,
+		CLIArgs:          snapshot.CLIArgs,
+		StartedAt:        snapshot.StartedAt,
+		FinishedAt:       snapshot.FinishedAt,
+		StartedFormatted: startedFormatted,
+		Duration:         duration,
+		HasSession:       hasSession,
+	}
+}
+
+// sessionDuration renders the session's duration: the live elapsed time while
+// the run is still in progress, or the total run time once it has finished.
+// Before the first run there is no session and the value is empty.
+func sessionDuration(snapshot executorSnapshot) string {
+	if snapshot.StartedAt.IsZero() {
+		return ""
+	}
+	var elapsed time.Duration
+	if !snapshot.FinishedAt.IsZero() {
+		elapsed = snapshot.FinishedAt.Sub(snapshot.StartedAt)
+	} else {
+		elapsed = time.Since(snapshot.StartedAt)
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return elapsed.Round(time.Second).String()
 }
 
 func (d *dashboard) stylesheet(w http.ResponseWriter, _ *http.Request) {

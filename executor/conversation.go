@@ -53,7 +53,16 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 			var responseErr *responsesHTTPError
 			if errors.As(err, &responseErr) && responseErr.statusCode == 500 {
 				consecutiveFailures++
-				if err := e.waitBeforeRetry(ctx, openResponsesRetryDelay(consecutiveFailures)); err != nil {
+				retryDelay := openResponsesRetryDelay(consecutiveFailures)
+				retryAttrs := responseLogAttrs(filePath, turn)
+				retryAttrs = append(retryAttrs,
+					slog.Int("status", responseErr.statusCode),
+					slog.Int("retry_attempt", consecutiveFailures),
+					slog.Duration("retry_delay", retryDelay),
+					slog.Any("error", err),
+				)
+				logAttrs(e.config.Logger, ctx, slog.LevelInfo, "Retrying OpenResponses after HTTP 500", retryAttrs...)
+				if err := e.waitBeforeRetry(ctx, retryDelay); err != nil {
 					return err
 				}
 				continue

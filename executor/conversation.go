@@ -10,12 +10,12 @@ import (
 const completionMarker = "<complete />"
 const continueMessage = "Continue"
 
-// conversationUser returns the stable OpenResponses "user" routing key for a
-// file conversation, or "" for a conversation with no file. The Gateway
-// derives a stable session key from the user string, so every turn of the
-// same file conversation shares one agent session even when a turn fails
-// without returning a response id, such as an output-token cutoff.
-func conversationUser(filePath string) string {
+// conversationSessionKey returns the explicit Gateway session key for a file
+// conversation, or "" for a conversation with no file. The custom "guava:"
+// namespace keeps the key outside Gateway-reserved namespaces, and the same
+// key routes every turn for this file to one agent session even when a turn
+// fails without returning a response id, such as an output-token cutoff.
+func conversationSessionKey(filePath string) string {
 	if filePath == "" {
 		return ""
 	}
@@ -32,7 +32,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 	}
 	client := responsesClient{config: e.config}
 	input := initialInput
-	user := conversationUser(filePath)
+	sessionKey := conversationSessionKey(filePath)
 	previousResponseID := ""
 	turn := 0
 
@@ -41,7 +41,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 			return err
 		}
 		turn++
-		response, err := client.createObserved(ctx, input, user, previousResponseID, filePath, turn)
+		response, err := client.createObserved(ctx, input, sessionKey, previousResponseID, filePath, turn)
 		if err != nil && !containsOutputLimitMessage(err.Error()) {
 			return err
 		}

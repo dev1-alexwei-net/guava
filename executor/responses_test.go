@@ -25,6 +25,9 @@ func TestResponsesClientSendsRoutedJSONRequestAndReadsOutput(t *testing.T) {
 		if got := r.Header.Get("x-openclaw-agent-id"); got != "writer" {
 			t.Errorf("x-openclaw-agent-id = %q, want writer", got)
 		}
+		if got := r.Header.Get("x-openclaw-session-key"); got != "file-session" {
+			t.Errorf("x-openclaw-session-key = %q, want file-session", got)
+		}
 		if got := r.Header.Get("Content-Type"); got != "application/json" {
 			t.Errorf("Content-Type = %q, want application/json", got)
 		}
@@ -38,8 +41,8 @@ func TestResponsesClientSendsRoutedJSONRequestAndReadsOutput(t *testing.T) {
 		if request.Model != "openclaw" || request.Input != "instructions plus file" || request.Stream {
 			t.Errorf("request = %#v, want non-streaming OpenClaw input", request)
 		}
-		if request.User != "file-session" || request.PreviousResponseID != "resp_previous" {
-			t.Errorf("session fields = %#v", request)
+		if request.PreviousResponseID != "resp_previous" {
+			t.Errorf("previous_response_id = %q, want resp_previous", request.PreviousResponseID)
 		}
 
 		response := responsesAPIResponse{
@@ -79,6 +82,9 @@ func TestResponsesClientSupportsGatewayWithoutBearerToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "" {
 			t.Errorf("Authorization = %q, want no bearer header", got)
+		}
+		if got := r.Header.Get("x-openclaw-session-key"); got != "" {
+			t.Errorf("x-openclaw-session-key = %q, want no session header for an unscoped request", got)
 		}
 		fmt.Fprint(w, `{"id":"resp_1","output":[]}`)
 	}))

@@ -2,6 +2,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -58,6 +59,9 @@ type Config struct {
 type Executor struct {
 	config Config
 
+	conversationTokens *tokenBucket
+	retryWait          func(context.Context, time.Duration) error
+
 	mu        sync.Mutex
 	status    string
 	startedAt time.Time
@@ -76,8 +80,9 @@ func New(config Config) (*Executor, error) {
 	}
 
 	return &Executor{
-		config: config,
-		status: StatusIdle,
+		config:             config,
+		conversationTokens: newConversationTokenBucket(),
+		status:             StatusIdle,
 	}, nil
 }
 

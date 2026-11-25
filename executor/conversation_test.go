@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestRunFileConversationContinuesUntilCompletion(t *testing.T) {
@@ -184,14 +185,15 @@ func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 	config.GatewayURL = server.URL
 	config.HTTPClient = server.Client()
 	executor := &Executor{config: config}
+	executor.retryWait = func(context.Context, time.Duration) error { return nil }
 	if err := executor.runFileConversationForFile(context.Background(), "project/0-135-reuse-conversation-bug.md", "initial input"); err != nil {
 		t.Fatalf("runFileConversationForFile() error = %v", err)
 	}
 	if len(requests) != 2 {
 		t.Fatalf("got %d requests, want 2", len(requests))
 	}
-	if requests[1].Input != continueMessage {
-		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continueMessage)
+	if requests[1].Input != "initial input" {
+		t.Errorf("retry input = %q, want initial input", requests[1].Input)
 	}
 	wantSessionKey := "agent:default:guava:project/0-135-reuse-conversation-bug.md"
 	if sessionKeys[0] != wantSessionKey || sessionKeys[1] != wantSessionKey {
@@ -239,6 +241,127 @@ func TestRunFileConversationIsolatesSessionsPerFile(t *testing.T) {
 	}
 	if seen[0] != "agent:default:guava:project/0-135-reuse-conversation-bug.md" || seen[1] != "agent:default:guava:project/0-136-another-bug.md" {
 		t.Errorf("sessions = %v, want keys derived from each file path", seen)
+	}
+}
+
+func TestRunFileConversationSpendsTokenForEveryRequest(t *testing.T) {
+	var executor *Executor
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		executor.conversationTokens.mu.Lock()
+		tokens := executor.conversationTokens.tokens
+		executor.conversationTokens.mu.Unlock()
+		wantTokens := float64(10 - requests)
+		if tokens != wantTokens {
+			t.Errorf("tokens after request %d = %v, want %v", requests, tokens, wantTokens)
+		}
+		output := "keep going"
+		if requests == 2 {
+			output = completionMarker
+		}
+		if err := json.NewEncoder(w).Encode(responsesAPIResponse{
+			ID:     "resp",
+			Output: assistantText(output),
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	fixedNow := time.Now()
+	executor = &Executor{
+		config:             config,
+		conversationTokens: newTokenBucket(10, time.Hour, func() time.Time { return fixedNow }),
+	}
+	if err := executor.runFileConversation(context.Background(), "initial input"); err != nil {
+		t.Fatalf("runFileConversation() error = %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}
+
+func TestRunFileConversationRetriesHTTP500WithBackoffAndTokens(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests <= 3 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"internal error"}}`))
+			return
+		}
+		if err := json.NewEncoder(w).Encode(responsesAPIResponse{
+			ID:     "resp_done",
+			Output: assistantText(completionMarker),
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	fixedNow := time.Now()
+	executor := &Executor{
+		config:             config,
+		conversationTokens: newTokenBucket(10, time.Hour, func() time.Time { return fixedNow }),
+	}
+	var delays []time.Duration
+	executor.retryWait = func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	}
+
+	if err := executor.runFileConversation(context.Background(), "initial input"); err != nil {
+		t.Fatalf("runFileConversation() error = %v", err)
+	}
+	if requests != 4 {
+		t.Fatalf("requests = %d, want 4", requests)
+	}
+	wantDelays := []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
+	if len(delays) != len(wantDelays) {
+		t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
+	}
+	for i := range wantDelays {
+		if delays[i] != wantDelays[i] {
+			t.Errorf("retry delay %d = %v, want %v", i+1, delays[i], wantDelays[i])
+		}
+	}
+	executor.conversationTokens.mu.Lock()
+	remainingTokens := executor.conversationTokens.tokens
+	executor.conversationTokens.mu.Unlock()
+	if remainingTokens != 6 {
+		t.Errorf("remaining tokens = %v, want 6 after four requests", remainingTokens)
+	}
+}
+
+func TestRunFileConversationCancellationStopsHTTP500Retry(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"internal error"}}`))
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	executor := &Executor{config: config}
+	executor.retryWait = func(context.Context, time.Duration) error { return context.Canceled }
+
+	if err := executor.runFileConversation(context.Background(), "initial input"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runFileConversation() error = %v, want context.Canceled", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
 	}
 }
 

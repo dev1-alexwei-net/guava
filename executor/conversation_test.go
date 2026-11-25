@@ -121,6 +121,117 @@ func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
 	}
 }
 
+func TestConversationUserMapsPathToStableSessionKey(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "", want: ""},
+		{path: "project/0-135-reuse-conversation-bug.md", want: "guava:project/0-135-reuse-conversation-bug.md"},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			if got := conversationUser(test.path); got != test.want {
+				t.Errorf("conversationUser(%q) = %q, want %q", test.path, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
+	var requests []responsesRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+
+		switch len(requests) {
+		case 1:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"The model was cut off after reaching the output token limit"}}`))
+		case 2:
+			if err := json.NewEncoder(w).Encode(responsesAPIResponse{
+				ID:     "resp_after_cutoff",
+				Output: assistantText(completionMarker),
+			}); err != nil {
+				t.Errorf("encode response: %v", err)
+			}
+		default:
+			t.Errorf("unexpected request %d", len(requests))
+			http.Error(w, "too many requests", http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	executor := &Executor{config: config}
+	if err := executor.runFileConversationForFile(context.Background(), "project/0-135-reuse-conversation-bug.md", "initial input"); err != nil {
+		t.Fatalf("runFileConversationForFile() error = %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(requests))
+	}
+	if requests[1].Input != continueMessage {
+		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continueMessage)
+	}
+	if requests[0].User == "" {
+		t.Fatal("first request has no user routing key, want a stable per-file session key")
+	}
+	if requests[1].User != requests[0].User {
+		t.Errorf("follow-up user = %q, want the same stable session %q", requests[1].User, requests[0].User)
+	}
+	if requests[1].PreviousResponseID != "" {
+		t.Errorf("follow-up previous_response_id = %q, want empty after an error response", requests[1].PreviousResponseID)
+	}
+}
+
+func TestRunFileConversationIsolatesSessionsPerFile(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		seen = append(seen, request.User)
+		if err := json.NewEncoder(w).Encode(responsesAPIResponse{
+			ID:     "resp_done",
+			Output: assistantText(completionMarker),
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	executor := &Executor{config: config}
+	if err := executor.runFileConversationForFile(context.Background(), "project/0-135-reuse-conversation-bug.md", "first file"); err != nil {
+		t.Fatalf("runFileConversationForFile() first file error = %v", err)
+	}
+	if err := executor.runFileConversationForFile(context.Background(), "project/0-136-another-bug.md", "second file"); err != nil {
+		t.Fatalf("runFileConversationForFile() second file error = %v", err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("got %d requests, want 2", len(seen))
+	}
+	if seen[0] == "" || seen[0] == seen[1] {
+		t.Errorf("sessions = %v, want distinct stable keys per file", seen)
+	}
+	if seen[0] != "guava:project/0-135-reuse-conversation-bug.md" || seen[1] != "guava:project/0-136-another-bug.md" {
+		t.Errorf("sessions = %v, want keys derived from each file path", seen)
+	}
+}
+
 func TestRunFileConversationReturnsNonCutoffResponseError(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -19,6 +19,8 @@ GitHub Actions publishes two images to GHCR:
 
 Each tag is a multi-platform image index for `linux/amd64` and `linux/arm64`; Docker selects the matching platform when pulling. Pushes to `main` publish the next automatic patch release: both images carry that version tag (for example `1.0.3`) in addition to `main` and `latest`, and the workflow then creates the matching `v1.0.3` git tag on the pushed commit. The next patch version is one above the highest existing `vMAJOR.MINOR.PATCH` git tag, seeded at `0.1.0` until the first release tag exists. Major and minor releases are cut deliberately with the manual escape hatch described in [Releasing](#releasing).
 
+Both web apps show the resolved version in the page footer, so a running image reports the exact semver it was published as.
+
 Run the file explorer with its files and database persisted outside the container:
 
 ```sh

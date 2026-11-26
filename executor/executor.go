@@ -19,6 +19,25 @@ func (p closingTaskProvider) Tasks(fn func(tasks.Task) bool) (err error) {
 	return p.provider.Tasks(fn)
 }
 
+// progressTaskProvider records per-file progress around each task: it reports
+// the task once, after its processing attempt, with the outcome the
+// coordinator observed. A task the coordinator did not complete (failed or
+// canceled) is reported as unfinished, so a resume processes it again.
+type progressTaskProvider struct {
+	provider tasks.TaskProvider
+	report   func(taskID string, completed bool)
+}
+
+func (p progressTaskProvider) Tasks(fn func(tasks.Task) bool) error {
+	return p.provider.Tasks(func(task tasks.Task) bool {
+		completed := fn(task)
+		if p.report != nil {
+			p.report(task.ID(), completed)
+		}
+		return completed
+	})
+}
+
 // Run opens the configured file task source and delegates task processing,
 // conversation lifecycle, and summaries to the conversations service.
 func (e *Executor) Run(ctx context.Context) error {
@@ -40,13 +59,19 @@ func (e *Executor) Run(ctx context.Context) error {
 		InstructionsPath: e.config.InstructionsPath,
 		FileExplorerURL:  e.config.FileExplorerURL,
 		Subdirectory:     e.config.Subdirectory,
+		CompletedPaths:   e.config.CompletedPaths,
+		InitialPending:   e.config.InitialPending,
 		HTTPClient:       e.config.HTTPClient,
 		Logger:           e.config.Logger,
 	})
 	if err != nil {
 		return e.conversationService.Run(ctx, failedTaskProvider{err: err})
 	}
-	return e.conversationService.Run(ctx, closingTaskProvider{provider: provider})
+	runProvider := tasks.TaskProvider(closingTaskProvider{provider: provider})
+	if e.config.OnFileProgress != nil {
+		runProvider = progressTaskProvider{provider: runProvider, report: e.config.OnFileProgress}
+	}
+	return e.conversationService.Run(ctx, runProvider)
 }
 
 // SessionSummary returns the conversation service's session snapshot.

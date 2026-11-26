@@ -65,6 +65,30 @@ type Config struct {
 	// session summary and never parsed; leave it empty when the executor has
 	// no command line to report.
 	CLIArgs string
+
+	// CompletedPaths lists files that a resumed run must skip because an
+	// earlier run of the same session already finished them, so the run
+	// starts from where it left off. Paths use the cleaned, slash-separated
+	// relative form of task IDs; leave it empty for a fresh run.
+	CompletedPaths []string
+
+	// InitialPending lists files an earlier attempt of this session left
+	// unfinished, in the order a resumed run must keep them ahead of files
+	// discovered from the manifest. Paths use the cleaned, slash-separated
+	// relative form of task IDs; leave it empty for a fresh run, which
+	// processes every discovered file in manifest order.
+	InitialPending []string
+
+	// OnFileProgress is called once per file after its processing attempt
+	// finishes: completed is true when the file's conversation succeeded and
+	// false when the file did not complete (for example a failed or rejected
+	// conversation), so a resume retries it. Files the run never reaches are
+	// never reported. It is called synchronously from the run loop on the
+	// same goroutine that processes the file, so a slow callback delays the
+	// run; keep it fast. A callback that cannot persist must not stop the run:
+	// the run continues and an unrecorded file is simply retried on the next
+	// resume. A nil callback disables progress reporting.
+	OnFileProgress func(taskID string, completed bool)
 }
 
 // Executor joins the file-backed task source to a conversations service for
@@ -132,6 +156,16 @@ func newExecutor(config Config) (*Executor, error) {
 		return nil, err
 	}
 	return &Executor{config: config, conversationService: service}, nil
+}
+
+// Config returns a copy of the executor's validated configuration, so
+// callers can derive an executor that keeps the same file source, session
+// settings, and overrides such as CompletedPaths and OnFileProgress.
+func (e *Executor) Config() Config {
+	if e == nil {
+		return Config{}
+	}
+	return e.config
 }
 
 // Validate reports missing required values or an invalid Gateway or

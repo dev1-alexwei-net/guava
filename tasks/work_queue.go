@@ -83,6 +83,46 @@ func (q *WorkQueue) enqueue(snapshot []string, prioritize bool) (int, error) {
 	return len(fresh), nil
 }
 
+// Seed sets the queue's initial pending work before any discovery pass: the
+// paths in exactly the order the caller provides them, each normalized to
+// the queue's path identity. A resumed run uses this to keep the files an
+// earlier attempt left unfinished ahead of the files the manifest currently
+// reports; the first Enqueue pass appends behind them, and later passes
+// behave exactly as on a fresh run.
+//
+// All seed paths are validated before the queue is modified: a snapshot
+// containing an invalid path fails as a whole and leaves the queue
+// unchanged. Duplicate paths are queued once. It returns the number of
+// paths queued.
+func (q *WorkQueue) Seed(paths []string) (int, error) {
+	if q == nil {
+		return 0, errors.New("work queue is nil")
+	}
+	if len(q.pending) > 0 {
+		return 0, errors.New("work queue already has pending work")
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	queued := 0
+	for _, raw := range paths {
+		path, err := normalizeQueuePath(raw)
+		if err != nil {
+			return 0, fmt.Errorf("work queue seed path %q: %w", raw, err)
+		}
+		if _, inSeed := seen[path]; inSeed {
+			continue
+		}
+		seen[path] = struct{}{}
+		if _, known := q.discovered[path]; known {
+			continue
+		}
+		q.discovered[path] = struct{}{}
+		q.pending = append(q.pending, path)
+		queued++
+	}
+	return queued, nil
+}
+
 // Pop removes and returns the oldest queued path, preserving FIFO order.
 // The second return value is false when the queue is empty.
 func (q *WorkQueue) Pop() (string, bool) {

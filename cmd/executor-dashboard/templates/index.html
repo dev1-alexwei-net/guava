@@ -166,6 +166,41 @@
       </div>
     </section>
 
+    <section class="card shadow-sm mb-4" aria-labelledby="pending-heading">
+      <div class="card-header bg-body d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1">
+        <h2 class="h5 mb-0" id="pending-heading">Pending files</h2>
+        {{if .PendingFiles}}<span class="badge text-bg-warning">{{len .PendingFiles}} unfinished</span>{{end}}
+      </div>
+      <div class="card-body">
+        {{if .HasSession}}
+          {{if .PendingFiles}}
+          <p class="text-body-secondary small">
+            Files this session has not completed yet. Carried over files were unfinished before the latest run;
+            newly discovered files were found in the current file list.
+          </p>
+          <details class="border rounded" open>
+            <summary class="d-flex justify-content-between align-items-center px-3 py-2 fw-semibold">
+              <span>Show the {{len .PendingFiles}} pending file{{if ne (len .PendingFiles) 1}}s{{end}}</span>
+              <span class="text-body-secondary small">Click to collapse</span>
+            </summary>
+            <ul class="list-group list-group-flush">
+              {{range .PendingFiles}}
+              <li class="list-group-item d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1" aria-label="Pending file {{.Path}}">
+                <span class="font-monospace text-break">{{.Path}}</span>
+                <span class="badge {{if .Carried}}text-bg-secondary{{else}}text-bg-info{{end}}">{{if .Carried}}Carried over{{else}}Newly discovered{{end}}</span>
+              </li>
+              {{end}}
+            </ul>
+          </details>
+          {{else}}
+          <p class="mb-0 text-body-secondary">No pending files</p>
+          {{end}}
+        {{else}}
+        <p class="mb-0 text-body-secondary">No session yet</p>
+        {{end}}
+      </div>
+    </section>
+
     <section class="card shadow-sm" aria-labelledby="logs-heading">
       <div class="card-header bg-body d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-1">
         <h2 class="h5 mb-0" id="logs-heading">Logs</h2>

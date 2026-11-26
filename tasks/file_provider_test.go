@@ -173,3 +173,129 @@ func TestFileProviderKeepsDeclinedTaskPending(t *testing.T) {
 		t.Fatalf("declined task IDs = %q then %q, want the same pending task", first, second)
 	}
 }
+
+func TestFileProviderSkipsCompletedFiles(t *testing.T) {
+	root := t.TempDir()
+	fallbackPath := filepath.Join(t.TempDir(), "fallback.md")
+	if err := os.WriteFile(fallbackPath, []byte("instructions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name := range map[string]string{"a.txt": "first", "b.txt": "second", "c.txt": "third"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createIndexFixture(t, databasePath, []indexedFile{
+		{path: "a.txt", name: "a.txt"},
+		{path: "b.txt", name: "b.txt"},
+		{path: "c.txt", name: "c.txt"},
+	}, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := NewFileProvider(context.Background(), FileProviderConfig{
+		DatabasePath: databasePath, RootPath: root, InstructionsPath: fallbackPath,
+		FileExplorerURL: server.URL, CompletedPaths: []string{"a.txt", "b.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+
+	var got []string
+	if err := provider.Tasks(func(task Task) bool { got = append(got, task.ID()); return true }); err != nil {
+		t.Fatalf("Tasks() error = %v", err)
+	}
+	if want := []string{"c.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("task IDs = %#v, want only the uncompleted file %#v", got, want)
+	}
+}
+
+func TestFileProviderRejectsInvalidCompletedPaths(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createIndexFixture(t, databasePath, nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	for _, completed := range [][]string{{""}, {"../outside.txt"}, {"/absolute.txt"}} {
+		_, err := NewFileProvider(context.Background(), FileProviderConfig{
+			DatabasePath: databasePath, RootPath: t.TempDir(),
+			InstructionsPath: filepath.Join(t.TempDir(), "fallback.md"),
+			FileExplorerURL:  server.URL, CompletedPaths: completed,
+		})
+		if err == nil {
+			t.Errorf("NewFileProvider(CompletedPaths=%#v) succeeded, want validation error", completed)
+		}
+	}
+}
+
+func TestFileProviderSeedsInitialPendingAheadOfNewlyDiscoveredFiles(t *testing.T) {
+	root := t.TempDir()
+	fallbackPath := filepath.Join(t.TempDir(), "fallback.md")
+	if err := os.WriteFile(fallbackPath, []byte("instructions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// z.txt is the file an earlier attempt left unfinished, a.txt and c.txt
+	// were reported after it, and m.txt is already done. z.txt sorts after
+	// both new files, so the wanted order only holds if the seeded file stays
+	// ahead of the newly discovered batch.
+	for name := range map[string]string{"a.txt": "a", "c.txt": "c", "m.txt": "m", "z.txt": "z"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createIndexFixture(t, databasePath, []indexedFile{
+		{path: "a.txt", name: "a.txt"},
+		{path: "c.txt", name: "c.txt"},
+		{path: "m.txt", name: "m.txt"},
+		{path: "z.txt", name: "z.txt"},
+	}, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := NewFileProvider(context.Background(), FileProviderConfig{
+		DatabasePath: databasePath, RootPath: root, InstructionsPath: fallbackPath,
+		FileExplorerURL: server.URL, CompletedPaths: []string{"m.txt"}, InitialPending: []string{"z.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+
+	var got []string
+	if err := provider.Tasks(func(task Task) bool { got = append(got, task.ID()); return true }); err != nil {
+		t.Fatalf("Tasks() error = %v", err)
+	}
+	if want := []string{"z.txt", "a.txt", "c.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("task IDs = %#v, want the unfinished file %#v ahead of the newly discovered batch",
+			got, want)
+	}
+}
+
+func TestFileProviderRejectsInvalidInitialPendingPaths(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createIndexFixture(t, databasePath, nil, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	for _, initial := range [][]string{{""}, {"../outside.txt"}, {"/absolute.txt"}} {
+		_, err := NewFileProvider(context.Background(), FileProviderConfig{
+			DatabasePath: databasePath, RootPath: t.TempDir(),
+			InstructionsPath: filepath.Join(t.TempDir(), "fallback.md"),
+			FileExplorerURL:  server.URL, InitialPending: initial,
+		})
+		if err == nil {
+			t.Errorf("NewFileProvider(InitialPending=%#v) succeeded, want validation error", initial)
+		}
+	}
+}

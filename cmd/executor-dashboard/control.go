@@ -81,7 +81,7 @@ func newExecutorController(config executor.Config, level slog.Level, store taskS
 	return &executorController{
 		runner:         runner,
 		active:         runner,
-		sessionManager: newTaskSessionManager(config, store),
+		sessionManager: newTaskSessionManager(config, store, logger),
 		logger:         logger,
 		logs:           logs,
 		status:         "idle",
@@ -109,11 +109,11 @@ func (c *executorController) Start(subdirectory string) error {
 		}
 		runner = derived
 	}
-	record, err := c.sessionManager.Create(runner)
+	bound, record, err := c.sessionManager.Create(runner)
 	if err != nil {
 		return err
 	}
-	return c.startLocked(runner, record)
+	return c.startLocked(bound, record)
 }
 
 // Resume rehydrates one explicitly selected record using its persisted agent,

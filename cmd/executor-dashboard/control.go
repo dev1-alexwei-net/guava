@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ const maxLogBytes = 64 << 10
 type executorController struct {
 	mu         sync.Mutex
 	runner     *executor.Executor
+	active     *executor.Executor
 	logger     *slog.Logger
 	logs       *tailLogBuffer
 	status     string
@@ -25,13 +27,14 @@ type executorController struct {
 }
 
 type executorSnapshot struct {
-	Status     string
-	Logs       string
-	LastErr    string
-	AgentID    string
-	CLIArgs    string
-	StartedAt  time.Time
-	FinishedAt time.Time
+	Status       string
+	Logs         string
+	LastErr      string
+	AgentID      string
+	CLIArgs      string
+	Subdirectory string
+	StartedAt    time.Time
+	FinishedAt   time.Time
 }
 
 type tailLogBuffer struct {
@@ -73,19 +76,36 @@ func newExecutorController(config executor.Config, level slog.Level) (*executorC
 	}
 	return &executorController{
 		runner: runner,
+		active: runner,
 		logger: logger,
 		logs:   logs,
 		status: "idle",
 	}, nil
 }
 
-func (c *executorController) Start() error {
+// Start begins an executor run. A non-empty subdirectory is applied as a
+// per-run override on top of the startup configuration: the database and
+// root are preserved, and the override is validated exactly like the
+// -subdirectory flag, so an unknown or stale selection fails before any run
+// starts. An empty subdirectory keeps the whole-root behavior. The session
+// summary and CLI args of the run reflect the subdirectory that was used.
+func (c *executorController) Start(subdirectory string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.status == "running" || c.status == "stopping" {
 		return errors.New("executor is already running")
 	}
+
+	runner := c.runner
+	if strings.TrimSpace(subdirectory) != "" {
+		derived, err := c.runner.WithSubdirectory(subdirectory)
+		if err != nil {
+			return err
+		}
+		runner = derived
+	}
+	c.active = runner
 	c.logs.Reset()
 	c.finishedAt = time.Time{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -94,13 +114,13 @@ func (c *executorController) Start() error {
 	c.done = done
 	c.status = "running"
 	c.lastErr = ""
-	c.logger.Info("Executor start requested")
-	go c.run(ctx, done)
+	c.logger.Info("Executor start requested", slog.String("subdirectory", runner.SessionSummary().Subdirectory))
+	go c.run(ctx, done, runner)
 	return nil
 }
 
-func (c *executorController) run(ctx context.Context, done chan struct{}) {
-	err := c.runner.Run(ctx)
+func (c *executorController) run(ctx context.Context, done chan struct{}, runner *executor.Executor) {
+	err := runner.Run(ctx)
 
 	c.mu.Lock()
 	cancel := c.cancel
@@ -148,15 +168,16 @@ func (c *executorController) Snapshot() executorSnapshot {
 	// SessionSummary takes the executor's own lock; nesting it under the
 	// controller lock is safe because the executor never calls back into the
 	// dashboard.
-	summary := c.runner.SessionSummary()
+	summary := c.active.SessionSummary()
 	return executorSnapshot{
-		Status:     c.status,
-		Logs:       c.logs.String(),
-		LastErr:    c.lastErr,
-		AgentID:    summary.AgentID,
-		CLIArgs:    summary.CLIArgs,
-		StartedAt:  summary.StartedAt,
-		FinishedAt: c.finishedAt,
+		Status:       c.status,
+		Logs:         c.logs.String(),
+		LastErr:      c.lastErr,
+		AgentID:      summary.AgentID,
+		CLIArgs:      summary.CLIArgs,
+		Subdirectory: summary.Subdirectory,
+		StartedAt:    summary.StartedAt,
+		FinishedAt:   c.finishedAt,
 	}
 }
 

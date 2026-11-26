@@ -3,6 +3,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -90,6 +91,41 @@ func New(config Config) (*Executor, error) {
 		config.HTTPClient = http.DefaultClient
 	}
 
+	return &Executor{
+		config:             config,
+		conversationTokens: newConversationTokenBucket(),
+		status:             StatusIdle,
+	}, nil
+}
+
+// WithSubdirectory returns an executor identical to e except that its run
+// is scoped to subdirectory: a folder inside the configured filesystem
+// root, or empty for the whole root. The override is normalized and
+// validated exactly like the startup -subdirectory flag, and every other
+// field — in particular DatabasePath and RootPath — is preserved
+// unchanged, so the derived executor always targets the same fileexplorer
+// database and root as e.
+//
+// The returned executor is independent of e: e keeps its configured
+// subdirectory and the two share no run state. Because the derived
+// executor is the one that runs, its session summary reports the
+// subdirectory, and its CLI args carry the -subdirectory flag when a
+// command line was configured, so the summary matches the run that
+// actually happens.
+func (e *Executor) WithSubdirectory(subdirectory string) (*Executor, error) {
+	if e == nil {
+		return nil, errors.New("executor is nil")
+	}
+	config := e.config
+	config.Subdirectory = normalizeSubdirectory(subdirectory)
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	if config.Subdirectory != "" {
+		if base := strings.TrimSpace(config.CLIArgs); base != "" {
+			config.CLIArgs = base + " -subdirectory " + config.Subdirectory
+		}
+	}
 	return &Executor{
 		config:             config,
 		conversationTokens: newConversationTokenBucket(),

@@ -198,3 +198,117 @@ func TestNewKeepsCustomHTTPClient(t *testing.T) {
 		t.Fatal("New did not preserve the configured HTTP client")
 	}
 }
+
+func TestWithSubdirectoryDerivesScopedExecutor(t *testing.T) {
+	base := validConfig()
+	base.CLIArgs = `executor -database /var/lib/fileexplorer.sqlite -root /srv/files`
+	original, err := New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detected, err := original.WithSubdirectory("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if detected.config.Subdirectory != "docs" {
+		t.Errorf("derived Subdirectory = %q, want %q", detected.config.Subdirectory, "docs")
+	}
+	if detected.config.DatabasePath != base.DatabasePath || detected.config.RootPath != base.RootPath {
+		t.Errorf("derived database/root = %q/%q, want the base %q/%q preserved",
+			detected.config.DatabasePath, detected.config.RootPath, base.DatabasePath, base.RootPath)
+	}
+	if original.config.Subdirectory != "" {
+		t.Errorf("original Subdirectory = %q, want the base unchanged after derivation", original.config.Subdirectory)
+	}
+	if original.config.CLIArgs != base.CLIArgs {
+		t.Errorf("original CLIArgs = %q, want %q unchanged", original.config.CLIArgs, base.CLIArgs)
+	}
+	wantArgs := base.CLIArgs + " -subdirectory docs"
+	if detected.config.CLIArgs != wantArgs {
+		t.Errorf("derived CLIArgs = %q, want %q", detected.config.CLIArgs, wantArgs)
+	}
+	if detected.status != StatusIdle {
+		t.Errorf("derived status = %q, want idle before a run", detected.status)
+	}
+}
+
+func TestWithSubdirectoryOverridesPreviousSelection(t *testing.T) {
+	base := validConfig()
+	base.Subdirectory = "docs"
+	original, err := New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detected, err := original.WithSubdirectory("docs/deep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detected.config.Subdirectory != "docs/deep" {
+		t.Errorf("derived Subdirectory = %q, want the newer selection %q", detected.config.Subdirectory, "docs/deep")
+	}
+	if original.config.Subdirectory != "docs" {
+		t.Errorf("original Subdirectory = %q, want the previous selection %q preserved", original.config.Subdirectory, "docs")
+	}
+}
+
+func TestWithSubdirectoryNormalizesSelection(t *testing.T) {
+	original, err := New(validConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detected, err := original.WithSubdirectory(" docs/nested/// ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detected.config.Subdirectory != "docs/nested" {
+		t.Errorf("derived Subdirectory = %q, want normalized %q", detected.config.Subdirectory, "docs/nested")
+	}
+}
+
+func TestWithSubdirectoryEmptyKeepsWholeRoot(t *testing.T) {
+	base := validConfig()
+	base.Subdirectory = "docs"
+	base.CLIArgs = "executor -root /srv/files"
+	original, err := New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detected, err := original.WithSubdirectory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detected.config.Subdirectory != "" {
+		t.Errorf("derived Subdirectory = %q, want empty for the whole root", detected.config.Subdirectory)
+	}
+	if detected.config.CLIArgs != base.CLIArgs {
+		t.Errorf("derived CLIArgs = %q, want %q unchanged when unscoping", detected.config.CLIArgs, base.CLIArgs)
+	}
+}
+
+func TestWithSubdirectoryRejectsInvalidSelection(t *testing.T) {
+	original, err := New(validConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, selection := range []string{"/absolute", "../escape", "a/../../escape", "."} {
+		if _, err := original.WithSubdirectory(selection); err == nil {
+			t.Errorf("WithSubdirectory(%q) succeeded, want an error for a folder outside the root", selection)
+		}
+	}
+	if original.config.Subdirectory != "" {
+		t.Errorf("original Subdirectory = %q, want unchanged after failed derivations", original.config.Subdirectory)
+	}
+}
+
+func TestWithSubdirectoryNilExecutor(t *testing.T) {
+	var executor *Executor
+	if _, err := executor.WithSubdirectory("docs"); err == nil {
+		t.Error("WithSubdirectory on a nil executor succeeded, want an error")
+	}
+}

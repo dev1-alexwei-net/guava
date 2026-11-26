@@ -10,11 +10,11 @@ import (
 
 type failedTaskProvider struct{ err error }
 
-func (p failedTaskProvider) Tasks(func(conversations.Task) bool) error { return p.err }
+func (p failedTaskProvider) Tasks(func(conversations.Task) error) error { return p.err }
 
 type closingTaskProvider struct{ provider *tasks.FileProvider }
 
-func (p closingTaskProvider) Tasks(fn func(conversations.Task) bool) (err error) {
+func (p closingTaskProvider) Tasks(fn func(conversations.Task) error) (err error) {
 	defer func() { err = errors.Join(err, p.provider.Close()) }()
 	return p.provider.Tasks(fn)
 }

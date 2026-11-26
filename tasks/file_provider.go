@@ -144,7 +144,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 // deterministic queue order. Instruction files are inputs to other tasks,
 // never work items. A false callback return stops iteration, leaving that task
 // pending if this provider is used again.
-func (p *FileProvider) Tasks(fn func(conversations.Task) bool) error {
+func (p *FileProvider) Tasks(fn func(conversations.Task) error) error {
 	if p == nil || p.closed {
 		return errors.New("file task provider is not open")
 	}
@@ -207,8 +207,12 @@ func (p *FileProvider) Tasks(fn func(conversations.Task) bool) error {
 		}
 
 		task := p.newFileTask(file)
-		if !fn(task) {
-			return nil
+		//if !fn(task) {
+		//	return nil
+		//}
+		err = fn(task)
+		if err != nil {
+			return err
 		}
 		if popped, ok := p.queue.Pop(); !ok || popped != filePath {
 			return fmt.Errorf("work queue changed while processing %q", filePath)

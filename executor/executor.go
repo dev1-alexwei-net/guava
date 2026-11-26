@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -52,26 +51,6 @@ func (e *Executor) conversationTokenBucket() *tokenBucket {
 	}
 	return e.conversationTokens
 }
-
-// Refresher and FileLister remain aliases for compatibility; their shared
-// contracts now live with the task source package.
-type Refresher = tasks.Refresher
-type FileLister = tasks.FileLister
-
-// ProcessFile remains available for callers that used the historical executor
-// discovery seam; production task processing is now owned by conversations.
-type ProcessFile func(ctx context.Context, path string) error
-
-// NewGatewayHTTPClient remains available from executor for CLI compatibility.
-func NewGatewayHTTPClient(verifyTLS bool) *http.Client {
-	return conversations.NewGatewayHTTPClient(verifyTLS)
-}
-
-// HTTPRefresher and NewHTTPRefresher remain compatibility aliases. The
-// fileexplorer adapter is owned by the tasks package.
-type HTTPRefresher = tasks.HTTPRefresher
-
-var NewHTTPRefresher = tasks.NewHTTPRefresher
 
 // These wire shapes remain local aliases for compatibility with executor tests
 // and callers that historically used package-private helpers.
@@ -166,12 +145,6 @@ func (e *Executor) Run(ctx context.Context) error {
 		return e.conversationService.Run(ctx, failedTaskProvider{err: err})
 	}
 	return e.conversationService.Run(ctx, closingTaskProvider{provider: provider})
-}
-
-// ListSubdirectories remains available for existing callers; the
-// fileexplorer manifest implementation now lives in the tasks package.
-func ListSubdirectories(ctx context.Context, databasePath string) ([]string, error) {
-	return tasks.ListSubdirectories(ctx, databasePath)
 }
 
 const (
@@ -283,9 +256,3 @@ func (b *tokenBucket) tryTake() (bool, time.Duration) {
 	}
 	return false, waitFor
 }
-
-// WorkQueue and NewWorkQueue remain compatibility aliases. The implementation
-// is owned by the tasks package.
-type WorkQueue = tasks.WorkQueue
-
-var NewWorkQueue = tasks.NewWorkQueue

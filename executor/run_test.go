@@ -305,7 +305,7 @@ func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
 	}
 }
 
-func TestExecutorRunStopsOnFirstFileError(t *testing.T) {
+func TestExecutorRunStopsOnFirstTaskPromptError(t *testing.T) {
 	rootPath := t.TempDir()
 	for _, name := range []string{"a.txt", "b.txt"} {
 		if err := os.WriteFile(filepath.Join(rootPath, name), []byte(name), 0o600); err != nil {
@@ -322,6 +322,11 @@ func TestExecutorRunStopsOnFirstFileError(t *testing.T) {
 	)
 	instructionsPath := filepath.Join(t.TempDir(), "instructions.md")
 	if err := os.WriteFile(instructionsPath, []byte("instructions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Make the first indexed task fail while building its prompt so this test
+	// continues to cover stop-on-task-error behavior, not API retry policy.
+	if err := os.Remove(filepath.Join(rootPath, "a.txt")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -353,8 +358,8 @@ func TestExecutorRunStopsOnFirstFileError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "a.txt") {
 		t.Fatalf("Run() error = %v, want first file path", err)
 	}
-	if calls != 1 {
-		t.Fatalf("calls = %d, want processing to stop after the first file error", calls)
+	if calls != 0 {
+		t.Fatalf("calls = %d, want no API requests after the first task prompt error", calls)
 	}
 }
 

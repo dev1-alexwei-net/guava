@@ -583,6 +583,58 @@ func TestShowRendersSubdirectorySelectFromManifest(t *testing.T) {
 	}
 }
 
+func TestShowRefreshesSubdirectorySelectFromManifestOnEveryRequest(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath,
+		[]string{"docs/notes.md"},
+		[]string{"docs"},
+	)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	render := func() string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		app.show(rec, httptest.NewRequest("GET", "/?refresh=2", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+
+	first := render()
+	if !strings.Contains(first, `name="subdirectory"`) || !strings.Contains(first, `<option value="docs">docs</option>`) {
+		t.Fatalf("first refreshed page did not populate the subdirectory control: %s", first)
+	}
+	if strings.Contains(first, `<option value="archive">archive</option>`) {
+		t.Fatal("first page unexpectedly contains a directory not yet in the manifest")
+	}
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 1, 0, 0)", "archive", "archive"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 0, 1, 1)", "archive/readme.md", "readme.md"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second := render()
+	if !strings.Contains(second, `name="subdirectory"`) || !strings.Contains(second, `<option value="docs">docs</option>`) || !strings.Contains(second, `<option value="archive">archive</option>`) {
+		t.Fatalf("subdirectory control was not refreshed from the changed manifest: %s", second)
+	}
+}
+
 func TestShowRendersRootOnlyWhenManifestCannotBeRead(t *testing.T) {
 	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
 	if err != nil {

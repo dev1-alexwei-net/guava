@@ -14,6 +14,7 @@ import (
 
 	"github.com/dev1-alexwei-net/guava/executor"
 	"github.com/dev1-alexwei-net/guava/internal/version"
+	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
 //go:embed templates/index.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
@@ -106,7 +107,7 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 func (d *dashboard) subdirectories(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return executor.ListSubdirectories(ctx, d.databasePath)
+	return tasks.ListSubdirectories(ctx, d.databasePath)
 }
 
 func pageData(snapshot executorSnapshot, query url.Values, subdirectories []string, subdirectoryErr error) dashboardPageData {

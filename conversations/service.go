@@ -86,19 +86,16 @@ func (s *Service) Run(ctx context.Context, provider TaskProvider) (err error) {
 		logAttrs(logger, ctx, slog.LevelInfo, "Executor run completed", attrs...)
 	}()
 
-	coordinator, err := NewCoordinator(provider, func(ctx context.Context, task Task) error {
+	return provider.Tasks(func(task Task) error {
 		fileStarted := time.Now()
-		if err := s.RunTask(ctx, task); err != nil {
+		err := s.RunTask(ctx, task)
+		if err != nil {
 			logAttrs(logger, ctx, slog.LevelError, "Indexed file processing failed", slog.String("path", task.ID()), slog.Duration("elapsed", time.Since(fileStarted)), slog.Any("error", err))
-			return fmt.Errorf("process task %q: %w", task.ID(), err)
+		} else {
+			logAttrs(logger, ctx, slog.LevelInfo, "Indexed file processing completed", slog.String("path", task.ID()), slog.Duration("elapsed", time.Since(fileStarted)))
 		}
-		logAttrs(logger, ctx, slog.LevelInfo, "Indexed file processing completed", slog.String("path", task.ID()), slog.Duration("elapsed", time.Since(fileStarted)))
-		return nil
-	})
-	if err != nil {
 		return err
-	}
-	return coordinator.Run(ctx)
+	})
 }
 
 // RunTask obtains a task's prompt and runs its conversation to completion.

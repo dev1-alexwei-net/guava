@@ -201,8 +201,8 @@ func TestSessionSummaryAfterCompletedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
-	createIndexFixture(t, databasePath, []indexedFile{{path: "a.txt", name: "a.txt"}}, nil)
-	instructionsPath := filepath.Join(t.TempDir(), "instructions.md")
+	createIndexFixture(t, databasePath, []indexedFile{{path: "a.txt", name: "a.txt"}, {path: "instructions.md", name: "instructions.md"}}, nil)
+	instructionsPath := filepath.Join(rootPath, "instructions.md")
 	if err := os.WriteFile(instructionsPath, []byte("instructions"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -704,22 +704,56 @@ func TestStartEmptySelectionKeepsWholeRoot(t *testing.T) {
 
 func TestStartWhileRunningIsRejected(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
-	createManifestFixture(t, databasePath,
-		[]string{"root.txt", "docs/notes.md"},
-		[]string{"docs"},
-	)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	rootPath := t.TempDir()
+	createIndexedFile(t, rootPath, databasePath, "docs/notes.md", "Process the indexed file.")
+	if err := os.WriteFile(filepath.Join(rootPath, "instructions.md"), []byte("Process the indexed file."), 0o600); err != nil {
+		t.Fatalf("write instructions: %v", err)
+	}
+
+	requestStarted := make(chan struct{}, 1)
+	releaseRequest := make(chan struct{})
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		requestStarted <- struct{}{}
+		<-releaseRequest
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"response-1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<complete />"}]}]}`)
+	}))
+	config := testConfig(t, databasePath)
+	config.RootPath = rootPath
+	config.InstructionsPath = filepath.Join(rootPath, "instructions.md")
+	config.GatewayURL = gateway.URL
+	config.FileExplorerURL = gateway.URL
+	config.HTTPClient = gateway.Client()
+	app, err := newDashboard(config, slog.LevelInfo)
 	if err != nil {
+		gateway.Close()
 		t.Fatalf("newDashboard: %v", err)
 	}
-	t.Cleanup(app.Close)
+	t.Cleanup(func() {
+		close(releaseRequest)
+		app.Close()
+		gateway.Close()
+	})
 
 	if err := app.controller.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	select {
+	case <-requestStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for the first run to reach the Gateway; snapshot: %+v", app.controller.Snapshot())
+	}
+
 	query := redirectLocation(t, postStart(t, app, "docs"))
 	if got := query.Get("error"); !strings.Contains(got, "already running") {
 		t.Errorf("redirect error = %q, want the already-running rejection", got)
+	}
+	if snapshot := app.controller.Snapshot(); snapshot.Status != "running" {
+		t.Errorf("status after rejected start = %q, want running while the first Gateway request is blocked", snapshot.Status)
 	}
 }
 

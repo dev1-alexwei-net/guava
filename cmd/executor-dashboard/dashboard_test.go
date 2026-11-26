@@ -394,12 +394,12 @@ func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testi
 	}
 
 	form := url.Values{"session_id": {saved.ID}}
-	req := httptest.NewRequest("POST", "/resume", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	app.resume(rec, req)
+	app.start(rec, req)
 	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
-		t.Fatalf("resume response = %d %q, want a successful redirect", rec.Code, rec.Header().Get("Location"))
+		t.Fatalf("selected-session response = %d %q, want a successful redirect", rec.Code, rec.Header().Get("Location"))
 	}
 
 	snapshot := waitForControllerStatus(t, app.controller, "completed")
@@ -755,6 +755,67 @@ func createManifestFixture(t *testing.T, databasePath string, files []string, di
 		if _, err := db.Exec("INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 0, 1, 1)", file, filepath.Base(file)); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath, nil, nil)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	for _, record := range []sessions.Record{
+		{ID: "paused-session", AgentID: "agent-paused", RootDirectory: "/saved/files", Subdirectory: "docs", DatabaseFile: "/saved/index.sqlite", Status: sessions.StatusPaused},
+		{ID: "active-session", AgentID: "agent-active", RootDirectory: "/active/files", DatabaseFile: "/active/index.sqlite", Status: sessions.StatusActive},
+	} {
+		if _, err := app.store.Create(context.Background(), record); err != nil {
+			t.Fatalf("Create saved session %q: %v", record.ID, err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	app.show(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`<link href="/static/bootstrap.min.css" rel="stylesheet">`,
+		`id="session-fresh" type="radio" name="session_id" value="" checked`,
+		`value="paused-session"`, `agent-paused`, `paused`, `/docs`,
+		`value="active-session"`, `agent-active`, `active`,
+		`id="saved-session-active-session" type="radio" name="session_id" value="active-session" disabled`,
+		`col-12 col-md-6`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered page missing %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(body), "<script") {
+		t.Error("rendered selector must not include client-side JavaScript")
+	}
+}
+
+func TestStartRejectsUnknownSavedSession(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "fileexplorer.sqlite")), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	form := url.Values{"session_id": {"missing-session"}}
+	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	app.start(rec, req)
+	if got := redirectLocation(t, rec).Get("error"); !strings.Contains(got, "task session not found") {
+		t.Errorf("redirect error = %q, want missing-session validation", got)
+	}
+	if snapshot := app.controller.Snapshot(); snapshot.Status != "idle" {
+		t.Errorf("status = %q, want idle after rejecting an unknown saved session", snapshot.Status)
 	}
 }
 

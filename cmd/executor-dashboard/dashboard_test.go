@@ -201,6 +201,26 @@ func TestPageDataWithoutSessionShowsEmptyState(t *testing.T) {
 	}
 }
 
+func TestPageDataShowsAcceptedSessionBeforeRunStarts(t *testing.T) {
+	snapshot := executorSnapshot{
+		Status:       "running",
+		AgentID:      "executor-agent",
+		CLIArgs:      rawCLIArgs,
+		Subdirectory: "docs/deep",
+	}
+	data := pageData(snapshot, url.Values{}, nil, nil)
+
+	if !data.HasSession {
+		t.Fatal("HasSession = false, want true once a run is accepted")
+	}
+	if data.Subdirectory != "docs/deep" || data.CLIArgs != rawCLIArgs {
+		t.Errorf("session details = subdirectory %q, CLI args %q; want selected subdirectory and configured args", data.Subdirectory, data.CLIArgs)
+	}
+	if data.StartedFormatted != "" || data.Duration != "" {
+		t.Errorf("start time/duration = %q/%q, want blank until the executor records StartedAt", data.StartedFormatted, data.Duration)
+	}
+}
+
 func TestSessionDuration(t *testing.T) {
 	startedAt := time.Date(2026, 11, 24, 12, 30, 0, 0, time.UTC)
 	cases := []struct {

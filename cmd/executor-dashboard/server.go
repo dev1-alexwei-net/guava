@@ -116,11 +116,15 @@ func pageData(snapshot executorSnapshot, query url.Values, subdirectories []stri
 	if theme == "dark" {
 		nextTheme = "light"
 	}
-	hasSession := !snapshot.StartedAt.IsZero()
+	// Start accepts a run synchronously before the executor goroutine sets
+	// StartedAt. Treat any non-idle controller status as an accepted session
+	// so the summary (including the run's selected subdirectory and CLI args)
+	// is visible immediately after Start.
+	hasSession := !snapshot.StartedAt.IsZero() || snapshot.Status != "idle"
 	duration := sessionDuration(snapshot)
 
 	var startedFormatted string
-	if hasSession {
+	if !snapshot.StartedAt.IsZero() {
 		startedFormatted = snapshot.StartedAt.Format(time.DateTime)
 	}
 

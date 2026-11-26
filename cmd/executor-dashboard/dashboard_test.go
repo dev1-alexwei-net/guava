@@ -1,12 +1,15 @@
 package main
 
 import (
+	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -134,7 +137,7 @@ func TestPageDataCarriesSessionSummaryForEveryStatus(t *testing.T) {
 				CLIArgs:   rawCLIArgs,
 				StartedAt: startedAt,
 			}
-			data := pageData(snapshot, query)
+			data := pageData(snapshot, query, []string{"docs", "docs/deep"}, nil)
 
 			if data.Status != tc.status {
 				t.Errorf("Status = %q, want %q", data.Status, tc.status)
@@ -166,6 +169,12 @@ func TestPageDataCarriesSessionSummaryForEveryStatus(t *testing.T) {
 			if data.Duration == "" {
 				t.Error("Duration empty, want the live elapsed time")
 			}
+			if want := []string{"docs", "docs/deep"}; !reflect.DeepEqual(data.Subdirectories, want) {
+				t.Errorf("Subdirectories = %#v, want %#v", data.Subdirectories, want)
+			}
+			if data.SubdirectoryHint != "" {
+				t.Errorf("SubdirectoryHint = %q, want none", data.SubdirectoryHint)
+			}
 		})
 	}
 }
@@ -176,7 +185,7 @@ func TestPageDataWithoutSessionShowsEmptyState(t *testing.T) {
 		AgentID: "executor-agent",
 		CLIArgs: rawCLIArgs,
 	}
-	data := pageData(snapshot, url.Values{})
+	data := pageData(snapshot, url.Values{}, nil, nil)
 
 	if data.HasSession {
 		t.Error("HasSession = true, want false before the first run")
@@ -301,4 +310,119 @@ func waitForControllerStatus(t *testing.T, controller *executorController, want 
 	}
 	t.Fatalf("timed out waiting for status %q; last = %+v", want, controller.Snapshot())
 	return executorSnapshot{}
+}
+
+func TestPageDataSurfacesSubdirectoryDegradation(t *testing.T) {
+	data := pageData(executorSnapshot{}, url.Values{}, nil, errors.New("manifest unreadable"))
+
+	if data.Subdirectories != nil {
+		t.Fatalf("Subdirectories = %#v, want nil when the manifest cannot be read", data.Subdirectories)
+	}
+	if data.SubdirectoryHint == "" {
+		t.Error("SubdirectoryHint empty, want the degradation note")
+	}
+}
+
+func createManifestFixture(t *testing.T, databasePath string, files []string, directories []string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE files (path TEXT PRIMARY KEY, name TEXT NOT NULL, is_dir INTEGER NOT NULL DEFAULT 0, size INTEGER NOT NULL DEFAULT 0, mtime INTEGER NOT NULL DEFAULT 0)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range directories {
+		if _, err := db.Exec("INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 1, 0, 0)", directory, filepath.Base(directory)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range files {
+		if _, err := db.Exec("INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 0, 1, 1)", file, filepath.Base(file)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestShowRendersSubdirectorySelectFromManifest(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath,
+		[]string{"root.txt", "docs/notes.md", "docs/deep/page.md", "misc/file.txt"},
+		[]string{"docs", "docs/deep"},
+	)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	app.show(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`<select class="form-select" id="subdirectory" name="subdirectory">`,
+		`<option value="" selected>All files (root)</option>`,
+		`<option value="docs">docs</option>`,
+		`<option value="docs/deep">docs/deep</option>`,
+		`<option value="misc">misc</option>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "The subdirectory list is unavailable") {
+		t.Error("degradation hint rendered, want none")
+	}
+
+	startForm := strings.Index(body, `action="/start`)
+	if startForm == -1 {
+		t.Fatal("start form missing from the page")
+	}
+	rest := body[startForm:]
+	selectIdx := strings.Index(rest, `name="subdirectory"`)
+	formClose := strings.Index(rest, "</form>")
+	if selectIdx == -1 || formClose == -1 || selectIdx > formClose {
+		t.Fatalf("select not inside the /start form (select=%d close=%d)", selectIdx, formClose)
+	}
+
+	if want := `<option value="" selected>All files (root)</option>`; strings.Index(body, want) != strings.Index(body, "<option value=") {
+		t.Error("first option is not the selected root option")
+	}
+}
+
+func TestShowRendersRootOnlyWhenManifestCannotBeRead(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	app.show(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	if !strings.Contains(body, `name="subdirectory"`) {
+		t.Error("subdirectory select missing")
+	}
+	if !strings.Contains(body, `<option value="" selected>All files (root)</option>`) {
+		t.Error("root option missing")
+	}
+	if strings.Contains(body, `<option value="docs"`) {
+		t.Error("extra option rendered without a readable manifest")
+	}
+	if !strings.Contains(body, "The subdirectory list is unavailable") {
+		t.Error("degradation hint missing")
+	}
 }

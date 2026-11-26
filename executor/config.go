@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dev1-alexwei-net/guava/conversations"
 )
 
 // Config describes the file source and OpenClaw Gateway used by an Executor.
@@ -73,9 +75,8 @@ type Executor struct {
 	conversationTokens *tokenBucket
 	retryWait          func(context.Context, time.Duration) error
 
-	mu        sync.Mutex
-	status    string
-	startedAt time.Time
+	mu                  sync.Mutex
+	conversationService *conversations.Service
 }
 
 // New validates config and returns an Executor.
@@ -91,11 +92,11 @@ func New(config Config) (*Executor, error) {
 		config.HTTPClient = http.DefaultClient
 	}
 
-	return &Executor{
-		config:             config,
-		conversationTokens: newConversationTokenBucket(),
-		status:             StatusIdle,
-	}, nil
+	service, err := conversations.New(conversationConfig(config))
+	if err != nil {
+		return nil, err
+	}
+	return &Executor{config: config, conversationTokens: newConversationTokenBucket(), conversationService: service}, nil
 }
 
 // WithSubdirectory returns an executor identical to e except that its run
@@ -126,11 +127,11 @@ func (e *Executor) WithSubdirectory(subdirectory string) (*Executor, error) {
 			config.CLIArgs = base + " -subdirectory " + config.Subdirectory
 		}
 	}
-	return &Executor{
-		config:             config,
-		conversationTokens: newConversationTokenBucket(),
-		status:             StatusIdle,
-	}, nil
+	service, err := conversations.New(conversationConfig(config))
+	if err != nil {
+		return nil, err
+	}
+	return &Executor{config: config, conversationTokens: newConversationTokenBucket(), conversationService: service}, nil
 }
 
 // Validate reports missing required values or an invalid Gateway or
@@ -218,4 +219,8 @@ func validateBaseURL(field, value string) error {
 		return fmt.Errorf("%s must not contain a query or fragment", field)
 	}
 	return nil
+}
+
+func conversationConfig(config Config) conversations.Config {
+	return conversations.Config{GatewayURL: config.GatewayURL, AgentID: config.AgentID, AuthToken: config.AuthToken, HTTPClient: config.HTTPClient, Logger: config.Logger, CLIArgs: config.CLIArgs, Subdirectory: config.Subdirectory}
 }

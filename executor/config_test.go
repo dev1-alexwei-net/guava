@@ -229,8 +229,8 @@ func TestWithSubdirectoryDerivesScopedExecutor(t *testing.T) {
 	if detected.config.CLIArgs != wantArgs {
 		t.Errorf("derived CLIArgs = %q, want %q", detected.config.CLIArgs, wantArgs)
 	}
-	if detected.status != StatusIdle {
-		t.Errorf("derived status = %q, want idle before a run", detected.status)
+	if status := detected.SessionSummary().Status; status != StatusIdle {
+		t.Errorf("derived status = %q, want idle before a run", status)
 	}
 }
 

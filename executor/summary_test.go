@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/dev1-alexwei-net/guava/conversations"
 )
 
 // rawCLIArgs models the raw dump of a server command line, including an
@@ -34,8 +36,8 @@ func TestSessionSummaryBeforeFirstRun(t *testing.T) {
 	if summary.CLIArgs != rawCLIArgs {
 		t.Errorf("CLIArgs = %q, want raw dump %q", summary.CLIArgs, rawCLIArgs)
 	}
-	if summary.Status != StatusIdle {
-		t.Errorf("Status = %q, want %q", summary.Status, StatusIdle)
+	if summary.Status != conversations.StatusIdle {
+		t.Errorf("Status = %q, want %q", summary.Status, conversations.StatusIdle)
 	}
 	if !summary.StartedAt.IsZero() {
 		t.Errorf("StartedAt = %v, want zero before the first run", summary.StartedAt)
@@ -45,7 +47,7 @@ func TestSessionSummaryBeforeFirstRun(t *testing.T) {
 func TestSessionSummaryNilExecutor(t *testing.T) {
 	var runner *Executor
 	summary := runner.SessionSummary()
-	if summary.Status != StatusIdle || !summary.StartedAt.IsZero() {
+	if summary.Status != conversations.StatusIdle || !summary.StartedAt.IsZero() {
 		t.Errorf("nil Executor SessionSummary = %+v, want idle with zero StartedAt", summary)
 	}
 }
@@ -94,7 +96,7 @@ func TestSessionSummaryDuringAndAfterCanceledRun(t *testing.T) {
 		runDone <- runner.Run(ctx)
 	}()
 
-	summary := waitForSummaryStatus(t, runner, StatusRunning)
+	summary := waitForSummaryStatus(t, runner, conversations.StatusRunning)
 	if summary.AgentID != "executor-agent" {
 		t.Errorf("during run AgentID = %q, want %q", summary.AgentID, "executor-agent")
 	}
@@ -128,8 +130,8 @@ func TestSessionSummaryDuringAndAfterCanceledRun(t *testing.T) {
 		t.Fatalf("Run() error = %v, want context.Canceled", runErr)
 	}
 	summary = runner.SessionSummary()
-	if summary.Status != StatusStopped {
-		t.Errorf("after canceled run Status = %q, want %q", summary.Status, StatusStopped)
+	if summary.Status != conversations.StatusStopped {
+		t.Errorf("after canceled run Status = %q, want %q", summary.Status, conversations.StatusStopped)
 	}
 	if summary.StartedAt.IsZero() {
 		t.Error("after canceled run StartedAt = zero, want the run start time")
@@ -153,9 +155,9 @@ func TestSessionSummaryAfterCompletedRun(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		response := responsesAPIResponse{
+		response := testResponsesAPIResponse{
 			ID:     "resp_1",
-			Output: assistantText(completionMarker),
+			Output: testAssistantText(testCompletionMarker),
 		}
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("encode response: %v", err)
@@ -181,8 +183,8 @@ func TestSessionSummaryAfterCompletedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary := runner.SessionSummary()
-	if summary.Status != StatusCompleted {
-		t.Errorf("Status = %q, want %q", summary.Status, StatusCompleted)
+	if summary.Status != conversations.StatusCompleted {
+		t.Errorf("Status = %q, want %q", summary.Status, conversations.StatusCompleted)
 	}
 	if summary.StartedAt.IsZero() {
 		t.Error("StartedAt = zero, want the run start time")
@@ -196,8 +198,8 @@ func TestSessionSummaryAfterCompletedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := runner.SessionSummary()
-	if second.Status != StatusCompleted {
-		t.Errorf("second run Status = %q, want %q", second.Status, StatusCompleted)
+	if second.Status != conversations.StatusCompleted {
+		t.Errorf("second run Status = %q, want %q", second.Status, conversations.StatusCompleted)
 	}
 	if second.StartedAt.Before(firstStartedAt) {
 		t.Errorf("second run StartedAt = %v, want at or after the first run's %v", second.StartedAt, firstStartedAt)
@@ -248,8 +250,8 @@ func TestSessionSummaryAfterFailedRun(t *testing.T) {
 		t.Fatal("Run() succeeded, want a task prompt failure")
 	}
 	summary := runner.SessionSummary()
-	if summary.Status != StatusFailed {
-		t.Errorf("Status = %q, want %q", summary.Status, StatusFailed)
+	if summary.Status != conversations.StatusFailed {
+		t.Errorf("Status = %q, want %q", summary.Status, conversations.StatusFailed)
 	}
 	if summary.StartedAt.IsZero() {
 		t.Error("StartedAt = zero, want the run start time")
@@ -267,12 +269,12 @@ func TestSessionSummaryStaysIdleWhenRunNeverStarts(t *testing.T) {
 		t.Fatalf("Run() error = %v, want context.Canceled", err)
 	}
 	summary := runner.SessionSummary()
-	if summary.Status != StatusIdle || !summary.StartedAt.IsZero() {
+	if summary.Status != conversations.StatusIdle || !summary.StartedAt.IsZero() {
 		t.Errorf("summary = %+v, want idle with zero StartedAt", summary)
 	}
 }
 
-func waitForSummaryStatus(t *testing.T, runner *Executor, want string) Summary {
+func waitForSummaryStatus(t *testing.T, runner *Executor, want string) conversations.Summary {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -282,5 +284,5 @@ func waitForSummaryStatus(t *testing.T, runner *Executor, want string) Summary {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for status %q; last = %+v", want, runner.SessionSummary())
-	return Summary{}
+	return conversations.Summary{}
 }

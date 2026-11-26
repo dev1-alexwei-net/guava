@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/dev1-alexwei-net/guava/conversations"
 )
 
 func validConfig() Config {
@@ -229,7 +231,7 @@ func TestWithSubdirectoryDerivesScopedExecutor(t *testing.T) {
 	if detected.config.CLIArgs != wantArgs {
 		t.Errorf("derived CLIArgs = %q, want %q", detected.config.CLIArgs, wantArgs)
 	}
-	if status := detected.SessionSummary().Status; status != StatusIdle {
+	if status := detected.SessionSummary().Status; status != conversations.StatusIdle {
 		t.Errorf("derived status = %q, want idle before a run", status)
 	}
 }

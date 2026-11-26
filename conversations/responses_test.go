@@ -1,4 +1,4 @@
-package executor
+package conversations
 
 import (
 	"context"
@@ -62,11 +62,10 @@ func TestResponsesClientSendsRoutedJSONRequestAndReadsOutput(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL + "/gateway/"
+	config := testConversationConfig(server)
+	config.GatewayURL += "/gateway/"
 	config.AgentID = "writer"
 	config.AuthToken = "secret-token"
-	config.HTTPClient = server.Client()
 
 	got, err := (responsesClient{config: config}).create(
 		context.Background(), "instructions plus file", "agent:writer:file-session", "resp_previous")
@@ -90,9 +89,7 @@ func TestResponsesClientSupportsGatewayWithoutBearerToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
+	config := testConversationConfig(server)
 	if _, err := (responsesClient{config: config}).create(context.Background(), "input", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -105,9 +102,7 @@ func TestResponsesClientReportsHTTPErrorMessage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
+	config := testConversationConfig(server)
 	_, err := (responsesClient{config: config}).create(context.Background(), "input", "", "")
 	if err == nil || !strings.Contains(err.Error(), "HTTP 401") || !strings.Contains(err.Error(), "missing auth") {
 		t.Fatalf("create() error = %v, want HTTP 401 and API message", err)
@@ -120,9 +115,7 @@ func TestResponsesClientRequiresResponseID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
+	config := testConversationConfig(server)
 	_, err := (responsesClient{config: config}).create(context.Background(), "input", "", "")
 	if err == nil || !strings.Contains(err.Error(), "missing an id") {
 		t.Fatalf("create() error = %v, want missing-id error", err)
@@ -137,9 +130,7 @@ func TestResponsesClientUsesRequestContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
+	config := testConversationConfig(server)
 	_, err := (responsesClient{config: config}).create(ctx, "input", "", "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("create() error = %v, want context.Canceled", err)

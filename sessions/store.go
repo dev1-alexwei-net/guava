@@ -31,6 +31,28 @@ const (
 // ErrNotFound is returned when a requested session ID does not exist.
 var ErrNotFound = errors.New("task session not found")
 
+// ProgressStatus describes the per-file outcome persisted for one session.
+type ProgressStatus string
+
+const (
+	// ProgressPending identifies a file started (or queued) but not yet completed.
+	ProgressPending ProgressStatus = "pending"
+	// ProgressCompleted identifies a file whose conversation finished successfully.
+	ProgressCompleted ProgressStatus = "completed"
+	// ProgressAborted identifies a file left unfinished when a run stopped or failed.
+	ProgressAborted ProgressStatus = "aborted"
+)
+
+// FileProgress is the persisted per-file state of one task session: which file
+// reached which outcome, and when. SessionID and Path are stable identity; a
+// session has at most one row per file path.
+type FileProgress struct {
+	SessionID string
+	Path      string
+	Status    ProgressStatus
+	UpdatedAt time.Time
+}
+
 // Record is the persisted identity, launch configuration, and latest
 // lifecycle snapshot for one task session. ID is generated on Create when
 // omitted and remains stable through Update. DatabaseFile refers to the
@@ -85,6 +107,13 @@ func OpenStore(path string) (*Store, error) {
 		);
 		CREATE INDEX IF NOT EXISTS task_sessions_updated_at
 			ON task_sessions(updated_at DESC, id ASC);
+		CREATE TABLE IF NOT EXISTS session_file_progress (
+			session_id TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'aborted')),
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (session_id, file_path)
+		);
 	`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize task session store: %w", err)
@@ -184,8 +213,9 @@ func (s *Store) Get(ctx context.Context, id string) (Record, error) {
 	return record, nil
 }
 
-// Delete removes one saved session record and all of its persisted history.
-// Deleting an unknown ID returns ErrNotFound, matching Get and Update.
+// Delete removes one saved session record, its per-file progress, and all of
+// its persisted history. Deleting an unknown ID returns ErrNotFound, matching
+// Get and Update.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	if s == nil || s.db == nil {
 		return errors.New("task session store is not open")
@@ -193,7 +223,12 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("task session ID is required")
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM task_sessions WHERE id = ?`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin task session deletion: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `DELETE FROM task_sessions WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete task session: %w", err)
 	}
@@ -203,6 +238,12 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	}
 	if rows == 0 {
 		return fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_file_progress WHERE session_id = ?`, id); err != nil {
+		return fmt.Errorf("delete task session file progress: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit task session deletion: %w", err)
 	}
 	return nil
 }
@@ -236,19 +277,37 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 }
 
 // RecoverInterrupted marks records left active by a process exit as paused so
-// they remain available for an explicit resume. It does not start a run or
-// alter records that already reached a terminal state.
+// they remain available for an explicit resume, and records the files their
+// interrupted runs left unfinished as aborted. It does not start a run, does
+// not alter records that already reached a terminal state, and never touches
+// files that completed successfully: those stay resumable from where they left
+// off.
 func (s *Store) RecoverInterrupted(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("task session store is not open")
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin task session recovery: %w", err)
+	}
+	defer tx.Rollback()
 	now := time.Now().UTC()
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE task_sessions
 		SET status = ?, updated_at = ?, finished_at = ?, last_error = ?
 		WHERE status = ?
 	`, string(StatusPaused), now.UnixNano(), now.UnixNano(), "interrupted when the dashboard process exited", string(StatusActive)); err != nil {
 		return fmt.Errorf("recover interrupted task sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE session_file_progress
+		SET status = ?, updated_at = ?
+		WHERE status = ? AND session_id IN (SELECT id FROM task_sessions WHERE status = ?)
+	`, string(ProgressAborted), now.UnixNano(), string(ProgressPending), string(StatusPaused)); err != nil {
+		return fmt.Errorf("recover interrupted task session file progress: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit task session recovery: %w", err)
 	}
 	return nil
 }
@@ -259,6 +318,114 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// SaveFileProgress records or replaces the latest per-file outcome for one
+// session. The store owns the timestamp when the caller leaves it zero.
+func (s *Store) SaveFileProgress(ctx context.Context, progress FileProgress) (FileProgress, error) {
+	if s == nil || s.db == nil {
+		return FileProgress{}, errors.New("task session store is not open")
+	}
+	if err := validateFileProgress(progress); err != nil {
+		return FileProgress{}, err
+	}
+	if progress.UpdatedAt.IsZero() {
+		progress.UpdatedAt = time.Now().UTC()
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO session_file_progress (session_id, file_path, status, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (session_id, file_path) DO UPDATE SET
+			status = excluded.status,
+			updated_at = excluded.updated_at
+	`, progress.SessionID, progress.Path, string(progress.Status), progress.UpdatedAt.UnixNano()); err != nil {
+		return FileProgress{}, fmt.Errorf("save task session file progress: %w", err)
+	}
+	return progress, nil
+}
+
+// ListFileProgress returns every per-file row for one session ordered by
+// path. It is the full progress snapshot used to resume a run.
+func (s *Store) ListFileProgress(ctx context.Context, sessionID string) ([]FileProgress, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("task session store is not open")
+	}
+	if sessionID == "" {
+		return nil, errors.New("task session ID is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT session_id, file_path, status, updated_at
+		FROM session_file_progress WHERE session_id = ?
+		ORDER BY file_path ASC
+	`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list task session file progress: %w", err)
+	}
+	defer rows.Close()
+	progress := make([]FileProgress, 0)
+	for rows.Next() {
+		row, err := scanFileProgress(rows)
+		if err != nil {
+			return nil, fmt.Errorf("read task session file progress: %w", err)
+		}
+		progress = append(progress, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate task session file progress: %w", err)
+	}
+	return progress, nil
+}
+
+// CompletedPaths returns the file paths the session already finished
+// successfully, ordered by path. Resumed runs skip exactly these files.
+func (s *Store) CompletedPaths(ctx context.Context, sessionID string) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("task session store is not open")
+	}
+	if sessionID == "" {
+		return nil, errors.New("task session ID is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT file_path FROM session_file_progress
+		WHERE session_id = ? AND status = ?
+		ORDER BY file_path ASC
+	`, sessionID, string(ProgressCompleted))
+	if err != nil {
+		return nil, fmt.Errorf("list completed task session files: %w", err)
+	}
+	defer rows.Close()
+	paths := make([]string, 0)
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("read completed task session file: %w", err)
+		}
+		paths = append(paths, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate completed task session files: %w", err)
+	}
+	return paths, nil
+}
+
+// MarkFileStatus transitions every per-file row for one session from one
+// status to another, without touching any other file or session. It is used
+// to record unfinished files when a run ends without completing.
+func (s *Store) MarkFileStatus(ctx context.Context, sessionID string, from, to ProgressStatus) error {
+	if s == nil || s.db == nil {
+		return errors.New("task session store is not open")
+	}
+	if sessionID == "" {
+		return errors.New("task session ID is required")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE session_file_progress
+		SET status = ?, updated_at = ?
+		WHERE session_id = ? AND status = ?
+	`, string(to), time.Now().UTC().UnixNano(), sessionID, string(from)); err != nil {
+		return fmt.Errorf("mark task session file progress: %w", err)
+	}
+	return nil
 }
 
 func validateRecord(record Record) error {
@@ -290,6 +457,21 @@ func newID() (string, error) {
 	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:], nil
 }
 
+func validateFileProgress(progress FileProgress) error {
+	if progress.SessionID == "" {
+		return errors.New("task session ID is required")
+	}
+	if progress.Path == "" {
+		return errors.New("task session file path is required")
+	}
+	switch progress.Status {
+	case ProgressPending, ProgressCompleted, ProgressAborted:
+		return nil
+	default:
+		return fmt.Errorf("invalid task session file progress status %q", progress.Status)
+	}
+}
+
 func nullableTime(value time.Time) any {
 	if value.IsZero() {
 		return nil
@@ -299,6 +481,18 @@ func nullableTime(value time.Time) any {
 
 type rowScanner interface {
 	Scan(dest ...any) error
+}
+
+func scanFileProgress(row rowScanner) (FileProgress, error) {
+	var progress FileProgress
+	var status string
+	var updatedAt int64
+	if err := row.Scan(&progress.SessionID, &progress.Path, &status, &updatedAt); err != nil {
+		return FileProgress{}, err
+	}
+	progress.Status = ProgressStatus(status)
+	progress.UpdatedAt = time.Unix(0, updatedAt).UTC()
+	return progress, nil
 }
 
 func scanRecord(row rowScanner) (Record, error) {

@@ -210,3 +210,233 @@ func TestStoreRejectsInvalidRecordsAndReportsMissingIDs(t *testing.T) {
 		t.Errorf("List after rejected creates = %d records, want 0", len(records))
 	}
 }
+
+func TestStorePersistsFileProgressAcrossReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.sqlite")
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	record, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, entry := range []FileProgress{
+		{SessionID: record.ID, Path: "a.txt", Status: ProgressCompleted},
+		{SessionID: record.ID, Path: "b.txt", Status: ProgressPending},
+		{SessionID: record.ID, Path: "c.txt", Status: ProgressCompleted},
+	} {
+		if _, err := store.SaveFileProgress(context.Background(), entry); err != nil {
+			t.Fatalf("SaveFileProgress(%s): %v", entry.Path, err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	store, err = OpenStore(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store.Close()
+
+	rows, err := store.ListFileProgress(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("ListFileProgress: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("ListFileProgress = %+v, want 3 rows", rows)
+	}
+	statuses := make(map[string]ProgressStatus, len(rows))
+	for _, row := range rows {
+		if row.SessionID != record.ID {
+			t.Fatalf("row session = %q, want %q", row.SessionID, record.ID)
+		}
+		statuses[row.Path] = row.Status
+	}
+	if statuses["a.txt"] != ProgressCompleted || statuses["b.txt"] != ProgressPending || statuses["c.txt"] != ProgressCompleted {
+		t.Errorf("statuses = %#v, want a/c completed and b pending", statuses)
+	}
+
+	completed, err := store.CompletedPaths(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("CompletedPaths: %v", err)
+	}
+	if len(completed) != 2 || (completed[0] != "a.txt" && completed[0] != "c.txt") || (completed[1] != "a.txt" && completed[1] != "c.txt") || completed[0] == completed[1] {
+		t.Errorf("CompletedPaths = %#v, want a.txt and c.txt in order", completed)
+	}
+	completed, err = store.CompletedPaths(context.Background(), "missing")
+	if err != nil || len(completed) != 0 {
+		t.Errorf("CompletedPaths(missing) = %#v, %v, want empty with no error", completed, err)
+	}
+}
+
+func TestStoreFileProgressValidatesInputAndRespectsSessionScope(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	record, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{Path: "a.txt", Status: ProgressPending}); err == nil {
+		t.Error("SaveFileProgress(empty session) succeeded")
+	}
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{SessionID: record.ID, Status: ProgressPending}); err == nil {
+		t.Error("SaveFileProgress(empty path) succeeded")
+	}
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{SessionID: record.ID, Path: "a.txt", Status: "bogus"}); err == nil {
+		t.Error("SaveFileProgress(invalid status) succeeded")
+	}
+
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{SessionID: record.ID, Path: "a.txt", Status: ProgressPending}); err != nil {
+		t.Fatalf("SaveFileProgress(valid): %v", err)
+	}
+	// The store is a scoped persistence layer: unknown sessions list empty and
+	// never leak rows from other sessions.
+	if rows, err := store.ListFileProgress(context.Background(), "missing"); err != nil || len(rows) != 0 {
+		t.Errorf("ListFileProgress(missing) = %+v, %v, want empty with no error", rows, err)
+	}
+	if rows, err := store.ListFileProgress(context.Background(), record.ID); err != nil || len(rows) != 1 || rows[0].Path != "a.txt" {
+		t.Errorf("ListFileProgress = %+v err=%v, want the single saved row", rows, err)
+	}
+}
+
+func TestStoreMarkFileStatusTransitionsOnlyMatchingRows(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	record, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, status := range []ProgressStatus{ProgressPending, ProgressCompleted} {
+		if _, err := store.SaveFileProgress(context.Background(), FileProgress{
+			SessionID: record.ID, Path: string(status) + ".txt", Status: status,
+		}); err != nil {
+			t.Fatalf("SaveFileProgress(%s): %v", status, err)
+		}
+	}
+
+	if err := store.MarkFileStatus(context.Background(), record.ID, ProgressPending, ProgressAborted); err != nil {
+		t.Fatalf("MarkFileStatus: %v", err)
+	}
+	// Re-running the transition on an already-aborted row must be a no-op.
+	if err := store.MarkFileStatus(context.Background(), record.ID, ProgressPending, ProgressAborted); err != nil {
+		t.Fatalf("MarkFileStatus second pass: %v", err)
+	}
+
+	rows, err := store.ListFileProgress(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("ListFileProgress: %v", err)
+	}
+	for _, row := range rows {
+		switch row.Path {
+		case "pending.txt":
+			if row.Status != ProgressAborted {
+				t.Errorf("pending row = %s, want aborted after transition", row.Status)
+			}
+		case "completed.txt":
+			if row.Status != ProgressCompleted {
+				t.Errorf("completed row = %s, want untouched completed status", row.Status)
+			}
+		}
+	}
+}
+
+func TestStoreDeleteRemovesFileProgress(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	record, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{SessionID: record.ID, Path: "a.txt", Status: ProgressAborted}); err != nil {
+		t.Fatalf("SaveFileProgress: %v", err)
+	}
+	if err := store.Delete(context.Background(), record.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	rows, err := store.ListFileProgress(context.Background(), record.ID)
+	if err != nil || len(rows) != 0 {
+		t.Errorf("ListFileProgress after delete = %+v, %v, want no saved progress", rows, err)
+	}
+	if completed, err := store.CompletedPaths(context.Background(), record.ID); err != nil || len(completed) != 0 {
+		t.Errorf("CompletedPaths after delete = %#v, %v, want empty with no error", completed, err)
+	}
+}
+
+func TestRecoverInterruptedAbortsOnlyUnfinishedFileProgress(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	active, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create active: %v", err)
+	}
+	paused, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused,
+	})
+	if err != nil {
+		t.Fatalf("Create paused: %v", err)
+	}
+	for _, entry := range []FileProgress{
+		{SessionID: active.ID, Path: "done.txt", Status: ProgressCompleted},
+		{SessionID: active.ID, Path: "left-off.txt", Status: ProgressPending},
+		{SessionID: paused.ID, Path: "stranded.txt", Status: ProgressPending},
+	} {
+		if _, err := store.SaveFileProgress(context.Background(), entry); err != nil {
+			t.Fatalf("SaveFileProgress(%s): %v", entry.Path, err)
+		}
+	}
+
+	if err := store.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatalf("RecoverInterrupted: %v", err)
+	}
+
+	wantStatus := map[string]ProgressStatus{
+		"done.txt":     ProgressCompleted,
+		"left-off.txt": ProgressAborted,
+		"stranded.txt": ProgressAborted,
+	}
+	wantCount := map[string]int{active.ID: 2, paused.ID: 1}
+	for _, id := range []string{active.ID, paused.ID} {
+		rows, err := store.ListFileProgress(context.Background(), id)
+		if err != nil {
+			t.Fatalf("ListFileProgress(%s): %v", id, err)
+		}
+		if len(rows) != wantCount[id] {
+			t.Fatalf("ListFileProgress(%s) = %+v, want %d rows", id, rows, wantCount[id])
+		}
+		for _, row := range rows {
+			if want := wantStatus[row.Path]; row.Status != want {
+				t.Errorf("session %s file %s = %s, want %s", id, row.Path, row.Status, want)
+			}
+		}
+	}
+}

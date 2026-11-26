@@ -18,7 +18,7 @@ func TestTaskSessionManagerOwnsPersistedLaunchAndLifecycleState(t *testing.T) {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	defer store.Close()
-	manager := newTaskSessionManager(config, store)
+	manager := newTaskSessionManager(config, store, nil)
 
 	runner, err := executor.New(config)
 	if err != nil {
@@ -28,7 +28,7 @@ func TestTaskSessionManagerOwnsPersistedLaunchAndLifecycleState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithSubdirectory: %v", err)
 	}
-	record, err := manager.Create(runner)
+	bound, record, err := manager.Create(runner)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -36,6 +36,9 @@ func TestTaskSessionManagerOwnsPersistedLaunchAndLifecycleState(t *testing.T) {
 		record.RootDirectory != config.RootPath || record.DatabaseFile != config.DatabasePath ||
 		record.Subdirectory != "docs" || record.StartedAt.IsZero() {
 		t.Fatalf("created record = %+v, want active record with the fresh launch configuration", record)
+	}
+	if bound == nil {
+		t.Fatal("Create returned a nil runner")
 	}
 
 	finishedAt := time.Now().UTC()

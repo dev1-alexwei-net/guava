@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/dev1-alexwei-net/guava/conversations"
 )
@@ -248,93 +247,7 @@ func (p *FileProvider) findIndexedFile(filePath string) (indexedFile, bool, erro
 }
 
 func (p *FileProvider) newFileTask(file indexedFile) conversations.Task {
-	var once sync.Once
-	var prompt string
-	var promptErr error
-	return NewTask(file.path, func() (string, error) {
-		once.Do(func() {
-			prompt, promptErr = p.composePrompt(file)
-		})
-		return prompt, promptErr
-	})
-}
-
-func (p *FileProvider) composePrompt(file indexedFile) (string, error) {
-	if err := p.ctx.Err(); err != nil {
-		return "", err
-	}
-	fileReadStarted := time.Now()
-	content, err := p.reader.read(file)
-	if err != nil {
-		p.log(slog.LevelError, "Failed to read indexed file",
-			slog.String("path", file.path),
-			slog.Duration("file_read_elapsed", time.Since(fileReadStarted)),
-			slog.Any("error", err),
-		)
-		return "", fmt.Errorf("read indexed file: %w", err)
-	}
-	p.log(slog.LevelDebug, "Read indexed file",
-		slog.String("path", file.path),
-		slog.Int("bytes", len(content)),
-		slog.Duration("file_read_elapsed", time.Since(fileReadStarted)),
-	)
-
-	files, err := p.index.regularFiles(p.ctx)
-	if err != nil {
-		return "", fmt.Errorf("list indexed files: %w", err)
-	}
-	instructions := ""
-	if instructionFile, ok := nearestInstructionsFile(file, indexedInstructions(files)); ok {
-		instructionsReadStarted := time.Now()
-		instructionContent, err := p.reader.read(instructionFile)
-		if err != nil {
-			p.log(slog.LevelError, "Failed to read indexed instructions",
-				slog.String("path", instructionFile.path),
-				slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-				slog.Any("error", err),
-			)
-			return "", fmt.Errorf("read indexed instructions %q: %w", instructionFile.path, err)
-		}
-		instructions = string(instructionContent)
-		p.log(slog.LevelDebug, "Read indexed instructions",
-			slog.String("path", instructionFile.path),
-			slog.Int("bytes", len(instructionContent)),
-			slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-		)
-	} else {
-		p.fallbackMu.Lock()
-		if !p.fallbackLoaded {
-			instructionsReadStarted := time.Now()
-			p.fallbackInstructions, err = loadInstructions(p.instructionsPath)
-			if err == nil {
-				p.fallbackLoaded = true
-				p.log(slog.LevelDebug, "Read fallback instructions",
-					slog.String("path", p.instructionsPath),
-					slog.Int("bytes", len(p.fallbackInstructions)),
-					slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-				)
-			} else {
-				p.log(slog.LevelError, "Failed to read fallback instructions",
-					slog.String("path", p.instructionsPath),
-					slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-					slog.Any("error", err),
-				)
-			}
-		}
-		instructions = p.fallbackInstructions
-		p.fallbackMu.Unlock()
-		if err != nil {
-			return "", err
-		}
-	}
-	if err := p.ctx.Err(); err != nil {
-		return "", err
-	}
-	p.log(slog.LevelInfo, "Processing indexed file",
-		slog.String("path", file.path),
-		slog.Int("content_bytes", len(content)),
-	)
-	return composeInitialInput(instructions, file, content), nil
+	return FileTask{Id: file.path, file: file, reader: p.reader, p: p}
 }
 
 func normalizeProviderSubdirectory(value string) (string, error) {

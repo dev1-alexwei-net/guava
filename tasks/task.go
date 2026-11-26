@@ -1,50 +1,18 @@
-// Package tasks defines the source-agnostic task abstractions shared by the
-// executor's task side and its conversation framework.
-//
-// A FileTask is a unit of work with a stable identity and a prompt function that
-// yields the next prompt to send into the conversation. A TaskProvider
-// exposes an ordered iterator over the tasks it provides.
-//
-// The abstractions are deliberately source-agnostic: this package knows
-// nothing about the fileexplorer manifest, files on disk, or the OpenResponses
-// API. A provider can back tasks with files today and with any other task
-// source later, and the conversation framework that consumes tasks never
-// learns where the work comes from.
 package tasks
 
 import (
-	"errors"
+	"fmt"
+	"log/slog"
+	"time"
 )
 
-// errNoPrompt reports a call to Prompt on a task created without a prompt
-// function.
-var errNoPrompt = errors.New("task has no prompt function")
-
-// PromptFunc yields the next prompt to send into the conversation for one
-// task. A prompt function may perform I/O to build its prompt, for example
-// reading the instructions and content the prompt is composed from, and it
-// must return any error it encounters. It must be safe to call more than
-// once.
-type PromptFunc func() (string, error)
-
-// NewTask returns a FileTask with the given stable identity and prompt function.
-// A nil prompt function is accepted; calling Prompt on the resulting task
-// reports an error.
-func NewTask(id string, prompt PromptFunc) FileTask {
-	return FileTask{Id: id, PromptFunc: prompt}
-}
-
-// Task is a single unit of work consumed by the conversation framework.
-//
-// A Task carries a stable identity and a prompt function. The identity is
-// source-specific: for file-backed tasks it is the index-relative file
-// path, and for other task sources it is whatever stable identifier that
-// source uses. Consumers rely on the identity being stable across provider
-// iterations so they can deduplicate, route, and log work by it.
-
 type FileTask struct {
-	Id         string
-	PromptFunc PromptFunc
+	Id string
+	//PromptFunc PromptFunc
+
+	file   indexedFile
+	reader *rootedFileReader
+	p      *FileProvider // todo -
 }
 
 // ID returns the task's stable identity.
@@ -56,8 +24,50 @@ func (t FileTask) ID() string {
 // task. It reports an error if the task was created without a prompt
 // function, or if the prompt function fails to build a prompt.
 func (t FileTask) Prompt() (string, error) {
-	if t.PromptFunc == nil {
-		return "", errNoPrompt
+
+	fileReadStarted := time.Now()
+	content, err := t.reader.read(t.file)
+	instructions := ""
+	if err != nil {
+		t.p.log(slog.LevelError, "Failed to read indexed file",
+			slog.String("path", t.file.path),
+			slog.Duration("file_read_elapsed", time.Since(fileReadStarted)),
+			slog.Any("error", err),
+		)
+		return "", fmt.Errorf("read indexed file: %w", err)
 	}
-	return t.PromptFunc()
+	t.p.log(slog.LevelDebug, "Read indexed file",
+		slog.String("path", t.file.path),
+		slog.Int("bytes", len(content)),
+		slog.Duration("file_read_elapsed", time.Since(fileReadStarted)),
+	)
+
+	files, err := t.p.index.regularFiles(t.p.ctx)
+	if err != nil {
+		return "", fmt.Errorf("list indexed files: %w", err)
+	}
+	if instructionFile, ok := nearestInstructionsFile(t.file, indexedInstructions(files)); ok {
+		instructionsReadStarted := time.Now()
+		instructionContent, err := t.p.reader.read(instructionFile)
+		if err != nil {
+			t.p.log(slog.LevelError, "Failed to read indexed instructions",
+				slog.String("path", instructionFile.path),
+				slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
+				slog.Any("error", err),
+			)
+			return "", fmt.Errorf("read indexed instructions %q: %w", instructionFile.path, err)
+		}
+		instructions = string(instructionContent)
+		t.p.log(slog.LevelDebug, "Read indexed instructions",
+			slog.String("path", instructionFile.path),
+			slog.Int("bytes", len(instructionContent)),
+			slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
+		)
+		t.p.log(slog.LevelInfo, "Processing indexed file",
+			slog.String("path", t.file.path),
+			slog.Int("content_bytes", len(content)),
+		)
+		return composeInitialInput(instructions, t.file, content), nil
+	}
+	return "", fmt.Errorf("failed to find instrutions.md")
 }

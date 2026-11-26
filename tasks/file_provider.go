@@ -49,7 +49,6 @@ type FileProvider struct {
 	index            *fileIndex
 	reader           *rootedFileReader
 	refresher        *HTTPRefresher
-	lister           FileLister
 	queue            *WorkQueue
 	instructionsPath string
 	logger           *slog.Logger
@@ -85,10 +84,6 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		if strings.TrimSpace(field.value) == "" {
 			return nil, fmt.Errorf("%s is required", field.name)
 		}
-	}
-	subdirectory, err := normalizeProviderSubdirectory(config.Subdirectory)
-	if err != nil {
-		return nil, err
 	}
 
 	index, err := openFileIndex(ctx, config.DatabasePath)
@@ -132,8 +127,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		index:            index,
 		reader:           reader,
 		refresher:        refresher,
-		lister:           lister,
-		queue:            queue,
+		queue:            NewWorkQueue(),
 		instructionsPath: config.InstructionsPath,
 		logger:           config.Logger,
 		completed:        completed,
@@ -159,7 +153,7 @@ func (p *FileProvider) Tasks(fn func(Task) bool) error {
 		if err := p.refresher.Refresh(p.ctx); err != nil {
 			return fmt.Errorf("refresh file index: %w", err)
 		}
-		paths, err := p.lister.FilePaths(p.ctx)
+		paths, err := p.index.FilePaths(p.ctx)
 		if err != nil {
 			return fmt.Errorf("list indexed files: %w", err)
 		}

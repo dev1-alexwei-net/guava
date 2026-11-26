@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,62 @@ import (
 
 	"github.com/dev1-alexwei-net/guava/conversations"
 )
+
+const testCompletionMarker = "<complete />"
+
+type testResponsesAPIResponse struct {
+	ID     string                    `json:"id"`
+	Output []testResponsesOutputItem `json:"output"`
+}
+
+type testResponsesOutputItem struct {
+	Type    string                     `json:"type"`
+	Role    string                     `json:"role"`
+	Content []testResponsesContentPart `json:"content"`
+}
+
+type testResponsesContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// indexedFile is a test fixture shape for building executor integration-test
+// manifests; production file-index ownership resides in package tasks.
+type indexedFile struct {
+	path  string
+	name  string
+	size  int64
+	mtime int64
+}
+
+func createIndexFixture(t *testing.T, databasePath string, entries []indexedFile, directories []string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec("CREATE TABLE files (path TEXT PRIMARY KEY, name TEXT NOT NULL, is_dir INTEGER NOT NULL DEFAULT 0, size INTEGER NOT NULL DEFAULT 0, mtime INTEGER NOT NULL DEFAULT 0)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range directories {
+		if _, err := db.Exec(
+			"INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 1, 0, 0)",
+			directory, filepath.Base(directory)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range entries {
+		if _, err := db.Exec(
+			"INSERT INTO files (path, name, is_dir, size, mtime) VALUES (?, ?, 0, ?, ?)",
+			file.path, file.name, file.size, file.mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // rawCLIArgs models the raw dump of a server command line, including an
 // argument with spaces, to prove the summary carries it verbatim.
@@ -155,9 +212,14 @@ func TestSessionSummaryAfterCompletedRun(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		var parts []string = []string{testCompletionMarker}
+		content := make([]testResponsesContentPart, 0, len(parts))
+		for _, part := range parts {
+			content = append(content, testResponsesContentPart{Type: "output_text", Text: part})
+		}
 		response := testResponsesAPIResponse{
 			ID:     "resp_1",
-			Output: testAssistantText(testCompletionMarker),
+			Output: []testResponsesOutputItem{{Type: "message", Role: "assistant", Content: content}},
 		}
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("encode response: %v", err)

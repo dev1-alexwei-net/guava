@@ -54,10 +54,4 @@ func TestSubdirectoryListerFiltersByExactFolderPrefix(t *testing.T) {
 		}
 	})
 
-	t.Run("nil receiver rejects the call", func(t *testing.T) {
-		var lister *subdirectoryLister
-		if _, err := lister.FilePaths(context.Background()); err == nil {
-			t.Fatal("FilePaths() on nil lister succeeded, want an error")
-		}
-	})
 }

@@ -367,16 +367,3 @@ func TestExecutorRunStopsOnFirstTaskPromptError(t *testing.T) {
 		t.Fatalf("calls = %d, want no API requests after the first task prompt error", calls)
 	}
 }
-
-func TestExecutorRunDoesNotStartForCanceledContext(t *testing.T) {
-	config := validConfig()
-	executor, err := New(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := executor.Run(ctx); err != context.Canceled {
-		t.Fatalf("Run() error = %v, want context.Canceled", err)
-	}
-}

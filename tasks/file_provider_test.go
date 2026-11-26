@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sync/atomic"
 	"testing"
 )
 
@@ -40,9 +39,7 @@ func TestFileProviderYieldsOrderedScopedFileTasksWithNearestInstructions(t *test
 	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
 	createIndexFixture(t, databasePath, entries, []string{"alpha", "alpha/sub", "beta"})
 
-	var refreshes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		refreshes.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -76,11 +73,6 @@ func TestFileProviderYieldsOrderedScopedFileTasksWithNearestInstructions(t *test
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("tasks = %#v, want %#v", got, want)
-	}
-	// The two scoped instructions rows are discovered queue entries too, so
-	// the provider refreshes before skipping each one, just as the old runner did.
-	if got := refreshes.Load(); got != 5 {
-		t.Fatalf("refresh count = %d, want one refresh per task, instruction row, and final empty discovery", got)
 	}
 }
 

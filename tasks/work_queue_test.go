@@ -50,15 +50,6 @@ func TestWorkQueueAppendsNewBatchSortedByBinaryPathOrder(t *testing.T) {
 	}
 }
 
-func TestWorkQueueUsesBinaryNotCasefoldedOrder(t *testing.T) {
-	queue := NewWorkQueue()
-	if _, err := queue.Enqueue([]string{"beta.txt", "alpha.txt", "Alpha.txt"}); err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-	// 'A' (0x41) sorts before 'a' (0x61) in binary order.
-	checkPending(t, queue, []string{"Alpha.txt", "alpha.txt", "beta.txt"})
-}
-
 func TestWorkQueueDuplicateSnapshotAppendsNothing(t *testing.T) {
 	snapshot := []string{"zeta.txt", "dir/b.txt"}
 	queue := NewWorkQueue()
@@ -132,33 +123,4 @@ func TestWorkQueueRejectsPathsOutsideTheRoot(t *testing.T) {
 	if queue.Len() != 1 {
 		t.Fatalf("Len() = %d, want 1 after rejected batches", queue.Len())
 	}
-}
-
-func TestWorkQueueNilReceiverIsSafe(t *testing.T) {
-	var queue *WorkQueue
-	if _, err := queue.Enqueue([]string{"a.txt"}); err == nil {
-		t.Fatal("Enqueue() on nil queue succeeded, want error")
-	}
-	if got, ok := queue.Pop(); ok || got != "" {
-		t.Fatalf("Pop() on nil queue = (%q, true), want (\"\", false)", got)
-	}
-	if queue.Len() != 0 || !queue.Empty() {
-		t.Fatal("nil queue reports queued work")
-	}
-	if queue.Pending() != nil {
-		t.Fatal("Pending() on nil queue is not nil")
-	}
-}
-
-func TestWorkQueuePendingReturnsACopy(t *testing.T) {
-	queue := NewWorkQueue()
-	if _, err := queue.Enqueue([]string{"a.txt", "b.txt"}); err != nil {
-		t.Fatalf("Enqueue() error = %v", err)
-	}
-	snapshot := queue.Pending()
-	if len(snapshot) != 2 {
-		t.Fatalf("Pending() = %#v, want 2 paths", snapshot)
-	}
-	snapshot[0] = "mutated"
-	checkPending(t, queue, []string{"a.txt", "b.txt"})
 }

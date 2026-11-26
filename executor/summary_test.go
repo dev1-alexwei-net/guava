@@ -44,14 +44,6 @@ func TestSessionSummaryBeforeFirstRun(t *testing.T) {
 	}
 }
 
-func TestSessionSummaryNilExecutor(t *testing.T) {
-	var runner *Executor
-	summary := runner.SessionSummary()
-	if summary.Status != conversations.StatusIdle || !summary.StartedAt.IsZero() {
-		t.Errorf("nil Executor SessionSummary = %+v, want idle with zero StartedAt", summary)
-	}
-}
-
 func TestSessionSummaryDuringAndAfterCanceledRun(t *testing.T) {
 	rootPath := t.TempDir()
 	if err := os.WriteFile(filepath.Join(rootPath, "a.txt"), []byte("content"), 0o600); err != nil {

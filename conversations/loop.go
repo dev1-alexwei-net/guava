@@ -52,7 +52,11 @@ func (s *Service) RunPrompt(ctx context.Context, taskID, initialInput string) er
 				break
 			}
 			var responseErr *responsesHTTPError
-			if errors.As(err, &responseErr) && isRetryableOpenResponsesError(responseErr) {
+			// HTTP 400 with the Gateway's output-limit message is a
+			// continuation signal, not a failed request to retry.
+			continueAfterOutputLimit := errors.As(err, &responseErr) &&
+				responseErr.statusCode == http.StatusBadRequest && containsOutputLimitMessage(err.Error())
+			if errors.As(err, &responseErr) && isRetryableOpenResponsesError(responseErr) && !continueAfterOutputLimit {
 				consecutiveFailures++
 				retryDelay := openResponsesRetryDelay(consecutiveFailures)
 				retryAttrs := responseLogAttrs(taskID, turn)
@@ -112,18 +116,7 @@ func (s *Service) waitBeforeRetry(ctx context.Context, delay time.Duration) erro
 }
 
 func isRetryableOpenResponsesError(responseErr *responsesHTTPError) bool {
-	if responseErr == nil {
-		return false
-	}
-	switch responseErr.statusCode {
-	case http.StatusInternalServerError, http.StatusRequestTimeout:
-		return true
-	case http.StatusNotFound:
-		message := strings.ToLower(responseErr.message)
-		return strings.Contains(message, "model") && strings.Contains(message, "not found")
-	default:
-		return false
-	}
+	return responseErr != nil
 }
 
 func openResponsesRetryDelay(consecutiveFailures int) time.Duration {

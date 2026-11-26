@@ -211,6 +211,10 @@ func TestSessionSummaryAfterFailedRun(t *testing.T) {
 	}
 	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
 	createIndexFixture(t, databasePath, []indexedFile{{path: "a.txt", name: "a.txt"}}, nil)
+	// Use a task prompt failure here; OpenResponses HTTP errors are retried by design.
+	if err := os.Remove(filepath.Join(rootPath, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
 	instructionsPath := filepath.Join(t.TempDir(), "instructions.md")
 	if err := os.WriteFile(instructionsPath, []byte("instructions"), 0o600); err != nil {
 		t.Fatal(err)
@@ -241,7 +245,7 @@ func TestSessionSummaryAfterFailedRun(t *testing.T) {
 	}
 
 	if err := runner.Run(context.Background()); err == nil {
-		t.Fatal("Run() succeeded, want a Gateway failure")
+		t.Fatal("Run() succeeded, want a task prompt failure")
 	}
 	summary := runner.SessionSummary()
 	if summary.Status != StatusFailed {

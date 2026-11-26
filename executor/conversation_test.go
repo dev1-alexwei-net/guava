@@ -289,16 +289,23 @@ func TestRunFileConversationSpendsTokenForEveryRequest(t *testing.T) {
 	}
 }
 
-func TestRunFileConversationRetriesRetryableHTTPStatusesWithBackoffAndTokens(t *testing.T) {
+func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens(t *testing.T) {
 	tests := []struct {
 		name        string
 		statusCode  int
 		message     string
 		stringError bool
 	}{
-		{name: "internal server error", statusCode: http.StatusInternalServerError, message: "internal error"},
-		{name: "upstream provider timeout", statusCode: http.StatusRequestTimeout, message: "upstream provider timeout"},
+		{name: "bad request", statusCode: http.StatusBadRequest, message: "bad request"},
+		{name: "unauthorized", statusCode: http.StatusUnauthorized, message: "unauthorized"},
+		{name: "gateway authority changed", statusCode: http.StatusForbidden, message: "Gateway requester authority changed"},
 		{name: "missing model", statusCode: http.StatusNotFound, message: "404 {\"error\":\"model 'qwen3.8:27b' not found\"}", stringError: true},
+		{name: "unrelated not found", statusCode: http.StatusNotFound, message: "route not found", stringError: true},
+		{name: "upstream provider timeout", statusCode: http.StatusRequestTimeout, message: "upstream provider timeout"},
+		{name: "unprocessable entity", statusCode: http.StatusUnprocessableEntity, message: "invalid request"},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, message: "rate limit exceeded"},
+		{name: "internal server error", statusCode: http.StatusInternalServerError, message: "internal error"},
+		{name: "service unavailable", statusCode: http.StatusServiceUnavailable, message: "service unavailable"},
 	}
 	for _, test := range tests {
 		test := test
@@ -418,16 +425,17 @@ func TestRunFileConversationRetriesRetryableHTTPStatusesWithBackoffAndTokens(t *
 	}
 }
 
-func TestRunFileConversationCancellationStopsRetryableHTTPStatus(t *testing.T) {
+func TestRunFileConversationCancellationStopsRetryingOpenResponsesHTTPStatus(t *testing.T) {
 	tests := []struct {
 		name        string
 		statusCode  int
 		message     string
 		stringError bool
 	}{
+		{name: "HTTP 403", statusCode: http.StatusForbidden, message: "Gateway requester authority changed"},
+		{name: "HTTP 404", statusCode: http.StatusNotFound, message: "route not found", stringError: true},
+		{name: "HTTP 429", statusCode: http.StatusTooManyRequests, message: "rate limit exceeded"},
 		{name: "HTTP 500", statusCode: http.StatusInternalServerError, message: "internal error"},
-		{name: "HTTP 408", statusCode: http.StatusRequestTimeout, message: "upstream provider timeout"},
-		{name: "model HTTP 404", statusCode: http.StatusNotFound, message: "model not found", stringError: true},
 	}
 	for _, test := range tests {
 		test := test
@@ -465,14 +473,31 @@ func TestRunFileConversationCancellationStopsRetryableHTTPStatus(t *testing.T) {
 	}
 }
 
-func TestRunFileConversationDoesNotRetryUnrelatedHTTP404(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		if err := json.NewEncoder(w).Encode(map[string]string{"error": "route not found"}); err != nil {
-			t.Errorf("encode error response: %v", err)
+func TestRunFileConversationRetriesAPIErrorWithoutLosingContinuationContext(t *testing.T) {
+	var requests []responsesRequest
+	var sessionKeys []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+		sessionKeys = append(sessionKeys, r.Header.Get("x-openclaw-session-key"))
+		switch len(requests) {
+		case 1:
+			if err := json.NewEncoder(w).Encode(responsesAPIResponse{ID: "response-1", Output: assistantText("continue")}); err != nil {
+				t.Errorf("encode first response: %v", err)
+			}
+		case 2:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"message":"Gateway requester authority changed"}}`))
+		default:
+			if err := json.NewEncoder(w).Encode(responsesAPIResponse{ID: "response-2", Output: assistantText(completionMarker)}); err != nil {
+				t.Errorf("encode completed response: %v", err)
+			}
 		}
 	}))
 	defer server.Close()
@@ -481,35 +506,34 @@ func TestRunFileConversationDoesNotRetryUnrelatedHTTP404(t *testing.T) {
 	config.GatewayURL = server.URL
 	config.HTTPClient = server.Client()
 	executor := &Executor{config: config}
-	err := executor.runFileConversation(context.Background(), "initial input")
-	if err == nil || err.Error() != "OpenResponses returned HTTP 404: route not found" {
-		t.Fatalf("runFileConversation() error = %v, want the unrelated 404 error", err)
+	var delays []time.Duration
+	executor.retryWait = func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
 	}
-	if calls != 1 {
-		t.Fatalf("calls = %d, want 1", calls)
+	filePath := "project/example.md"
+	if err := executor.runFileConversationForFile(context.Background(), filePath, "initial prompt"); err != nil {
+		t.Fatalf("runFileConversationForFile() error = %v", err)
 	}
-}
-
-func TestRunFileConversationReturnsNonCutoffResponseError(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
-	}))
-	defer server.Close()
-
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
-	err := executor.runFileConversation(context.Background(), "initial input")
-	if err == nil || err.Error() != "OpenResponses returned HTTP 429: rate limit exceeded" {
-		t.Fatalf("runFileConversation() error = %v, want the non-cutoff API error", err)
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(requests))
 	}
-	if calls != 1 {
-		t.Fatalf("calls = %d, want 1", calls)
+	wantInputs := []string{"initial prompt", continueMessage, continueMessage}
+	wantPreviousIDs := []string{"", "response-1", "response-1"}
+	wantSessionKey := conversationSessionKey(config.AgentID, filePath)
+	for i := range requests {
+		if requests[i].Input != wantInputs[i] {
+			t.Errorf("request %d input = %q, want %q", i+1, requests[i].Input, wantInputs[i])
+		}
+		if requests[i].PreviousResponseID != wantPreviousIDs[i] {
+			t.Errorf("request %d previous_response_id = %q, want %q", i+1, requests[i].PreviousResponseID, wantPreviousIDs[i])
+		}
+		if sessionKeys[i] != wantSessionKey {
+			t.Errorf("request %d session key = %q, want %q", i+1, sessionKeys[i], wantSessionKey)
+		}
+	}
+	if len(delays) != 1 || delays[0] != time.Second {
+		t.Errorf("retry delays = %v, want [1s]", delays)
 	}
 }
 

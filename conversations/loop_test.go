@@ -1,4 +1,4 @@
-package executor
+package conversations
 
 import (
 	"bytes"
@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 )
+
+func testConversationConfig(server *httptest.Server) Config {
+	return Config{GatewayURL: server.URL, AgentID: "default", HTTPClient: server.Client()}
+}
 
 func TestRunFileConversationContinuesUntilCompletion(t *testing.T) {
 	var requests []responsesRequest
@@ -47,12 +51,13 @@ func TestRunFileConversationContinuesUntilCompletion(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
+	config := testConversationConfig(server)
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if err := executor.runFileConversation(context.Background(), "instructions and file contents"); err != nil {
+	if err := executor.RunPrompt(context.Background(), "", "instructions and file contents"); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 2 {
@@ -102,11 +107,12 @@ func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
-	if err := executor.runFileConversation(context.Background(), "initial input"); err != nil {
+	config := testConversationConfig(server)
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.RunPrompt(context.Background(), "", "initial input"); err != nil {
 		t.Fatalf("runFileConversation() error = %v", err)
 	}
 	if len(requests) != 2 {
@@ -185,12 +191,13 @@ func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
+	config := testConversationConfig(server)
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	executor.retryWait = func(context.Context, time.Duration) error { return nil }
-	if err := executor.runFileConversationForFile(context.Background(), "project/0-135-reuse-conversation-bug.md", "initial input"); err != nil {
+	if err := executor.RunPrompt(context.Background(), "project/0-135-reuse-conversation-bug.md", "initial input"); err != nil {
 		t.Fatalf("runFileConversationForFile() error = %v", err)
 	}
 	if len(requests) != 2 {
@@ -227,14 +234,15 @@ func TestRunFileConversationIsolatesSessionsPerFile(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
-	if err := executor.runFileConversationForFile(context.Background(), "project/0-135-reuse-conversation-bug.md", "first file"); err != nil {
+	config := testConversationConfig(server)
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.RunPrompt(context.Background(), "project/0-135-reuse-conversation-bug.md", "first file"); err != nil {
 		t.Fatalf("runFileConversationForFile() first file error = %v", err)
 	}
-	if err := executor.runFileConversationForFile(context.Background(), "project/0-136-another-bug.md", "second file"); err != nil {
+	if err := executor.RunPrompt(context.Background(), "project/0-136-another-bug.md", "second file"); err != nil {
 		t.Fatalf("runFileConversationForFile() second file error = %v", err)
 	}
 	if len(seen) != 2 {
@@ -249,13 +257,13 @@ func TestRunFileConversationIsolatesSessionsPerFile(t *testing.T) {
 }
 
 func TestRunFileConversationSpendsTokenForEveryRequest(t *testing.T) {
-	var executor *Executor
+	var executor *Service
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
-		executor.conversationTokens.mu.Lock()
-		tokens := executor.conversationTokens.tokens
-		executor.conversationTokens.mu.Unlock()
+		executor.conversationTokens.(*tokenBucket).mu.Lock()
+		tokens := executor.conversationTokens.(*tokenBucket).tokens
+		executor.conversationTokens.(*tokenBucket).mu.Unlock()
 		wantTokens := float64(10 - requests)
 		if tokens != wantTokens {
 			t.Errorf("tokens after request %d = %v, want %v", requests, tokens, wantTokens)
@@ -273,15 +281,15 @@ func TestRunFileConversationSpendsTokenForEveryRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
+	config := testConversationConfig(server)
 	fixedNow := time.Now()
-	executor = &Executor{
-		config:             config,
-		conversationTokens: newTokenBucket(10, time.Hour, func() time.Time { return fixedNow }),
+	var err error
+	executor, err = New(config)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := executor.runFileConversation(context.Background(), "initial input"); err != nil {
+	executor.conversationTokens = newTokenBucket(10, time.Hour, func() time.Time { return fixedNow })
+	if err := executor.RunPrompt(context.Background(), "", "initial input"); err != nil {
 		t.Fatalf("runFileConversation() error = %v", err)
 	}
 	if requests != 2 {
@@ -344,16 +352,15 @@ func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens
 			}))
 			defer server.Close()
 
-			config := validConfig()
-			config.GatewayURL = server.URL
-			config.HTTPClient = server.Client()
+			config := testConversationConfig(server)
 			var logOutput bytes.Buffer
-			config.Logger = NewTextLogger(&logOutput, slog.LevelInfo)
+			config.Logger = slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			fixedNow := time.Now()
-			executor := &Executor{
-				config:             config,
-				conversationTokens: newTokenBucket(10, time.Hour, func() time.Time { return fixedNow }),
+			executor, err := New(config)
+			if err != nil {
+				t.Fatal(err)
 			}
+			executor.conversationTokens = newTokenBucket(10, time.Hour, func() time.Time { return fixedNow })
 			var delays []time.Duration
 			executor.retryWait = func(_ context.Context, delay time.Duration) error {
 				delays = append(delays, delay)
@@ -361,7 +368,7 @@ func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens
 			}
 
 			filePath := "project/example.md"
-			if err := executor.runFileConversationForFile(context.Background(), filePath, "initial input"); err != nil {
+			if err := executor.RunPrompt(context.Background(), filePath, "initial input"); err != nil {
 				t.Fatalf("runFileConversationForFile() error = %v", err)
 			}
 			if len(requests) != 4 {
@@ -389,9 +396,9 @@ func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens
 					t.Errorf("retry delay %d = %v, want %v", i+1, delays[i], wantDelays[i])
 				}
 			}
-			executor.conversationTokens.mu.Lock()
-			remainingTokens := executor.conversationTokens.tokens
-			executor.conversationTokens.mu.Unlock()
+			executor.conversationTokens.(*tokenBucket).mu.Lock()
+			remainingTokens := executor.conversationTokens.(*tokenBucket).tokens
+			executor.conversationTokens.(*tokenBucket).mu.Unlock()
 			if remainingTokens != 6 {
 				t.Errorf("remaining tokens = %v, want 6 after four requests", remainingTokens)
 			}
@@ -457,13 +464,14 @@ func TestRunFileConversationCancellationStopsRetryingOpenResponsesHTTPStatus(t *
 			}))
 			defer server.Close()
 
-			config := validConfig()
-			config.GatewayURL = server.URL
-			config.HTTPClient = server.Client()
-			executor := &Executor{config: config}
+			config := testConversationConfig(server)
+			executor, err := New(config)
+			if err != nil {
+				t.Fatal(err)
+			}
 			executor.retryWait = func(context.Context, time.Duration) error { return context.Canceled }
 
-			if err := executor.runFileConversation(context.Background(), "initial input"); !errors.Is(err, context.Canceled) {
+			if err := executor.RunPrompt(context.Background(), "", "initial input"); !errors.Is(err, context.Canceled) {
 				t.Fatalf("runFileConversation() error = %v, want context.Canceled", err)
 			}
 			if requests != 1 {
@@ -502,17 +510,18 @@ func TestRunFileConversationRetriesAPIErrorWithoutLosingContinuationContext(t *t
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
+	config := testConversationConfig(server)
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var delays []time.Duration
 	executor.retryWait = func(_ context.Context, delay time.Duration) error {
 		delays = append(delays, delay)
 		return nil
 	}
 	filePath := "project/example.md"
-	if err := executor.runFileConversationForFile(context.Background(), filePath, "initial prompt"); err != nil {
+	if err := executor.RunPrompt(context.Background(), filePath, "initial prompt"); err != nil {
 		t.Fatalf("runFileConversationForFile() error = %v", err)
 	}
 	if len(requests) != 3 {
@@ -550,11 +559,12 @@ func TestRunFileConversationCompletesOnFirstResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
-	if err := executor.runFileConversation(context.Background(), "initial input"); err != nil {
+	config := testConversationConfig(server)
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.RunPrompt(context.Background(), "", "initial input"); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -577,12 +587,13 @@ func TestRunFileConversationStopsWhenContextIsCanceled(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
+	config := testConversationConfig(server)
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if err := executor.runFileConversation(ctx, "initial input"); !errors.Is(err, context.Canceled) {
+	if err := executor.RunPrompt(ctx, "", "initial input"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("runFileConversation() error = %v, want context.Canceled", err)
 	}
 	if calls != 0 {

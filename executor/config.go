@@ -12,8 +12,6 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/dev1-alexwei-net/guava/conversations"
 )
@@ -75,10 +73,6 @@ type Config struct {
 type Executor struct {
 	config Config
 
-	conversationTokens *tokenBucket
-	retryWait          func(context.Context, time.Duration) error
-
-	mu                  sync.Mutex
 	conversationService *conversations.Service
 }
 
@@ -137,7 +131,7 @@ func newExecutor(config Config) (*Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Executor{config: config, conversationTokens: newConversationTokenBucket(), conversationService: service}, nil
+	return &Executor{config: config, conversationService: service}, nil
 }
 
 // Validate reports missing required values or an invalid Gateway or
@@ -272,9 +266,4 @@ func logAttrs(logger *slog.Logger, ctx context.Context, level slog.Level, messag
 		return
 	}
 	logger.LogAttrs(ctx, level, message, attrs...)
-}
-
-// NewGatewayHTTPClient remains available from executor for CLI compatibility.
-func NewGatewayHTTPClient(verifyTLS bool) *http.Client {
-	return conversations.NewGatewayHTTPClient(verifyTLS)
 }

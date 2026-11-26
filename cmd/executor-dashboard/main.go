@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dev1-alexwei-net/guava/conversations"
 	"github.com/dev1-alexwei-net/guava/executor"
 )
 
@@ -72,7 +73,7 @@ func run() error {
 		FileExplorerURL:  *fileExplorerURL,
 		AgentID:          *agentID,
 		AuthToken:        os.Getenv("OPENCLAW_AUTH_TOKEN"),
-		HTTPClient:       executor.NewGatewayHTTPClient(*verifyTLS),
+		HTTPClient:       conversations.NewGatewayHTTPClient(*verifyTLS),
 		CLIArgs:          strings.Join(os.Args, " "),
 	}, parsedLogLevel, storePath)
 	if err != nil {

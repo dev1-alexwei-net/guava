@@ -41,10 +41,31 @@ type responsesContentPart struct {
 }
 
 type responsesAPIError struct {
-	Error struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-	} `json:"error"`
+	Error json.RawMessage `json:"error"`
+}
+
+type responsesAPIErrorDetails struct {
+	Message string `json:"message"`
+}
+
+func responsesAPIErrorMessage(body []byte) string {
+	var response responsesAPIError
+	if err := json.Unmarshal(body, &response); err != nil {
+		return ""
+	}
+
+	// Gateways may encode error as a plain string, while OpenResponses error
+	// objects use {message, type}. Accept both so retry classification can
+	// distinguish a missing model from an unrelated 404.
+	var message string
+	if err := json.Unmarshal(response.Error, &message); err == nil && strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	var details responsesAPIErrorDetails
+	if err := json.Unmarshal(response.Error, &details); err == nil {
+		return strings.TrimSpace(details.Message)
+	}
+	return ""
 }
 
 type responsesHTTPError struct {
@@ -180,9 +201,8 @@ func (c responsesClient) createObserved(ctx context.Context, input, sessionKey, 
 		return agentResponse{}, fmt.Errorf("OpenResponses response exceeds %d bytes", maxResponsesBodySize)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		var apiError responsesAPIError
-		if json.Unmarshal(responseBody, &apiError) == nil && strings.TrimSpace(apiError.Error.Message) != "" {
-			return agentResponse{}, &responsesHTTPError{statusCode: resp.StatusCode, message: apiError.Error.Message}
+		if message := responsesAPIErrorMessage(responseBody); message != "" {
+			return agentResponse{}, &responsesHTTPError{statusCode: resp.StatusCode, message: message}
 		}
 		return agentResponse{}, &responsesHTTPError{statusCode: resp.StatusCode}
 	}

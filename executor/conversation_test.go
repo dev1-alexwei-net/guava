@@ -289,16 +289,19 @@ func TestRunFileConversationSpendsTokenForEveryRequest(t *testing.T) {
 	}
 }
 
-func TestRunFileConversationRetriesHTTP500And408WithBackoffAndTokens(t *testing.T) {
+func TestRunFileConversationRetriesRetryableHTTPStatusesWithBackoffAndTokens(t *testing.T) {
 	tests := []struct {
-		name       string
-		statusCode int
-		message    string
+		name        string
+		statusCode  int
+		message     string
+		stringError bool
 	}{
 		{name: "internal server error", statusCode: http.StatusInternalServerError, message: "internal error"},
 		{name: "upstream provider timeout", statusCode: http.StatusRequestTimeout, message: "upstream provider timeout"},
+		{name: "missing model", statusCode: http.StatusNotFound, message: "404 {\"error\":\"model 'qwen3.8:27b' not found\"}", stringError: true},
 	}
 	for _, test := range tests {
+		test := test
 		t.Run(test.name, func(t *testing.T) {
 			var requests []responsesRequest
 			var sessionKeys []string
@@ -314,9 +317,13 @@ func TestRunFileConversationRetriesHTTP500And408WithBackoffAndTokens(t *testing.
 				if len(requests) <= 3 {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(test.statusCode)
-					if err := json.NewEncoder(w).Encode(map[string]any{
+					var errorBody any = map[string]any{
 						"error": map[string]string{"message": test.message},
-					}); err != nil {
+					}
+					if test.stringError {
+						errorBody = map[string]string{"error": test.message}
+					}
+					if err := json.NewEncoder(w).Encode(errorBody); err != nil {
 						t.Errorf("encode error response: %v", err)
 					}
 					return
@@ -383,14 +390,19 @@ func TestRunFileConversationRetriesHTTP500And408WithBackoffAndTokens(t *testing.
 			}
 
 			logs := logOutput.String()
-			if got := strings.Count(logs, `msg="Spent conversation token for OpenResponses request"`); got != 4 {
+			if got := strings.Count(logs, "msg=\"Spent conversation token for OpenResponses request\""); got != 4 {
 				t.Errorf("token-spending log count = %d, want 4; logs:\n%s", got, logs)
+			}
+			wantMessage := test.message
+			if test.stringError {
+				// slog escapes quotes inside the logged error value.
+				wantMessage = strings.ReplaceAll(wantMessage, `"`, `\"`)
 			}
 			for _, want := range []string{
 				"tokens_spent=1",
-				fmt.Sprintf(`msg="Retrying OpenResponses after HTTP %d"`, test.statusCode),
+				fmt.Sprintf("msg=\"Retrying OpenResponses after HTTP %d\"", test.statusCode),
 				fmt.Sprintf("status=%d", test.statusCode),
-				test.message,
+				wantMessage,
 				"retry_attempt=1",
 				"retry_attempt=2",
 				"retry_attempt=3",
@@ -407,14 +419,33 @@ func TestRunFileConversationRetriesHTTP500And408WithBackoffAndTokens(t *testing.
 }
 
 func TestRunFileConversationCancellationStopsRetryableHTTPStatus(t *testing.T) {
-	for _, statusCode := range []int{http.StatusInternalServerError, http.StatusRequestTimeout} {
-		t.Run(fmt.Sprintf("HTTP %d", statusCode), func(t *testing.T) {
+	tests := []struct {
+		name        string
+		statusCode  int
+		message     string
+		stringError bool
+	}{
+		{name: "HTTP 500", statusCode: http.StatusInternalServerError, message: "internal error"},
+		{name: "HTTP 408", statusCode: http.StatusRequestTimeout, message: "upstream provider timeout"},
+		{name: "model HTTP 404", statusCode: http.StatusNotFound, message: "model not found", stringError: true},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
 			requests := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				requests++
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(statusCode)
-				_, _ = w.Write([]byte(`{"error":{"message":"transient error"}}`))
+				w.WriteHeader(test.statusCode)
+				var errorBody any = map[string]any{
+					"error": map[string]string{"message": test.message},
+				}
+				if test.stringError {
+					errorBody = map[string]string{"error": test.message}
+				}
+				if err := json.NewEncoder(w).Encode(errorBody); err != nil {
+					t.Errorf("encode error response: %v", err)
+				}
 			}))
 			defer server.Close()
 
@@ -431,6 +462,31 @@ func TestRunFileConversationCancellationStopsRetryableHTTPStatus(t *testing.T) {
 				t.Fatalf("requests = %d, want 1", requests)
 			}
 		})
+	}
+}
+
+func TestRunFileConversationDoesNotRetryUnrelatedHTTP404(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		if err := json.NewEncoder(w).Encode(map[string]string{"error": "route not found"}); err != nil {
+			t.Errorf("encode error response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.GatewayURL = server.URL
+	config.HTTPClient = server.Client()
+	executor := &Executor{config: config}
+	err := executor.runFileConversation(context.Background(), "initial input")
+	if err == nil || err.Error() != "OpenResponses returned HTTP 404: route not found" {
+		t.Fatalf("runFileConversation() error = %v, want the unrelated 404 error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
 	}
 }
 

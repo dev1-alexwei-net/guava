@@ -53,7 +53,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 				break
 			}
 			var responseErr *responsesHTTPError
-			if errors.As(err, &responseErr) && isRetryableOpenResponsesStatus(responseErr.statusCode) {
+			if errors.As(err, &responseErr) && isRetryableOpenResponsesError(responseErr) {
 				consecutiveFailures++
 				retryDelay := openResponsesRetryDelay(consecutiveFailures)
 				retryAttrs := responseLogAttrs(filePath, turn)
@@ -112,8 +112,19 @@ func (e *Executor) waitBeforeRetry(ctx context.Context, delay time.Duration) err
 	}
 }
 
-func isRetryableOpenResponsesStatus(statusCode int) bool {
-	return statusCode == http.StatusInternalServerError || statusCode == http.StatusRequestTimeout
+func isRetryableOpenResponsesError(responseErr *responsesHTTPError) bool {
+	if responseErr == nil {
+		return false
+	}
+	switch responseErr.statusCode {
+	case http.StatusInternalServerError, http.StatusRequestTimeout:
+		return true
+	case http.StatusNotFound:
+		message := strings.ToLower(responseErr.message)
+		return strings.Contains(message, "model") && strings.Contains(message, "not found")
+	default:
+		return false
+	}
 }
 
 func openResponsesRetryDelay(consecutiveFailures int) time.Duration {

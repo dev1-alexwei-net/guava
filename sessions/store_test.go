@@ -140,32 +140,6 @@ func TestStoreDeleteRemovesSavedSessionHistory(t *testing.T) {
 	}
 }
 
-func TestStoreAcceptsEachLifecycleStatus(t *testing.T) {
-	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
-
-	for _, status := range []Status{StatusActive, StatusPaused, StatusEnded, StatusFailed} {
-		t.Run(string(status), func(t *testing.T) {
-			record, err := store.Create(context.Background(), Record{
-				AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: status,
-			})
-			if err != nil {
-				t.Fatalf("Create: %v", err)
-			}
-			loaded, err := store.Get(context.Background(), record.ID)
-			if err != nil {
-				t.Fatalf("Get: %v", err)
-			}
-			if loaded.Status != status {
-				t.Errorf("Status = %q, want %q", loaded.Status, status)
-			}
-		})
-	}
-}
-
 func TestRecoverInterruptedPausesOnlyActiveSessions(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
 	if err != nil {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -15,32 +14,19 @@ import (
 
 const maxLogBytes = 64 << 10
 
-// taskSessionLifecycle is the saved-session behavior the run controller
-// needs. The dashboard composition root retains ownership of opening,
-// recovery, listing, and closing the persistent store.
-type taskSessionLifecycle interface {
-	Create(context.Context, sessions.Record) (sessions.Record, error)
-	Get(context.Context, string) (sessions.Record, error)
-	Update(context.Context, sessions.Record) (sessions.Record, error)
-	Delete(context.Context, string) error
-}
-
-var _ taskSessionLifecycle = (*sessions.Store)(nil)
-
 type executorController struct {
-	mu         sync.Mutex
-	config     executor.Config
-	runner     *executor.Executor
-	active     *executor.Executor
-	store      taskSessionLifecycle
-	session    *sessions.Record
-	logger     *slog.Logger
-	logs       *tailLogBuffer
-	status     string
-	lastErr    string
-	cancel     context.CancelFunc
-	done       chan struct{}
-	finishedAt time.Time
+	mu             sync.Mutex
+	runner         *executor.Executor
+	active         *executor.Executor
+	sessionManager *taskSessionManager
+	session        *sessions.Record
+	logger         *slog.Logger
+	logs           *tailLogBuffer
+	status         string
+	lastErr        string
+	cancel         context.CancelFunc
+	done           chan struct{}
+	finishedAt     time.Time
 }
 
 type executorSnapshot struct {
@@ -83,11 +69,7 @@ func (b *tailLogBuffer) String() string {
 	return string(b.content)
 }
 
-func newExecutorController(config executor.Config, level slog.Level) (*executorController, error) {
-	return newExecutorControllerWithSessionLifecycle(config, level, nil)
-}
-
-func newExecutorControllerWithSessionLifecycle(config executor.Config, level slog.Level, store taskSessionLifecycle) (*executorController, error) {
+func newExecutorController(config executor.Config, level slog.Level, store taskSessionStore) (*executorController, error) {
 	logs := &tailLogBuffer{}
 	logger := executor.NewTextLogger(logs, level)
 	config.Logger = logger
@@ -97,13 +79,12 @@ func newExecutorControllerWithSessionLifecycle(config executor.Config, level slo
 		return nil, err
 	}
 	return &executorController{
-		config: config,
-		runner: runner,
-		active: runner,
-		store:  store,
-		logger: logger,
-		logs:   logs,
-		status: "idle",
+		runner:         runner,
+		active:         runner,
+		sessionManager: newTaskSessionManager(config, store),
+		logger:         logger,
+		logs:           logs,
+		status:         "idle",
 	}, nil
 }
 
@@ -128,18 +109,9 @@ func (c *executorController) Start(subdirectory string) error {
 		}
 		runner = derived
 	}
-	var record *sessions.Record
-	if c.store != nil {
-		summary := runner.SessionSummary()
-		created, err := c.store.Create(context.Background(), sessions.Record{
-			AgentID: summary.AgentID, RootDirectory: c.config.RootPath,
-			Subdirectory: summary.Subdirectory, DatabaseFile: c.config.DatabasePath,
-			Status: sessions.StatusActive, StartedAt: time.Now().UTC(),
-		})
-		if err != nil {
-			return err
-		}
-		record = &created
+	record, err := c.sessionManager.Create(runner)
+	if err != nil {
+		return err
 	}
 	return c.startLocked(runner, record)
 }
@@ -153,39 +125,11 @@ func (c *executorController) Resume(id string) error {
 	if c.status == "running" || c.status == "stopping" {
 		return errors.New("executor is already running")
 	}
-	if c.store == nil {
-		return errors.New("task session persistence is unavailable")
-	}
-	record, err := c.store.Get(context.Background(), strings.TrimSpace(id))
+	runner, record, err := c.sessionManager.Resume(id)
 	if err != nil {
 		return err
 	}
-	if record.Status == sessions.StatusActive {
-		return errors.New("task session is still active and cannot be resumed")
-	}
-
-	config := executorConfigForSession(c.config, record)
-	subdirectory := config.Subdirectory
-	config.Subdirectory = ""
-	runner, err := executor.New(config)
-	if err != nil {
-		return fmt.Errorf("restore task session configuration: %w", err)
-	}
-	if subdirectory != "" {
-		runner, err = runner.WithSubdirectory(subdirectory)
-		if err != nil {
-			return fmt.Errorf("restore task session subdirectory: %w", err)
-		}
-	}
-	record.Status = sessions.StatusActive
-	record.StartedAt = time.Now().UTC()
-	record.FinishedAt = time.Time{}
-	record.LastError = ""
-	updated, err := c.store.Update(context.Background(), record)
-	if err != nil {
-		return err
-	}
-	return c.startLocked(runner, &updated)
+	return c.startLocked(runner, record)
 }
 
 // DeleteSession permanently removes the saved history for an inactive session.
@@ -196,20 +140,10 @@ func (c *executorController) DeleteSession(id string) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.store == nil {
-		return errors.New("task session persistence is unavailable")
-	}
 	if (c.status == "running" || c.status == "stopping") && sessionID(c.session) == id {
 		return errors.New("the active task session cannot be deleted")
 	}
-	record, err := c.store.Get(context.Background(), id)
-	if err != nil {
-		return err
-	}
-	if record.Status == sessions.StatusActive {
-		return errors.New("task session is still active and cannot be deleted")
-	}
-	return c.store.Delete(context.Background(), id)
+	return c.sessionManager.Delete(id)
 }
 
 func (c *executorController) startLocked(runner *executor.Executor, record *sessions.Record) error {
@@ -236,26 +170,21 @@ func (c *executorController) run(ctx context.Context, done chan struct{}, runner
 	c.cancel = nil
 	c.done = nil
 	c.finishedAt = time.Now().UTC()
-	var status string
+	var status sessions.Status
 	switch {
 	case errors.Is(err, context.Canceled):
 		c.status = "stopped"
-		status = string(sessions.StatusPaused)
+		status = sessions.StatusPaused
 	case err != nil:
 		c.status = "failed"
 		c.lastErr = err.Error()
-		status = string(sessions.StatusFailed)
+		status = sessions.StatusFailed
 	default:
 		c.status = "completed"
-		status = string(sessions.StatusEnded)
+		status = sessions.StatusEnded
 	}
-	if record != nil && c.store != nil {
-		record.Status = sessions.Status(status)
-		record.FinishedAt = c.finishedAt
-		record.LastError = c.lastErr
-		if _, updateErr := c.store.Update(context.Background(), *record); updateErr != nil {
-			c.logger.Error("Could not persist task session result", slog.String("session_id", record.ID), slog.String("error", updateErr.Error()))
-		}
+	if err := c.sessionManager.Finish(record, status, c.finishedAt, c.lastErr); err != nil {
+		c.logger.Error("Could not persist task session result", slog.String("session_id", record.ID), slog.String("error", err.Error()))
 	}
 	close(done)
 	c.mu.Unlock()
@@ -301,14 +230,6 @@ func (c *executorController) Snapshot() executorSnapshot {
 		FinishedAt:   c.finishedAt,
 		SessionID:    sessionID(c.session),
 	}
-}
-
-func executorConfigForSession(base executor.Config, record sessions.Record) executor.Config {
-	base.AgentID = record.AgentID
-	base.RootPath = record.RootDirectory
-	base.Subdirectory = record.Subdirectory
-	base.DatabasePath = record.DatabaseFile
-	return base
 }
 
 func sessionID(record *sessions.Record) string {

@@ -49,6 +49,17 @@ func main() {
 }
 ```
 
+## Listing subdirectories
+
+`ListSubdirectories` returns candidate subdirectories derived from the fileexplorer manifest without starting an executor session: the union of the manifest's directory rows and the folder prefixes implied by regular-file paths, restricted to folders that contain at least one file, in deterministic binary path order. Every result is a valid `Subdirectory` value. The database is opened read-only and never modified, so the method is safe to call against the same `-database` a caller such as `cmd/executor-dashboard` already received at startup.
+
+```go
+candidates, err := executor.ListSubdirectories(context.Background(), "/var/lib/fileexplorer.sqlite")
+if err != nil {
+	log.Fatal(err)
+}
+```
+
 ## Run from the command line
 
 From the repository root, run:

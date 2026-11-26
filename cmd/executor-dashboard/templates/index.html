@@ -87,20 +87,15 @@
           <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
         </form>
 
-        <form action="/" method="get" class="row g-2 align-items-end">
+        <form action="/" method="get" aria-labelledby="refresh-heading">
           <input type="hidden" name="theme" value="{{.Theme}}">
-          <div class="col-auto">
-            <label class="form-label mb-0" for="refresh">Refresh page</label>
-            <select class="form-select" id="refresh" name="refresh">
-              <option value="0" {{if eq .Refresh 0}}selected{{end}}>Off</option>
-              <option value="2" {{if eq .Refresh 2}}selected{{end}}>Every 2 seconds</option>
-              <option value="5" {{if eq .Refresh 5}}selected{{end}}>Every 5 seconds</option>
-              <option value="10" {{if eq .Refresh 10}}selected{{end}}>Every 10 seconds</option>
-              <option value="30" {{if eq .Refresh 30}}selected{{end}}>Every 30 seconds</option>
-            </select>
-          </div>
-          <div class="col-auto">
-            <button class="btn btn-outline-primary" type="submit">Apply</button>
+          <h3 class="h6" id="refresh-heading">Refresh page</h3>
+          <div class="btn-group flex-wrap" role="group" aria-labelledby="refresh-heading">
+            <button class="btn btn-sm {{if eq .Refresh 0}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="0" aria-pressed="{{if eq .Refresh 0}}true{{else}}false{{end}}">Off</button>
+            <button class="btn btn-sm {{if eq .Refresh 2}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="2" aria-pressed="{{if eq .Refresh 2}}true{{else}}false{{end}}">Every 2 seconds</button>
+            <button class="btn btn-sm {{if eq .Refresh 5}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="5" aria-pressed="{{if eq .Refresh 5}}true{{else}}false{{end}}">Every 5 seconds</button>
+            <button class="btn btn-sm {{if eq .Refresh 10}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="10" aria-pressed="{{if eq .Refresh 10}}true{{else}}false{{end}}">Every 10 seconds</button>
+            <button class="btn btn-sm {{if eq .Refresh 30}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="30" aria-pressed="{{if eq .Refresh 30}}true{{else}}false{{end}}">Every 30 seconds</button>
           </div>
         </form>
       </div>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1000,5 +1002,75 @@ func TestShowRendersRootOnlyWhenManifestCannotBeRead(t *testing.T) {
 	}
 	if !strings.Contains(body, "The subdirectory list is unavailable") {
 		t.Error("degradation hint missing")
+	}
+}
+
+func TestShowRendersOneClickRefreshIntervals(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	// A deletable saved session exercises the action URLs that only render
+	// when saved history exists.
+	if _, err := app.store.Create(context.Background(), sessions.Record{
+		ID: "paused-session", AgentID: "agent-paused", RootDirectory: "/saved/files", DatabaseFile: "/saved/index.sqlite", Status: sessions.StatusPaused,
+	}); err != nil {
+		t.Fatalf("Create saved session: %v", err)
+	}
+
+	intervals := []int{0, 2, 5, 10, 30}
+	for _, active := range intervals {
+		t.Run(strconv.Itoa(active), func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/?refresh="+strconv.Itoa(active)+"&theme=dark", nil)
+			rec := httptest.NewRecorder()
+			app.show(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			body := rec.Body.String()
+			for _, interval := range intervals {
+				button := refreshButton(body, interval)
+				if button == "" {
+					t.Fatalf("rendered page has no refresh button for interval %d", interval)
+				}
+				wantActive := interval == active
+				if active := strings.Contains(button, " btn-primary"); active != wantActive {
+					t.Errorf("interval %d marked active = %v, want %v (button: %s)", interval, active, wantActive, button)
+				}
+			}
+			if strings.Contains(body, ">Apply<") {
+				t.Error("the Apply button is still rendered; every interval must apply on a single click")
+			}
+			if active == 5 {
+				for _, want := range []string{`/start?refresh=5&amp;theme=dark`, `/stop?refresh=5&amp;theme=dark`, `/sessions/delete?refresh=5&amp;theme=dark`} {
+					if !strings.Contains(body, want) {
+						t.Errorf("rendered action URL missing %q", want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// refreshButton returns the <button> element that submits the given refresh
+// interval, or "" when the rendered page has no such control.
+func refreshButton(body string, interval int) string {
+	rest := body
+	for {
+		start := strings.Index(rest, "<button")
+		if start == -1 {
+			return ""
+		}
+		end := strings.Index(rest[start:], "</button>")
+		if end == -1 {
+			return ""
+		}
+		button := rest[start : start+end+len("</button>")]
+		if strings.Contains(button, `name="refresh"`) && strings.Contains(button, fmt.Sprintf(`value="%d"`, interval)) {
+			return button
+		}
+		rest = rest[start+1:]
 	}
 }

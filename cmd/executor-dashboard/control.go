@@ -14,18 +14,6 @@ import (
 
 const maxLogBytes = 64 << 10
 
-// taskSessionStore is the persistence port used by taskSessionManager. The
-// dashboard composition root retains ownership of opening, recovery, listing,
-// and closing the persistent store.
-type taskSessionStore interface {
-	Create(context.Context, sessions.Record) (sessions.Record, error)
-	Get(context.Context, string) (sessions.Record, error)
-	Update(context.Context, sessions.Record) (sessions.Record, error)
-	Delete(context.Context, string) error
-}
-
-var _ taskSessionStore = (*sessions.Store)(nil)
-
 type executorController struct {
 	mu             sync.Mutex
 	runner         *executor.Executor

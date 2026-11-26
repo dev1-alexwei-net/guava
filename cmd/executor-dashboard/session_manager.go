@@ -11,6 +11,18 @@ import (
 	"github.com/dev1-alexwei-net/guava/sessions"
 )
 
+// taskSessionStore is the persistence port used by taskSessionManager. The
+// dashboard composition root retains ownership of opening, recovery, listing,
+// and closing the persistent store.
+type taskSessionStore interface {
+	Create(context.Context, sessions.Record) (sessions.Record, error)
+	Get(context.Context, string) (sessions.Record, error)
+	Update(context.Context, sessions.Record) (sessions.Record, error)
+	Delete(context.Context, string) error
+}
+
+var _ taskSessionStore = (*sessions.Store)(nil)
+
 // taskSessionManager owns the persisted identity, launch configuration, and
 // lifecycle snapshot for dashboard runs. The controller owns the live
 // goroutine and cancellation state; the dashboard owns opening and closing the

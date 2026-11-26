@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,14 @@ type Config struct {
 
 	// RootPath is the filesystem root that corresponds to paths stored in the index.
 	RootPath string
+
+	// Subdirectory optionally scopes a run to the files under one folder
+	// inside RootPath. Paths are relative and slash-separated, matching the
+	// index; the match is by exact folder prefix, so a sibling folder that
+	// merely shares a name prefix is out of scope. Leave it empty to keep the
+	// whole-root behavior. Instruction resolution is unaffected and still
+	// sees the full index.
+	Subdirectory string
 
 	// InstructionsPath is the fallback instructions file used when the index has no
 	// ancestor instructions.md for a target file.
@@ -75,6 +85,7 @@ func New(config Config) (*Executor, error) {
 
 	config.GatewayURL = strings.TrimRight(strings.TrimSpace(config.GatewayURL), "/")
 	config.FileExplorerURL = strings.TrimRight(strings.TrimSpace(config.FileExplorerURL), "/")
+	config.Subdirectory = normalizeSubdirectory(config.Subdirectory)
 	if config.HTTPClient == nil {
 		config.HTTPClient = http.DefaultClient
 	}
@@ -114,7 +125,40 @@ func (c Config) Validate() error {
 	if err := validateBaseURL("fileexplorer URL", c.FileExplorerURL); err != nil {
 		return err
 	}
+	if err := validateSubdirectory(c.Subdirectory); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateSubdirectory reports when a non-empty subdirectory is not a valid
+// folder inside the filesystem root: it must be relative, stay inside the
+// root after cleaning, and not be the root itself. An empty value is valid
+// and keeps the whole-root behavior.
+func validateSubdirectory(value string) error {
+	if value = strings.TrimSpace(value); value == "" {
+		return nil
+	}
+	if strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("subdirectory must not contain NUL bytes")
+	}
+	if slash := filepath.ToSlash(value); slash[0] == '/' {
+		return fmt.Errorf("subdirectory %q must be a folder inside the filesystem root", value)
+	}
+	if cleaned := path.Clean(filepath.ToSlash(value)); cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return fmt.Errorf("subdirectory %q must be a folder inside the filesystem root", value)
+	}
+	return nil
+}
+
+// normalizeSubdirectory returns the trimmed, cleaned, slash-separated form of
+// a subdirectory. Empty values stay empty, which means the whole root.
+func normalizeSubdirectory(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return path.Clean(filepath.ToSlash(value))
 }
 
 // validateBaseURL reports when value is not a usable base URL: the scheme

@@ -118,10 +118,45 @@ func TestConfigValidateFileExplorerURL(t *testing.T) {
 	})
 }
 
+func TestConfigValidateSubdirectory(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{name: "absolute path", mutate: func(c *Config) { c.Subdirectory = "/absolute" }, want: "inside the filesystem root"},
+		{name: "escapes root", mutate: func(c *Config) { c.Subdirectory = "../escape" }, want: "inside the filesystem root"},
+		{name: "nested escape", mutate: func(c *Config) { c.Subdirectory = "a/../../escape" }, want: "inside the filesystem root"},
+		{name: "root itself", mutate: func(c *Config) { c.Subdirectory = "." }, want: "inside the filesystem root"},
+		{name: "NUL byte", mutate: func(c *Config) { c.Subdirectory = "docs\x00" }, want: "NUL bytes"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := validConfig()
+			test.mutate(&config)
+			err := config.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %v, want it to contain %q", err, test.want)
+			}
+		})
+	}
+
+	t.Run("valid subdirectories", func(t *testing.T) {
+		for _, subdirectory := range []string{"", "  ", "docs", "nested/folder", "docs/", "a/b/c"} {
+			config := validConfig()
+			config.Subdirectory = subdirectory
+			if err := config.Validate(); err != nil {
+				t.Errorf("Validate(%q) error = %v", subdirectory, err)
+			}
+		}
+	})
+}
+
 func TestNewValidatesAndNormalizesConfig(t *testing.T) {
 	config := validConfig()
 	config.GatewayURL = " http://127.0.0.1:18789/// "
 	config.FileExplorerURL = " http://fileexplorer.container:8080/// "
+	config.Subdirectory = " docs/nested/// "
 
 	executor, err := New(config)
 	if err != nil {
@@ -133,8 +168,20 @@ func TestNewValidatesAndNormalizesConfig(t *testing.T) {
 	if got, want := executor.config.FileExplorerURL, "http://fileexplorer.container:8080"; got != want {
 		t.Errorf("FileExplorerURL = %q, want %q", got, want)
 	}
+	if got, want := executor.config.Subdirectory, "docs/nested"; got != want {
+		t.Errorf("Subdirectory = %q, want %q", got, want)
+	}
 	if executor.config.HTTPClient != http.DefaultClient {
 		t.Errorf("HTTPClient = %p, want default client %p", executor.config.HTTPClient, http.DefaultClient)
+	}
+
+	config = validConfig()
+	executor, err = New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.config.Subdirectory != "" {
+		t.Errorf("Subdirectory = %q, want empty for whole-root behavior", executor.config.Subdirectory)
 	}
 }
 

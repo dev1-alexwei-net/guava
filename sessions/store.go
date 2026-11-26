@@ -184,6 +184,29 @@ func (s *Store) Get(ctx context.Context, id string) (Record, error) {
 	return record, nil
 }
 
+// Delete removes one saved session record and all of its persisted history.
+// Deleting an unknown ID returns ErrNotFound, matching Get and Update.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	if s == nil || s.db == nil {
+		return errors.New("task session store is not open")
+	}
+	if id == "" {
+		return errors.New("task session ID is required")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM task_sessions WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete task session: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check task session deletion: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	return nil
+}
+
 // List returns all records ordered by most recently updated, then by ID.
 func (s *Store) List(ctx context.Context) ([]Record, error) {
 	if s == nil || s.db == nil {

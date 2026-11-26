@@ -53,6 +53,7 @@ type dashboardPageData struct {
 	SubdirectoryHint  string
 	SavedSessions     []savedSessionChoice
 	SavedSessionsHint string
+	Notice            string
 }
 
 // savedSessionChoice contains only the fields needed to identify and choose a
@@ -65,6 +66,7 @@ type savedSessionChoice struct {
 	StatusClass  string
 	UpdatedAt    string
 	CanResume    bool
+	CanDelete    bool
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
@@ -109,6 +111,7 @@ func newDashboardWithSessionStore(config executor.Config, logLevel slog.Level, s
 	mux.HandleFunc("GET /{$}", app.show)
 	mux.HandleFunc("POST /start", app.start)
 	mux.HandleFunc("POST /resume", app.resume)
+	mux.HandleFunc("POST /sessions/delete", app.deleteSession)
 	mux.HandleFunc("POST /stop", app.stop)
 	mux.HandleFunc("GET /static/bootstrap.min.css", app.stylesheet)
 	app.routes = mux
@@ -175,6 +178,7 @@ func (d *dashboard) savedSessions(ctx context.Context) ([]savedSessionChoice, er
 			StatusClass:  statusClass,
 			UpdatedAt:    record.UpdatedAt.UTC().Format("2006-01-02 15:04 UTC"),
 			CanResume:    record.Status != sessions.StatusActive,
+			CanDelete:    record.Status != sessions.StatusActive,
 		})
 	}
 	return choices, nil
@@ -225,6 +229,7 @@ func pageData(snapshot executorSnapshot, query url.Values, subdirectories []stri
 		Running:          snapshot.Status == "running",
 		Busy:             snapshot.Status == "running" || snapshot.Status == "stopping",
 		Error:            query.Get("error"),
+		Notice:           noticeMessage(query.Get("notice")),
 		AgentID:          snapshot.AgentID,
 		CLIArgs:          snapshot.CLIArgs,
 		Subdirectory:     snapshot.Subdirectory,
@@ -311,6 +316,32 @@ func (d *dashboard) selectedSubdirectory(r *http.Request) (string, error) {
 func (d *dashboard) resume(w http.ResponseWriter, r *http.Request) {
 	err := d.controller.Resume(r.FormValue("session_id"))
 	redirectDashboard(w, r, err)
+}
+
+func (d *dashboard) deleteSession(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("confirm") != "yes" {
+		redirectDashboard(w, r, fmt.Errorf("confirm permanent deletion of the saved session history"))
+		return
+	}
+	if err := d.controller.DeleteSession(r.FormValue("session_id")); err != nil {
+		redirectDashboard(w, r, err)
+		return
+	}
+	query := url.Values{"notice": {"session_deleted"}}
+	if refresh := parseRefresh(r.URL.Query().Get("refresh")); refresh > 0 {
+		query.Set("refresh", strconv.Itoa(refresh))
+	}
+	if theme := parseTheme(r.URL.Query().Get("theme")); theme == "dark" {
+		query.Set("theme", theme)
+	}
+	http.Redirect(w, r, "/?"+query.Encode(), http.StatusSeeOther)
+}
+
+func noticeMessage(value string) string {
+	if value == "session_deleted" {
+		return "Saved session history deleted."
+	}
+	return ""
 }
 
 func (d *dashboard) stop(w http.ResponseWriter, r *http.Request) {

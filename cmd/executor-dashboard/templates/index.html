@@ -26,6 +26,7 @@
     </header>
 
     {{if .Error}}<div class="alert alert-danger" role="alert">{{.Error}}</div>{{end}}
+    {{if .Notice}}<div class="alert alert-success" role="status">{{.Notice}}</div>{{end}}
     {{if .LastErr}}<div class="alert alert-danger" role="alert">Last error: {{.LastErr}}</div>{{end}}
 
     <section class="card shadow-sm mb-4" aria-labelledby="controls-heading">
@@ -52,8 +53,8 @@
               </div>
               {{range .SavedSessions}}
               <div class="col-12 col-md-6">
-                <label class="card h-100" for="saved-session-{{.ID}}">
-                  <span class="card-body d-flex align-items-start gap-3">
+                <div class="card h-100">
+                  <label class="card-body d-flex align-items-start gap-3" for="saved-session-{{.ID}}">
                     <input class="form-check-input mt-1 flex-shrink-0" id="saved-session-{{.ID}}" type="radio" name="session_id" value="{{.ID}}" {{if or $.Busy (not .CanResume)}}disabled{{end}}>
                     <span class="min-w-0">
                       <span class="d-flex flex-wrap align-items-center gap-2 mb-1">
@@ -65,8 +66,19 @@
                       <span class="d-block text-body-secondary small font-monospace">{{.ID}}</span>
                       {{if not .CanResume}}<span class="d-block text-body-secondary small">This session is active and cannot be resumed.</span>{{end}}
                     </span>
-                  </span>
-                </label>
+                  </label>
+                  {{if .CanDelete}}
+                  <div class="card-body pt-0">
+                    <div class="form-check mb-2">
+                      <input class="form-check-input" id="confirm-delete-{{.ID}}" type="checkbox" name="confirm" value="yes" form="delete-session-{{.ID}}" required>
+                      <label class="form-check-label small" for="confirm-delete-{{.ID}}">I confirm permanent deletion of this saved history.</label>
+                    </div>
+                    <button class="btn btn-outline-danger btn-sm" type="submit" form="delete-session-{{.ID}}">Delete saved session</button>
+                  </div>
+                  {{else}}
+                  <p class="card-body pt-0 small text-body-secondary mb-0">Active sessions cannot be deleted.</p>
+                  {{end}}
+                </div>
               </div>
               {{end}}
             </div>
@@ -90,6 +102,9 @@
           </div>
           {{if .SubdirectoryHint}}<p class="text-body-secondary small mb-3">{{.SubdirectoryHint}}</p>{{end}}
         </form>
+        {{range .SavedSessions}}
+        {{if .CanDelete}}<form id="delete-session-{{.ID}}" action="/sessions/delete?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post"><input type="hidden" name="session_id" value="{{.ID}}"></form>{{end}}
+        {{end}}
         <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="mb-3">
           <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
         </form>

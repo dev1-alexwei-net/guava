@@ -794,6 +794,12 @@ func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
 			t.Errorf("rendered page missing %q", want)
 		}
 	}
+	if !strings.Contains(body, `name="confirm" value="yes" form="delete-session-paused-session" required`) {
+		t.Error("rendered page missing explicit saved-history deletion confirmation")
+	}
+	if strings.Contains(body, `id="confirm-delete-active-session"`) {
+		t.Error("active session must not offer a delete confirmation")
+	}
 	if strings.Contains(strings.ToLower(body), "<script") {
 		t.Error("rendered selector must not include client-side JavaScript")
 	}
@@ -816,6 +822,90 @@ func TestStartRejectsUnknownSavedSession(t *testing.T) {
 	}
 	if snapshot := app.controller.Snapshot(); snapshot.Status != "idle" {
 		t.Errorf("status = %q, want idle after rejecting an unknown saved session", snapshot.Status)
+	}
+}
+
+func TestDeleteSessionRequiresConfirmationAndRemovesHistory(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "fileexplorer.sqlite")), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	saved, err := app.store.Create(context.Background(), sessions.Record{
+		ID: "delete-me", AgentID: "saved-agent", RootDirectory: "/saved/root",
+		DatabaseFile: "/saved/index.sqlite", Status: sessions.StatusPaused,
+	})
+	if err != nil {
+		t.Fatalf("Create saved session: %v", err)
+	}
+
+	unconfirmed := url.Values{"session_id": {saved.ID}}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/sessions/delete", strings.NewReader(unconfirmed.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "confirm+permanent+deletion") {
+		t.Fatalf("unconfirmed delete response = %d %q, want confirmation error redirect", response.Code, response.Header().Get("Location"))
+	}
+	if _, err := app.store.Get(context.Background(), saved.ID); err != nil {
+		t.Fatalf("unconfirmed deletion removed the record: %v", err)
+	}
+
+	missingID := url.Values{"confirm": {"yes"}}
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/sessions/delete", strings.NewReader(missingID.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	app.ServeHTTP(response, request)
+	if got := redirectLocation(t, response).Get("error"); !strings.Contains(got, "session ID is required") {
+		t.Errorf("missing-ID delete error = %q, want ID validation", got)
+	}
+
+	active, err := app.store.Create(context.Background(), sessions.Record{
+		ID: "active-session", AgentID: "active-agent", RootDirectory: "/active/root",
+		DatabaseFile: "/active/index.sqlite", Status: sessions.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create active session: %v", err)
+	}
+	activeForm := url.Values{"session_id": {active.ID}, "confirm": {"yes"}}
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/sessions/delete", strings.NewReader(activeForm.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	app.ServeHTTP(response, request)
+	if got := redirectLocation(t, response).Get("error"); !strings.Contains(got, "still active") {
+		t.Errorf("active-session delete error = %q, want active-session validation", got)
+	}
+	if _, err := app.store.Get(context.Background(), active.ID); err != nil {
+		t.Errorf("active session was deleted: %v", err)
+	}
+
+	confirmed := url.Values{"session_id": {saved.ID}, "confirm": {"yes"}}
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/sessions/delete?refresh=5&theme=dark", strings.NewReader(confirmed.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "notice=session_deleted") {
+		t.Fatalf("confirmed delete response = %d %q, want successful redirect", response.Code, response.Header().Get("Location"))
+	}
+	if _, err := app.store.Get(context.Background(), saved.ID); !errors.Is(err, sessions.ErrNotFound) {
+		t.Errorf("Get deleted session error = %v, want sessions.ErrNotFound", err)
+	}
+	page := httptest.NewRecorder()
+	app.ServeHTTP(page, httptest.NewRequest(http.MethodGet, response.Header().Get("Location"), nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Saved session history deleted.") {
+		t.Errorf("dashboard after deletion = %d; body missing deletion notice", page.Code)
+	}
+	if strings.Contains(page.Body.String(), "delete-me") {
+		t.Error("deleted session remains available in dashboard history")
+	}
+	resumeForm := url.Values{"session_id": {saved.ID}}
+	resumeResponse := httptest.NewRecorder()
+	resumeRequest := httptest.NewRequest(http.MethodPost, "/start", strings.NewReader(resumeForm.Encode()))
+	resumeRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	app.ServeHTTP(resumeResponse, resumeRequest)
+	if got := redirectLocation(t, resumeResponse).Get("error"); !strings.Contains(got, "task session not found") {
+		t.Errorf("resume deleted session error = %q, want missing-session rejection", got)
 	}
 }
 

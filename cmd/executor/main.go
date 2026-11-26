@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/dev1-alexwei-net/guava/conversations"
 	"github.com/dev1-alexwei-net/guava/executor"
 )
 
@@ -91,5 +92,5 @@ func newLogger(output io.Writer, level slog.Level) *slog.Logger {
 }
 
 func newGatewayHTTPClient(verifyTLS bool) *http.Client {
-	return executor.NewGatewayHTTPClient(verifyTLS)
+	return conversations.NewGatewayHTTPClient(verifyTLS)
 }

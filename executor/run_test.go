@@ -13,6 +13,11 @@ import (
 	"testing"
 )
 
+type testResponsesRequest struct {
+	Input              string `json:"input"`
+	PreviousResponseID string `json:"previous_response_id"`
+}
+
 func TestExecutorRunProcessesFilesSequentially(t *testing.T) {
 	rootPath := t.TempDir()
 	if err := os.WriteFile(filepath.Join(rootPath, "zeta.txt"), []byte("zeta content"), 0o600); err != nil {
@@ -39,22 +44,22 @@ func TestExecutorRunProcessesFilesSequentially(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var requests []responsesRequest
+	var requests []testResponsesRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		var request responsesRequest
+		var request testResponsesRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
 		requests = append(requests, request)
-		response := responsesAPIResponse{
+		response := testResponsesAPIResponse{
 			ID:     fmt.Sprintf("resp_%d", len(requests)),
-			Output: assistantText(completionMarker),
+			Output: testAssistantText(testCompletionMarker),
 		}
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("encode response: %v", err)
@@ -136,22 +141,22 @@ func TestExecutorRunScopesToSubdirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var requests []responsesRequest
+	var requests []testResponsesRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		var request responsesRequest
+		var request testResponsesRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Errorf("decode request: %v", err)
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
 		requests = append(requests, request)
-		response := responsesAPIResponse{
+		response := testResponsesAPIResponse{
 			ID:     fmt.Sprintf("resp_%d", len(requests)),
-			Output: assistantText(completionMarker),
+			Output: testAssistantText(testCompletionMarker),
 		}
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("encode response: %v", err)
@@ -219,7 +224,7 @@ func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var requests []responsesRequest
+	var requests []testResponsesRequest
 	var synced bool
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +251,7 @@ func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/responses":
-			var request responsesRequest
+			var request testResponsesRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Errorf("decode request: %v", err)
 				http.Error(w, "invalid request", http.StatusBadRequest)
@@ -260,9 +265,9 @@ func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
 					return
 				}
 			}
-			response := responsesAPIResponse{
+			response := testResponsesAPIResponse{
 				ID:     fmt.Sprintf("resp_%d", len(requests)),
-				Output: assistantText(completionMarker),
+				Output: testAssistantText(testCompletionMarker),
 			}
 			if err := json.NewEncoder(w).Encode(response); err != nil {
 				t.Errorf("encode response: %v", err)

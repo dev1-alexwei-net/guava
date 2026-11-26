@@ -408,6 +408,81 @@ func (s *Store) CompletedPaths(ctx context.Context, sessionID string) ([]string,
 	return paths, nil
 }
 
+// PendingPaths returns the session's unfinished file paths — the rows whose
+// status is pending or aborted — ordered by path. A resumed run merges
+// exactly this set with the files the manifest currently reports.
+func (s *Store) PendingPaths(ctx context.Context, sessionID string) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("task session store is not open")
+	}
+	if sessionID == "" {
+		return nil, errors.New("task session ID is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT file_path FROM session_file_progress
+		WHERE session_id = ? AND status IN (?, ?)
+		ORDER BY file_path ASC
+	`, sessionID, string(ProgressPending), string(ProgressAborted))
+	if err != nil {
+		return nil, fmt.Errorf("list pending task session files: %w", err)
+	}
+	defer rows.Close()
+	paths := make([]string, 0)
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("read pending task session file: %w", err)
+		}
+		paths = append(paths, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending task session files: %w", err)
+	}
+	return paths, nil
+}
+
+// SetPendingPaths replaces the session's unfinished (pending/aborted) file
+// set with paths, storing every path as a pending row. Unfinished rows for
+// any other paths — for example files that no longer exist under the
+// session's root — are dropped, and completed rows are left untouched.
+func (s *Store) SetPendingPaths(ctx context.Context, sessionID string, paths []string) error {
+	if s == nil || s.db == nil {
+		return errors.New("task session store is not open")
+	}
+	if sessionID == "" {
+		return errors.New("task session ID is required")
+	}
+	for _, path := range paths {
+		if path == "" {
+			return errors.New("task session pending file path is required")
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin task session pending set update: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM session_file_progress
+		WHERE session_id = ? AND status IN (?, ?)
+	`, sessionID, string(ProgressPending), string(ProgressAborted)); err != nil {
+		return fmt.Errorf("drop unfinished task session files: %w", err)
+	}
+	now := time.Now().UTC().UnixNano()
+	for _, path := range paths {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO session_file_progress (session_id, file_path, status, updated_at)
+			VALUES (?, ?, ?, ?)
+		`, sessionID, path, string(ProgressPending), now); err != nil {
+			return fmt.Errorf("persist task session pending file: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit task session pending set: %w", err)
+	}
+	return nil
+}
+
 // MarkFileStatus transitions every per-file row for one session from one
 // status to another, without touching any other file or session. It is used
 // to record unfinished files when a run ends without completing.

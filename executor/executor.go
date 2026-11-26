@@ -60,6 +60,7 @@ func (e *Executor) Run(ctx context.Context) error {
 		FileExplorerURL:  e.config.FileExplorerURL,
 		Subdirectory:     e.config.Subdirectory,
 		CompletedPaths:   e.config.CompletedPaths,
+		InitialPending:   e.config.InitialPending,
 		HTTPClient:       e.config.HTTPClient,
 		Logger:           e.config.Logger,
 	})

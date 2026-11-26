@@ -10,6 +10,7 @@ import (
 
 	"github.com/dev1-alexwei-net/guava/executor"
 	"github.com/dev1-alexwei-net/guava/sessions"
+	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
 // taskSessionStore is the persistence port used by taskSessionManager. The
@@ -22,6 +23,8 @@ type taskSessionStore interface {
 	Delete(context.Context, string) error
 	SaveFileProgress(context.Context, sessions.FileProgress) (sessions.FileProgress, error)
 	CompletedPaths(context.Context, string) ([]string, error)
+	PendingPaths(context.Context, string) ([]string, error)
+	SetPendingPaths(context.Context, string, []string) error
 	MarkFileStatus(context.Context, string, sessions.ProgressStatus, sessions.ProgressStatus) error
 }
 
@@ -55,18 +58,23 @@ func (m *taskSessionManager) Create(runner *executor.Executor) (*executor.Execut
 	if err != nil {
 		return nil, nil, err
 	}
-	bound, err := m.bindRunner(runner, record.ID, nil)
+	bound, err := m.bindRunner(runner, record.ID, nil, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	return bound, &record, nil
 }
 
-// Resume loads an explicitly selected inactive record, rehydrates its runner,
-// skips files the session already completed so the run starts from where it
-// left off, and marks the record active before returning it to the controller.
+// Resume loads an explicitly selected inactive record, refreshes the
+// fileexplorer manifest for the session's root and subdirectory, and merges
+// the files the session left unfinished with the files the manifest currently
+// reports — dropping any that no longer exist — persisting the merged set
+// before marking the record active. The returned runner skips files the
+// session already completed, keeps the surviving unfinished files ahead of
+// the newly reported files, and processes nothing that no longer exists.
 func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Record, error) {
-	record, err := m.store.Get(context.Background(), strings.TrimSpace(id))
+	ctx := context.Background()
+	record, err := m.store.Get(ctx, strings.TrimSpace(id))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -74,9 +82,17 @@ func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Re
 		return nil, nil, errors.New("task session is still active and cannot be resumed")
 	}
 
-	completed, err := m.store.CompletedPaths(context.Background(), record.ID)
+	completed, err := m.store.CompletedPaths(ctx, record.ID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load task session file progress: %w", err)
+		return nil, nil, fmt.Errorf("load completed task session files: %w", err)
+	}
+	pending, err := m.store.PendingPaths(ctx, record.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load pending task session files: %w", err)
+	}
+	merged, err := m.mergePendingSet(ctx, record, completed, pending)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	config := executorConfigForSession(m.baseConfig, record)
@@ -97,15 +113,81 @@ func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Re
 	record.StartedAt = time.Now().UTC()
 	record.FinishedAt = time.Time{}
 	record.LastError = ""
-	updated, err := m.store.Update(context.Background(), record)
+	updated, err := m.store.Update(ctx, record)
 	if err != nil {
 		return nil, nil, err
 	}
-	bound, err := m.bindRunner(runner, updated.ID, completed)
+	bound, err := m.bindRunner(runner, updated.ID, completed, merged)
 	if err != nil {
 		return nil, nil, err
 	}
 	return bound, &updated, nil
+}
+
+// mergePendingSet refreshes the fileexplorer manifest for the session's root
+// and subdirectory, then merges the session's persisted unfinished files with
+// the files the manifest currently reports. Unfinished files that no longer
+// exist under the session's root and subdirectory are dropped; surviving
+// unfinished files keep their persisted position ahead of the newly reported
+// files, which keep the manifest's binary path order. The merged set
+// replaces the session's persisted unfinished set before the run starts.
+func (m *taskSessionManager) mergePendingSet(ctx context.Context, record sessions.Record, completed, pending []string) ([]string, error) {
+	if err := m.refreshFileExplorer(ctx); err != nil {
+		return nil, fmt.Errorf("refresh fileexplorer for resume: %w", err)
+	}
+	manifest, err := tasks.ListFilePaths(ctx, record.DatabaseFile, record.Subdirectory)
+	if err != nil {
+		return nil, fmt.Errorf("list files for resume: %w", err)
+	}
+
+	completedSet := make(map[string]struct{}, len(completed))
+	for _, path := range completed {
+		completedSet[path] = struct{}{}
+	}
+	pendingSet := make(map[string]struct{}, len(pending))
+	for _, path := range pending {
+		pendingSet[path] = struct{}{}
+	}
+	manifestSet := make(map[string]struct{}, len(manifest))
+	for _, path := range manifest {
+		manifestSet[path] = struct{}{}
+	}
+
+	merged := make([]string, 0, len(manifest))
+	for _, path := range pending {
+		if _, gone := manifestSet[path]; !gone {
+			continue
+		}
+		if _, done := completedSet[path]; done {
+			continue
+		}
+		merged = append(merged, path)
+	}
+	for _, path := range manifest {
+		if _, wasPending := pendingSet[path]; wasPending {
+			continue
+		}
+		if _, done := completedSet[path]; done {
+			continue
+		}
+		merged = append(merged, path)
+	}
+
+	if err := m.store.SetPendingPaths(ctx, record.ID, merged); err != nil {
+		return nil, fmt.Errorf("persist merged pending set: %w", err)
+	}
+	return merged, nil
+}
+
+// refreshFileExplorer asks fileexplorer to rescan the session's root before
+// a resume reads the manifest, so files created or removed since the last
+// run are visible to the merge.
+func (m *taskSessionManager) refreshFileExplorer(ctx context.Context) error {
+	refresher, err := tasks.NewHTTPRefresher(m.baseConfig.FileExplorerURL, m.baseConfig.HTTPClient)
+	if err != nil {
+		return err
+	}
+	return refresher.Refresh(ctx)
 }
 
 // Finish persists the terminal lifecycle state after a run exits. A run that
@@ -143,13 +225,15 @@ func (m *taskSessionManager) Delete(id string) error {
 }
 
 // bindRunner returns an executor derived from runner that reports each
-// file's progress for sessionID into the session store and, when
-// completedPaths is non-empty, skips the files an earlier run of this session
-// already finished. runner itself is left untouched, so the original stays
-// usable for other sessions.
-func (m *taskSessionManager) bindRunner(runner *executor.Executor, sessionID string, completedPaths []string) (*executor.Executor, error) {
+// file's progress for sessionID into the session store, skips the files an
+// earlier run of this session already finished when completedPaths is
+// non-empty, and — when initialPending is non-empty — keeps the session's
+// unfinished files ahead of files discovered from the manifest. runner
+// itself is left untouched, so the original stays usable for other sessions.
+func (m *taskSessionManager) bindRunner(runner *executor.Executor, sessionID string, completedPaths, initialPending []string) (*executor.Executor, error) {
 	config := runner.Config()
 	config.CompletedPaths = completedPaths
+	config.InitialPending = initialPending
 	config.OnFileProgress = m.fileReporter(sessionID)
 	bound, err := executor.New(config)
 	if err != nil {

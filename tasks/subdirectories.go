@@ -36,6 +36,42 @@ func ListSubdirectories(ctx context.Context, databasePath string) ([]string, err
 	return index.subdirectories(ctx)
 }
 
+// ListFilePaths returns the regular files in the fileexplorer manifest stored
+// at databasePath, optionally restricted to the files under subdirectory
+// inside the root. Paths are cleaned, slash-separated, and relative to the
+// filesystem root, in deterministic binary path order, so every result is a
+// valid work-queue and file progress path.
+//
+// Like ListSubdirectories, the database is opened read-only and never
+// modified. A caller that needs a fresh view must refresh the manifest
+// through fileexplorer before calling.
+func ListFilePaths(ctx context.Context, databasePath, subdirectory string) ([]string, error) {
+	if ctx == nil {
+		return nil, errors.New("context is nil")
+	}
+	if strings.TrimSpace(databasePath) == "" {
+		return nil, errors.New("database path is required")
+	}
+	sub, err := normalizeProviderSubdirectory(subdirectory)
+	if err != nil {
+		return nil, err
+	}
+
+	index, err := openFileIndex(ctx, databasePath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = errors.Join(err, index.close())
+	}()
+
+	var lister FileLister = index
+	if sub != "" {
+		lister = newSubdirectoryLister(index, sub)
+	}
+	return lister.FilePaths(ctx)
+}
+
 // subdirectories derives the candidate subdirectories from the manifest: the
 // union of the explicit directory rows and every folder prefix implied by a
 // regular-file path, keeping only the folders that contain at least one file

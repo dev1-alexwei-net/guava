@@ -1,6 +1,8 @@
-package tasks
+package conversations
 
-import "errors"
+import (
+	"errors"
+)
 
 // errNilProvider reports a call to Tasks on a nil *StaticProvider.
 var errNilProvider = errors.New("task provider is nil")
@@ -32,9 +34,9 @@ type StaticProvider struct {
 // NewStaticProvider returns a provider that yields the given tasks in the
 // given order. The tasks are copied, so later mutations of the caller's
 // slice do not change what the provider yields.
-func NewStaticProvider(tasks ...Task) *StaticProvider {
-	provider := make([]Task, len(tasks))
-	copy(provider, tasks)
+func NewStaticProvider(t ...Task) *StaticProvider {
+	provider := make([]Task, len(t))
+	copy(provider, t)
 	return &StaticProvider{tasks: provider}
 }
 
@@ -50,4 +52,9 @@ func (p *StaticProvider) Tasks(fn func(Task) bool) error {
 		}
 	}
 	return nil
+}
+
+type Task interface {
+	ID() string
+	Prompt() (string, error)
 }

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
 // Options supplies optional dependencies useful for embedding and deterministic
@@ -58,7 +56,7 @@ func NewWithOptions(config Config, options Options) (*Service, error) {
 // Run consumes tasks and prompts in provider order and runs each conversation
 // to its completion marker. The provider owns task discovery; this package
 // does not know how tasks are stored or enumerated.
-func (s *Service) Run(ctx context.Context, provider tasks.TaskProvider) (err error) {
+func (s *Service) Run(ctx context.Context, provider TaskProvider) (err error) {
 	if s == nil {
 		return errors.New("conversation service is nil")
 	}
@@ -88,7 +86,7 @@ func (s *Service) Run(ctx context.Context, provider tasks.TaskProvider) (err err
 		logAttrs(logger, ctx, slog.LevelInfo, "Executor run completed", attrs...)
 	}()
 
-	coordinator, err := NewCoordinator(provider, func(ctx context.Context, task tasks.Task) error {
+	coordinator, err := NewCoordinator(provider, func(ctx context.Context, task Task) error {
 		fileStarted := time.Now()
 		if err := s.RunTask(ctx, task); err != nil {
 			logAttrs(logger, ctx, slog.LevelError, "Indexed file processing failed", slog.String("path", task.ID()), slog.Duration("elapsed", time.Since(fileStarted)), slog.Any("error", err))
@@ -104,7 +102,7 @@ func (s *Service) Run(ctx context.Context, provider tasks.TaskProvider) (err err
 }
 
 // RunTask obtains a task's prompt and runs its conversation to completion.
-func (s *Service) RunTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunTask(ctx context.Context, task Task) error {
 	if s == nil {
 		return errors.New("conversation service is nil")
 	}

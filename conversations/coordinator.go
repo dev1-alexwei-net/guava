@@ -4,23 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
 // ProcessTask processes one source-agnostic task.
-type ProcessTask func(context.Context, tasks.Task) error
+type ProcessTask func(context.Context, Task) error
 
 // Coordinator consumes a TaskProvider and invokes the conversation callback
 // for tasks in provider order. Dynamic refresh/listing remains behind the
 // tasks package's Refresher, FileLister, and TaskProvider seams.
 type Coordinator struct {
-	provider tasks.TaskProvider
+	provider TaskProvider
 	process  ProcessTask
 }
 
 // NewCoordinator validates the task-provider and task-processing dependencies.
-func NewCoordinator(provider tasks.TaskProvider, process ProcessTask) (*Coordinator, error) {
+func NewCoordinator(provider TaskProvider, process ProcessTask) (*Coordinator, error) {
 	if provider == nil {
 		return nil, errors.New("task provider is required")
 	}
@@ -42,7 +40,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		return err
 	}
 	var processErr error
-	providerErr := c.provider.Tasks(func(task tasks.Task) bool {
+	providerErr := c.provider.Tasks(func(task Task) bool {
 		if err := ctx.Err(); err != nil {
 			processErr = err
 			return false

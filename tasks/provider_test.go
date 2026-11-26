@@ -3,20 +3,22 @@ package tasks
 import (
 	"errors"
 	"testing"
+
+	"github.com/dev1-alexwei-net/guava/conversations"
 )
 
 func TestStaticProviderYieldsTasksInOrder(t *testing.T) {
 	ids := []string{"alpha/a.txt", "beta/b.txt", "gamma/c.txt"}
-	want := make([]Task, len(ids))
+	want := make([]conversations.Task, len(ids))
 	for n, id := range ids {
 		want[n] = NewTask(id, func() (string, error) {
 			return "prompt: " + id, nil
 		})
 	}
 
-	provider := NewStaticProvider(want...)
-	var got []Task
-	if err := provider.Tasks(func(task Task) bool {
+	provider := conversations.NewStaticProvider(want...)
+	var got []conversations.Task
+	if err := provider.Tasks(func(task conversations.Task) bool {
 		got = append(got, task)
 		return true
 	}); err != nil {
@@ -33,7 +35,7 @@ func TestStaticProviderYieldsTasksInOrder(t *testing.T) {
 }
 
 func TestStaticProviderYieldsRetrievablePrompts(t *testing.T) {
-	provider := NewStaticProvider(
+	provider := conversations.NewStaticProvider(
 		NewTask("docs/a.md", func() (string, error) {
 			return "work on docs/a.md", nil
 		}),
@@ -43,7 +45,7 @@ func TestStaticProviderYieldsRetrievablePrompts(t *testing.T) {
 	)
 
 	var prompts []string
-	if err := provider.Tasks(func(task Task) bool {
+	if err := provider.Tasks(func(task conversations.Task) bool {
 		prompt, err := task.Prompt()
 		if err != nil {
 			t.Fatalf("Prompt() for %q error = %v", task.ID(), err)
@@ -66,16 +68,19 @@ func TestStaticProviderYieldsRetrievablePrompts(t *testing.T) {
 
 func TestStaticProviderStopsIterationWhenCallbackDeclines(t *testing.T) {
 	ids := []string{"one", "two", "three"}
-	tasks := make([]Task, len(ids))
-	for n, id := range ids {
-		tasks[n] = NewTask(id, func() (string, error) {
+	//tasks := make([]tasks.Task, len(ids))
+
+	var tasksArr []conversations.Task
+
+	for _, id := range ids {
+		tasksArr = append(tasksArr, NewTask(id, func() (string, error) {
 			return id, nil
-		})
+		}))
 	}
 
-	provider := NewStaticProvider(tasks...)
+	provider := conversations.NewStaticProvider(tasksArr...)
 	visited := 0
-	if err := provider.Tasks(func(task Task) bool {
+	if err := provider.Tasks(func(task conversations.Task) bool {
 		visited++
 		return task.ID() != "two"
 	}); err != nil {
@@ -87,9 +92,9 @@ func TestStaticProviderStopsIterationWhenCallbackDeclines(t *testing.T) {
 }
 
 func TestStaticProviderWithoutTasksVisitsNothing(t *testing.T) {
-	provider := NewStaticProvider()
+	provider := conversations.NewStaticProvider()
 	visited := false
-	if err := provider.Tasks(func(Task) bool {
+	if err := provider.Tasks(func(conversations.Task) bool {
 		visited = true
 		return true
 	}); err != nil {
@@ -101,14 +106,14 @@ func TestStaticProviderWithoutTasksVisitsNothing(t *testing.T) {
 }
 
 func TestNewStaticProviderCopiesTasks(t *testing.T) {
-	source := []Task{
+	source := []conversations.Task{
 		NewTask("original", func() (string, error) { return "original", nil }),
 	}
-	provider := NewStaticProvider(source...)
+	provider := conversations.NewStaticProvider(source...)
 	source[0] = NewTask("replaced", nil)
 
-	var got []Task
-	if err := provider.Tasks(func(task Task) bool {
+	var got []conversations.Task
+	if err := provider.Tasks(func(task conversations.Task) bool {
 		got = append(got, task)
 		return true
 	}); err != nil {
@@ -120,8 +125,8 @@ func TestNewStaticProviderCopiesTasks(t *testing.T) {
 }
 
 func TestNilStaticProviderReportsError(t *testing.T) {
-	var provider *StaticProvider
-	if err := provider.Tasks(func(Task) bool {
+	var provider *conversations.StaticProvider
+	if err := provider.Tasks(func(conversations.Task) bool {
 		t.Fatal("callback visited a task, want none for a nil provider")
 		return true
 	}); err == nil {
@@ -133,7 +138,7 @@ func TestTaskProviderReportsErrorsWhileProducingTasks(t *testing.T) {
 	provider := erroringProvider{cause: errors.New("manifest refresh failed")}
 
 	var visited int
-	err := provider.Tasks(func(Task) bool {
+	err := provider.Tasks(func(conversations.Task) bool {
 		visited++
 		return true
 	})
@@ -151,6 +156,6 @@ type erroringProvider struct {
 	cause error
 }
 
-func (p erroringProvider) Tasks(func(Task) bool) error {
+func (p erroringProvider) Tasks(func(conversations.Task) bool) error {
 	return p.cause
 }

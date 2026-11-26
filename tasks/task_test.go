@@ -54,7 +54,7 @@ func TestTaskPromptReportsPromptFunctionError(t *testing.T) {
 }
 
 func TestTaskWithoutPromptFunctionReportsError(t *testing.T) {
-	task := Task{}
+	task := FileTask{}
 	if _, err := task.Prompt(); err == nil || !strings.Contains(err.Error(), "prompt function") {
 		t.Fatalf("Prompt() error = %v, want an error about the missing prompt function", err)
 	}

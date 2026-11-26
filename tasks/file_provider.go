@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dev1-alexwei-net/guava/conversations"
 )
 
 // FileProviderConfig describes the fileexplorer-backed task source.
@@ -62,7 +64,7 @@ type FileProvider struct {
 	closed               bool
 }
 
-var _ TaskProvider = (*FileProvider)(nil)
+var _ conversations.TaskProvider = (*FileProvider)(nil)
 
 // NewFileProvider opens the read-only manifest and rooted filesystem reader
 // used to produce file tasks. It refreshes fileexplorer and discovers new
@@ -142,7 +144,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 // deterministic queue order. Instruction files are inputs to other tasks,
 // never work items. A false callback return stops iteration, leaving that task
 // pending if this provider is used again.
-func (p *FileProvider) Tasks(fn func(Task) bool) error {
+func (p *FileProvider) Tasks(fn func(conversations.Task) bool) error {
 	if p == nil || p.closed {
 		return errors.New("file task provider is not open")
 	}
@@ -243,7 +245,7 @@ func (p *FileProvider) findIndexedFile(filePath string) (indexedFile, bool, erro
 	return indexedFile{}, false, nil
 }
 
-func (p *FileProvider) newFileTask(file indexedFile) Task {
+func (p *FileProvider) newFileTask(file indexedFile) conversations.Task {
 	var once sync.Once
 	var prompt string
 	var promptErr error

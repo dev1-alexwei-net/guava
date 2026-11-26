@@ -1,7 +1,7 @@
 // Package tasks defines the source-agnostic task abstractions shared by the
 // executor's task side and its conversation framework.
 //
-// A Task is a unit of work with a stable identity and a prompt function that
+// A FileTask is a unit of work with a stable identity and a prompt function that
 // yields the next prompt to send into the conversation. A TaskProvider
 // exposes an ordered iterator over the tasks it provides.
 //
@@ -12,7 +12,9 @@
 // learns where the work comes from.
 package tasks
 
-import "errors"
+import (
+	"errors"
+)
 
 // errNoPrompt reports a call to Prompt on a task created without a prompt
 // function.
@@ -25,6 +27,13 @@ var errNoPrompt = errors.New("task has no prompt function")
 // once.
 type PromptFunc func() (string, error)
 
+// NewTask returns a FileTask with the given stable identity and prompt function.
+// A nil prompt function is accepted; calling Prompt on the resulting task
+// reports an error.
+func NewTask(id string, prompt PromptFunc) FileTask {
+	return FileTask{Id: id, PromptFunc: prompt}
+}
+
 // Task is a single unit of work consumed by the conversation framework.
 //
 // A Task carries a stable identity and a prompt function. The identity is
@@ -32,29 +41,23 @@ type PromptFunc func() (string, error)
 // path, and for other task sources it is whatever stable identifier that
 // source uses. Consumers rely on the identity being stable across provider
 // iterations so they can deduplicate, route, and log work by it.
-type Task struct {
-	id     string
-	prompt PromptFunc
-}
 
-// NewTask returns a Task with the given stable identity and prompt function.
-// A nil prompt function is accepted; calling Prompt on the resulting task
-// reports an error.
-func NewTask(id string, prompt PromptFunc) Task {
-	return Task{id: id, prompt: prompt}
+type FileTask struct {
+	Id         string
+	PromptFunc PromptFunc
 }
 
 // ID returns the task's stable identity.
-func (t Task) ID() string {
-	return t.id
+func (t FileTask) ID() string {
+	return t.Id
 }
 
 // Prompt returns the next prompt to send into the conversation for this
 // task. It reports an error if the task was created without a prompt
 // function, or if the prompt function fails to build a prompt.
-func (t Task) Prompt() (string, error) {
-	if t.prompt == nil {
+func (t FileTask) Prompt() (string, error) {
+	if t.PromptFunc == nil {
 		return "", errNoPrompt
 	}
-	return t.prompt()
+	return t.PromptFunc()
 }

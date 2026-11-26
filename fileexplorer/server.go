@@ -487,32 +487,43 @@ func (e *application) writePage(w http.ResponseWriter, r *http.Request, status i
 	e.renderer.WritePage(w, status, e.renderer.ForRequest(data, r))
 }
 
-func (e *application) editorPage(w http.ResponseWriter, r *http.Request) {
-	target, err := e.filesystem.Resolve(r.PathValue("path"))
+func (e *application) openEditableFile(w http.ResponseWriter, r *http.Request, requested, inspectError string) (string, *os.File, os.FileInfo, bool) {
+	target, err := e.filesystem.Resolve(requested)
 	if err != nil {
 		e.pathError(w, r, err)
-		return
+		return "", nil, nil, false
 	}
 	rel := e.filesystem.Relative(target)
 	file, err := e.filesystem.Open(rel)
 	if err != nil {
 		e.pathError(w, r, err)
+		return "", nil, nil, false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		e.renderError(w, r, http.StatusInternalServerError, inspectError)
+		return "", nil, nil, false
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		e.renderError(w, r, http.StatusNotFound, "File not found")
+		return "", nil, nil, false
+	}
+	if info.Size() > maxEditorSize {
+		_ = file.Close()
+		e.renderError(w, r, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
+		return "", nil, nil, false
+	}
+	return rel, file, info, true
+}
+
+func (e *application) editorPage(w http.ResponseWriter, r *http.Request) {
+	rel, file, _, ok := e.openEditableFile(w, r, r.PathValue("path"), "Unable to read file")
+	if !ok {
 		return
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		e.renderError(w, r, http.StatusInternalServerError, "Unable to read file")
-		return
-	}
-	if !info.Mode().IsRegular() {
-		e.renderError(w, r, http.StatusNotFound, "File not found")
-		return
-	}
-	if info.Size() > maxEditorSize {
-		e.renderError(w, r, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
-		return
-	}
 	content, err := io.ReadAll(io.LimitReader(file, maxEditorSize+1))
 	if err != nil {
 		e.renderError(w, r, http.StatusInternalServerError, "Unable to read file")
@@ -530,31 +541,11 @@ func (e *application) editorPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
-	target, err := e.filesystem.Resolve(r.PathValue("path"))
-	if err != nil {
-		e.pathError(w, r, err)
+	rel, file, info, ok := e.openEditableFile(w, r, r.PathValue("path"), "Unable to inspect file")
+	if !ok {
 		return
 	}
-	rel := e.filesystem.Relative(target)
-	file, err := e.filesystem.Open(rel)
-	if err != nil {
-		e.pathError(w, r, err)
-		return
-	}
-	info, err := file.Stat()
 	_ = file.Close()
-	if err != nil {
-		e.renderError(w, r, http.StatusInternalServerError, "Unable to inspect file")
-		return
-	}
-	if !info.Mode().IsRegular() {
-		e.renderError(w, r, http.StatusNotFound, "File not found")
-		return
-	}
-	if info.Size() > maxEditorSize {
-		e.renderError(w, r, http.StatusRequestEntityTooLarge, "This file is too large to edit (maximum 1 MiB)")
-		return
-	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxEditorSize*3+4096)
 	if err := r.ParseForm(); err != nil {
@@ -571,26 +562,34 @@ func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, e.renderer.withState(e.renderer.EditorURL(rel)+"?saved=1", requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
 }
 
-func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) {
-	target, err := e.filesystem.Resolve(r.PathValue("path"))
+func (e *application) confirmationTarget(w http.ResponseWriter, r *http.Request, requested, action string) (string, bool) {
+	target, err := e.filesystem.Resolve(requested)
 	if err != nil {
 		e.pathError(w, r, err)
-		return
+		return "", false
 	}
 	if target == e.filesystem.Path() {
-		e.renderError(w, r, http.StatusBadRequest, "Cannot delete the root directory")
-		return
+		e.renderError(w, r, http.StatusBadRequest, "Cannot "+action+" the root directory")
+		return "", false
 	}
-	info, err := e.filesystem.Lstat(e.filesystem.Relative(target))
+	rel := e.filesystem.Relative(target)
+	info, err := e.filesystem.Lstat(rel)
 	if err != nil {
 		e.pathError(w, r, err)
-		return
+		return "", false
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		e.pathError(w, r, errForbidden)
-		return
+		return "", false
 	}
-	e.writePage(w, r, http.StatusOK, e.renderer.DeleteConfirmation(e.filesystem.Relative(target)))
+	return rel, true
+}
+
+func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) {
+	rel, ok := e.confirmationTarget(w, r, r.PathValue("path"), "delete")
+	if ok {
+		e.writePage(w, r, http.StatusOK, e.renderer.DeleteConfirmation(rel))
+	}
 }
 
 // renamePage presents the dedicated rename form for an entry, mirroring
@@ -599,23 +598,8 @@ func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) 
 // deleted, and symbolic links stay read-only entries like on the delete
 // page.
 func (e *application) renamePage(w http.ResponseWriter, r *http.Request) {
-	target, err := e.filesystem.Resolve(r.PathValue("path"))
-	if err != nil {
-		e.pathError(w, r, err)
-		return
+	rel, ok := e.confirmationTarget(w, r, r.PathValue("path"), "rename")
+	if ok {
+		e.writePage(w, r, http.StatusOK, e.renderer.RenameConfirmation(rel))
 	}
-	if target == e.filesystem.Path() {
-		e.renderError(w, r, http.StatusBadRequest, "Cannot rename the root directory")
-		return
-	}
-	info, err := e.filesystem.Lstat(e.filesystem.Relative(target))
-	if err != nil {
-		e.pathError(w, r, err)
-		return
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		e.pathError(w, r, errForbidden)
-		return
-	}
-	e.writePage(w, r, http.StatusOK, e.renderer.RenameConfirmation(e.filesystem.Relative(target)))
 }

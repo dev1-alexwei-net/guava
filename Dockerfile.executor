@@ -12,6 +12,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY executor/ ./executor/
+COPY conversations/ ./conversations/
+COPY tasks/ ./tasks/
 COPY cmd/executor/ ./cmd/executor/
 COPY cmd/executor-dashboard/ ./cmd/executor-dashboard/
 COPY internal/ ./internal/

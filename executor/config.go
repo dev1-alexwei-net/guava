@@ -68,7 +68,9 @@ type Config struct {
 	CLIArgs string
 }
 
-// Executor holds validated configuration for a file-processing run.
+// Executor joins the file-backed task source to a conversations service for
+// each session. Task discovery belongs to tasks; turn coordination and session
+// summaries belong to conversations.
 type Executor struct {
 	config Config
 
@@ -92,11 +94,7 @@ func New(config Config) (*Executor, error) {
 		config.HTTPClient = http.DefaultClient
 	}
 
-	service, err := conversations.New(conversationConfig(config))
-	if err != nil {
-		return nil, err
-	}
-	return &Executor{config: config, conversationTokens: newConversationTokenBucket(), conversationService: service}, nil
+	return newExecutor(config)
 }
 
 // WithSubdirectory returns an executor identical to e except that its run
@@ -127,6 +125,13 @@ func (e *Executor) WithSubdirectory(subdirectory string) (*Executor, error) {
 			config.CLIArgs = base + " -subdirectory " + config.Subdirectory
 		}
 	}
+	return newExecutor(config)
+}
+
+// newExecutor wires the session manager to the conversation implementation.
+// Keeping construction here ensures the base and subdirectory-scoped executor
+// use the same conversation dependencies and lifecycle owner.
+func newExecutor(config Config) (*Executor, error) {
 	service, err := conversations.New(conversationConfig(config))
 	if err != nil {
 		return nil, err

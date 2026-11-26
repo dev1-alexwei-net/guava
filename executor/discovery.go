@@ -11,6 +11,6 @@ import (
 type Refresher = tasks.Refresher
 type FileLister = tasks.FileLister
 
-// ProcessFile handles a single discovered file path. The coordinator only
-// selects work and invokes this callback in order.
+// ProcessFile remains available for callers that used the historical executor
+// discovery seam; production task processing is now owned by conversations.
 type ProcessFile func(ctx context.Context, path string) error

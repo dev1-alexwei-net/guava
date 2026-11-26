@@ -50,6 +50,22 @@ func TestWorkQueueAppendsNewBatchSortedByBinaryPathOrder(t *testing.T) {
 	}
 }
 
+func TestWorkQueueEnqueueNextPrioritizesSortedFreshBatch(t *testing.T) {
+	queue := NewWorkQueue()
+	if added, err := queue.Enqueue([]string{"b.txt", "z.txt"}); err != nil || added != 2 {
+		t.Fatalf("Enqueue() = (%d, %v), want (2, nil)", added, err)
+	}
+	if added, err := queue.EnqueueNext([]string{"c.txt", "a.txt", "b.txt"}); err != nil || added != 2 {
+		t.Fatalf("EnqueueNext() = (%d, %v), want (2, nil)", added, err)
+	}
+	checkPending(t, queue, []string{"a.txt", "c.txt", "b.txt", "z.txt"})
+
+	if added, err := queue.EnqueueNext([]string{"d.txt"}); err != nil || added != 1 {
+		t.Fatalf("second EnqueueNext() = (%d, %v), want (1, nil)", added, err)
+	}
+	checkPending(t, queue, []string{"d.txt", "a.txt", "c.txt", "b.txt", "z.txt"})
+}
+
 func TestWorkQueueUsesBinaryNotCasefoldedOrder(t *testing.T) {
 	queue := NewWorkQueue()
 	if _, err := queue.Enqueue([]string{"beta.txt", "alpha.txt", "Alpha.txt"}); err != nil {

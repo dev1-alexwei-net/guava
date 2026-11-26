@@ -199,7 +199,7 @@ func TestExecutorRunScopesToSubdirectory(t *testing.T) {
 	}
 }
 
-func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
+func TestExecutorRunPrioritizesFilesCreatedDuringRun(t *testing.T) {
 	rootPath := t.TempDir()
 	for name, content := range map[string]string{"a.txt": "first content", "z.txt": "already queued content"} {
 		if err := os.WriteFile(filepath.Join(rootPath, name), []byte(content), 0o600); err != nil {
@@ -291,7 +291,7 @@ func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
 	if len(requests) != 3 {
 		t.Fatalf("got %d conversations, want 3: %#v", len(requests), requests)
 	}
-	wantPaths := []string{`Current file path: "a.txt"`, `Current file path: "z.txt"`, `Current file path: "b.txt"`}
+	wantPaths := []string{`Current file path: "a.txt"`, `Current file path: "b.txt"`, `Current file path: "z.txt"`}
 	for i, want := range wantPaths {
 		if !strings.Contains(requests[i].Input, want) {
 			t.Errorf("conversation %d input does not identify %q: %q", i, want, requests[i].Input)
@@ -300,8 +300,8 @@ func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
 			t.Errorf("conversation %d input is missing fallback instructions", i)
 		}
 	}
-	if !strings.Contains(requests[2].Input, "created during the first routine") {
-		t.Errorf("new file content was not available in the same run: %q", requests[2].Input)
+	if !strings.Contains(requests[1].Input, "created during the first routine") {
+		t.Errorf("new file content was not available to the immediately following task: %q", requests[1].Input)
 	}
 }
 

@@ -15,12 +15,24 @@ import (
 
 const maxLogBytes = 64 << 10
 
+// taskSessionLifecycle is the saved-session behavior the run controller
+// needs. The dashboard composition root retains ownership of opening,
+// recovery, listing, and closing the persistent store.
+type taskSessionLifecycle interface {
+	Create(context.Context, sessions.Record) (sessions.Record, error)
+	Get(context.Context, string) (sessions.Record, error)
+	Update(context.Context, sessions.Record) (sessions.Record, error)
+	Delete(context.Context, string) error
+}
+
+var _ taskSessionLifecycle = (*sessions.Store)(nil)
+
 type executorController struct {
 	mu         sync.Mutex
 	config     executor.Config
 	runner     *executor.Executor
 	active     *executor.Executor
-	store      *sessions.Store
+	store      taskSessionLifecycle
 	session    *sessions.Record
 	logger     *slog.Logger
 	logs       *tailLogBuffer
@@ -72,10 +84,10 @@ func (b *tailLogBuffer) String() string {
 }
 
 func newExecutorController(config executor.Config, level slog.Level) (*executorController, error) {
-	return newExecutorControllerWithStore(config, level, nil)
+	return newExecutorControllerWithSessionLifecycle(config, level, nil)
 }
 
-func newExecutorControllerWithStore(config executor.Config, level slog.Level, store *sessions.Store) (*executorController, error) {
+func newExecutorControllerWithSessionLifecycle(config executor.Config, level slog.Level, store taskSessionLifecycle) (*executorController, error) {
 	logs := &tailLogBuffer{}
 	logger := executor.NewTextLogger(logs, level)
 	config.Logger = logger

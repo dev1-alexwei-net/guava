@@ -89,7 +89,7 @@ func newDashboardWithSessionStore(config executor.Config, logLevel slog.Level, s
 		_ = store.Close()
 		return nil, err
 	}
-	controller, err := newExecutorControllerWithStore(config, logLevel, store)
+	controller, err := newExecutorControllerWithSessionLifecycle(config, logLevel, store)
 	if err != nil {
 		_ = store.Close()
 		return nil, err

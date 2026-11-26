@@ -35,3 +35,7 @@ The baseline test run used `go test -json ./...` and passed in all seven Go pack
 ## Ownership coverage
 
 The active QA stories cover `conversations`, `executor`, and `tasks` (#245), plus `sessions` (#250). This task's remaining-package inventory is `cmd/executor`, `cmd/executor-dashboard`, `fileexplorer`, and `internal/version`. Their current composition and security boundaries are already narrow; the dashboard's run controller did, however, depend directly on the concrete SQLite session store. Issue #256 adds a consumer-owned lifecycle contract there while leaving store opening, interruption recovery, list/display, and closeout with the dashboard composition root.
+
+## Production-file consolidation review (#257)
+
+The remaining packages contain 10 production Go files in the baseline. No further files were merged: `cmd/executor` is already a single-file entry point; `cmd/executor-dashboard` keeps process control separate from HTTP serving and command configuration; `fileexplorer` keeps rooted filesystem operations, its SQLite index/synchronizer, page rendering, HTTP handlers, and process setup in separate ownership units; and `internal/version` is shared by the dashboard and file-explorer renderers. Combining these files would bundle unrelated responsibilities or weaken a useful package boundary, so it would not meet the cohesion requirement. The file-count target is therefore not feasible for this portion of the repository without sacrificing those boundaries.

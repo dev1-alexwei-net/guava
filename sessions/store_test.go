@@ -132,6 +132,45 @@ func TestStoreAcceptsEachLifecycleStatus(t *testing.T) {
 	}
 }
 
+func TestRecoverInterruptedPausesOnlyActiveSessions(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	active, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create active: %v", err)
+	}
+	failed, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusFailed, LastError: "gateway timeout",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if err := store.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatalf("RecoverInterrupted: %v", err)
+	}
+	gotActive, err := store.Get(context.Background(), active.ID)
+	if err != nil {
+		t.Fatalf("Get recovered session: %v", err)
+	}
+	if gotActive.Status != StatusPaused || gotActive.LastError == "" || gotActive.FinishedAt.IsZero() {
+		t.Errorf("recovered active session = %+v, want paused with interruption details", gotActive)
+	}
+	gotFailed, err := store.Get(context.Background(), failed.ID)
+	if err != nil {
+		t.Fatalf("Get failed session: %v", err)
+	}
+	if gotFailed.Status != StatusFailed || gotFailed.LastError != "gateway timeout" {
+		t.Errorf("failed session changed during recovery = %+v, want its prior failure preserved", gotFailed)
+	}
+}
+
 func TestStoreRejectsInvalidRecordsAndReportsMissingIDs(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
 	if err != nil {

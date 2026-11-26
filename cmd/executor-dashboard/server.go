@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dev1-alexwei-net/guava/executor"
 	"github.com/dev1-alexwei-net/guava/internal/version"
+	"github.com/dev1-alexwei-net/guava/sessions"
 	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
@@ -22,6 +24,7 @@ var dashboardFiles embed.FS
 
 type dashboard struct {
 	controller   *executorController
+	store        *sessions.Store
 	page         *template.Template
 	databasePath string
 	routes       http.Handler
@@ -51,24 +54,47 @@ type dashboardPageData struct {
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
-	controller, err := newExecutorController(config, logLevel)
+	return newDashboardWithSessionStore(config, logLevel, defaultSessionStorePath(config.DatabasePath))
+}
+
+func defaultSessionStorePath(databasePath string) string {
+	return databasePath + ".sessions.sqlite"
+}
+
+func newDashboardWithSessionStore(config executor.Config, logLevel slog.Level, sessionStorePath string) (*dashboard, error) {
+	if filepath.Clean(sessionStorePath) == filepath.Clean(config.DatabasePath) {
+		return nil, fmt.Errorf("task session metadata database must be separate from the fileexplorer database")
+	}
+	store, err := sessions.OpenStore(sessionStorePath)
 	if err != nil {
+		return nil, err
+	}
+	if err := store.RecoverInterrupted(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	controller, err := newExecutorControllerWithStore(config, logLevel, store)
+	if err != nil {
+		_ = store.Close()
 		return nil, err
 	}
 	page, err := template.ParseFS(dashboardFiles, "templates/index.html")
 	if err != nil {
 		controller.Close()
+		_ = store.Close()
 		return nil, err
 	}
 
 	app := &dashboard{
 		controller:   controller,
+		store:        store,
 		page:         page,
 		databasePath: config.DatabasePath,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", app.show)
 	mux.HandleFunc("POST /start", app.start)
+	mux.HandleFunc("POST /resume", app.resume)
 	mux.HandleFunc("POST /stop", app.stop)
 	mux.HandleFunc("GET /static/bootstrap.min.css", app.stylesheet)
 	app.routes = mux
@@ -81,6 +107,7 @@ func (d *dashboard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (d *dashboard) Close() {
 	d.controller.Close()
+	_ = d.store.Close()
 }
 
 func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +247,11 @@ func (d *dashboard) selectedSubdirectory(r *http.Request) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("subdirectory %q is not in the file list; refresh the page and try again", selection)
+}
+
+func (d *dashboard) resume(w http.ResponseWriter, r *http.Request) {
+	err := d.controller.Resume(r.FormValue("session_id"))
+	redirectDashboard(w, r, err)
 }
 
 func (d *dashboard) stop(w http.ResponseWriter, r *http.Request) {

@@ -71,7 +71,7 @@ func TestFailedRunSnapshotCarriesSessionSummary(t *testing.T) {
 	// The database file does not exist, so the run fails while opening the
 	// index, before any network traffic.
 	controller := newTestController(t, filepath.Join(t.TempDir(), "missing.sqlite"))
-	if err := controller.Start(); err != nil {
+	if err := controller.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	snapshot := waitForControllerStatus(t, controller, "failed")
@@ -92,7 +92,7 @@ func TestFailedRunSnapshotCarriesSessionSummary(t *testing.T) {
 
 func TestSnapshotStaysSafeToCallConcurrently(t *testing.T) {
 	controller := newTestController(t, filepath.Join(t.TempDir(), "missing.sqlite"))
-	if err := controller.Start(); err != nil {
+	if err := controller.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestShowRendersSessionSummaryCard(t *testing.T) {
 	}
 	t.Cleanup(app.Close)
 
-	if err := app.controller.Start(); err != nil {
+	if err := app.controller.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	waitForControllerStatus(t, app.controller, "failed")
@@ -310,6 +310,171 @@ func waitForControllerStatus(t *testing.T, controller *executorController, want 
 	}
 	t.Fatalf("timed out waiting for status %q; last = %+v", want, controller.Snapshot())
 	return executorSnapshot{}
+}
+
+func TestPageDataCarriesSubdirectorySelection(t *testing.T) {
+	snapshot := executorSnapshot{Status: "completed", Subdirectory: "docs/deep"}
+	data := pageData(snapshot, url.Values{}, nil, nil)
+
+	if data.Subdirectory != "docs/deep" {
+		t.Errorf("Subdirectory = %q, want %q", data.Subdirectory, "docs/deep")
+	}
+	snapshot = executorSnapshot{Status: "completed"}
+	if got := pageData(snapshot, url.Values{}, nil, nil).Subdirectory; got != "" {
+		t.Errorf("Subdirectory = %q, want empty for the whole root", got)
+	}
+}
+
+func postStart(t *testing.T, app *dashboard, subdirectory string) *httptest.ResponseRecorder {
+	t.Helper()
+	form := url.Values{}
+	if subdirectory != "" {
+		form.Set("subdirectory", subdirectory)
+	}
+	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	app.start(rec, req)
+	return rec
+}
+
+func redirectLocation(t *testing.T, rec *httptest.ResponseRecorder) url.Values {
+	t.Helper()
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+	location := rec.Header().Get("Location")
+	parsed, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("Location %q is not a URL: %v", location, err)
+	}
+	return parsed.Query()
+}
+
+func TestStartRejectsUnknownSubdirectory(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath,
+		[]string{"root.txt", "docs/notes.md"},
+		[]string{"docs"},
+	)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	query := redirectLocation(t, postStart(t, app, "does-not-exist"))
+	if got := query.Get("error"); !strings.Contains(got, "not in the file list") {
+		t.Errorf("redirect error = %q, want it to say the subdirectory is not in the file list", got)
+	}
+	if snapshot := app.controller.Snapshot(); snapshot.Status != "idle" {
+		t.Errorf("status = %q, want idle: a rejected selection must not start a run", snapshot.Status)
+	}
+}
+
+func TestStartRejectsSubdirectoryWhenManifestUnavailable(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	query := redirectLocation(t, postStart(t, app, "docs"))
+	if got := query.Get("error"); !strings.Contains(got, "file list is unavailable") {
+		t.Errorf("redirect error = %q, want the unavailable-file-list message", got)
+	}
+	if snapshot := app.controller.Snapshot(); snapshot.Status != "idle" {
+		t.Errorf("status = %q, want idle: an unverifiable selection must not start a run", snapshot.Status)
+	}
+}
+
+func TestStartAppliesSelectedSubdirectory(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath,
+		[]string{"root.txt", "docs/notes.md", "docs/deep/page.md"},
+		[]string{"docs", "docs/deep"},
+	)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	query := redirectLocation(t, postStart(t, app, "docs/deep"))
+	if got := query.Get("error"); got != "" {
+		t.Fatalf("redirect error = %q, want none for a manifest-listed subdirectory", got)
+	}
+
+	snapshot := app.controller.Snapshot()
+	if snapshot.Status != "running" {
+		t.Fatalf("status = %q, want running after a valid start", snapshot.Status)
+	}
+	if snapshot.Subdirectory != "docs/deep" {
+		t.Errorf("snapshot Subdirectory = %q, want the selection %q", snapshot.Subdirectory, "docs/deep")
+	}
+	if !strings.HasSuffix(snapshot.CLIArgs, " -subdirectory docs/deep") {
+		t.Errorf("snapshot CLIArgs = %q, want it to carry the -subdirectory flag for the run", snapshot.CLIArgs)
+	}
+
+	rec := httptest.NewRecorder()
+	app.show(rec, httptest.NewRequest("GET", "/", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `aria-label="Subdirectory: docs/deep"`) {
+		t.Error("rendered session summary missing the applied subdirectory")
+	}
+	if !strings.Contains(body, " -subdirectory docs/deep") {
+		t.Error("rendered CLI args missing the applied -subdirectory flag")
+	}
+}
+
+func TestStartEmptySelectionKeepsWholeRoot(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath,
+		[]string{"root.txt", "docs/notes.md"},
+		[]string{"docs"},
+	)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	query := redirectLocation(t, postStart(t, app, ""))
+	if got := query.Get("error"); got != "" {
+		t.Fatalf("redirect error = %q, want none for the root selection", got)
+	}
+
+	snapshot := app.controller.Snapshot()
+	if snapshot.Status != "running" {
+		t.Fatalf("status = %q, want running after a valid start", snapshot.Status)
+	}
+	if snapshot.Subdirectory != "" {
+		t.Errorf("snapshot Subdirectory = %q, want empty for the whole-root behavior", snapshot.Subdirectory)
+	}
+	if strings.Contains(snapshot.CLIArgs, "-subdirectory") {
+		t.Errorf("snapshot CLIArgs = %q, must not gain a -subdirectory flag for the whole root", snapshot.CLIArgs)
+	}
+}
+
+func TestStartWhileRunningIsRejected(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath,
+		[]string{"root.txt", "docs/notes.md"},
+		[]string{"docs"},
+	)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	if err := app.controller.Start(""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	query := redirectLocation(t, postStart(t, app, "docs"))
+	if got := query.Get("error"); !strings.Contains(got, "already running") {
+		t.Errorf("redirect error = %q, want the already-running rejection", got)
+	}
 }
 
 func TestPageDataSurfacesSubdirectoryDegradation(t *testing.T) {

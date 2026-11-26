@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dev1-alexwei-net/guava/executor"
@@ -37,6 +39,7 @@ type dashboardPageData struct {
 	Busy             bool
 	AgentID          string
 	CLIArgs          string
+	Subdirectory     string
 	StartedAt        time.Time
 	FinishedAt       time.Time
 	StartedFormatted string
@@ -139,6 +142,7 @@ func pageData(snapshot executorSnapshot, query url.Values, subdirectories []stri
 		Error:            query.Get("error"),
 		AgentID:          snapshot.AgentID,
 		CLIArgs:          snapshot.CLIArgs,
+		Subdirectory:     snapshot.Subdirectory,
 		StartedAt:        snapshot.StartedAt,
 		FinishedAt:       snapshot.FinishedAt,
 		StartedFormatted: startedFormatted,
@@ -182,8 +186,35 @@ func (d *dashboard) stylesheet(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (d *dashboard) start(w http.ResponseWriter, r *http.Request) {
-	err := d.controller.Start()
+	subdirectory, err := d.selectedSubdirectory(r)
+	if err == nil {
+		err = d.controller.Start(subdirectory)
+	}
 	redirectDashboard(w, r, err)
+}
+
+// selectedSubdirectory reads the subdirectory the user selected in the
+// Controls card and verifies it against the current fileexplorer manifest
+// before any run starts. An empty selection means the whole root and needs
+// no check. A non-empty selection must name one of the candidate
+// subdirectories, so an unknown or stale choice — including one from an old
+// page — is rejected with a user-friendly error instead of starting a run
+// that would process nothing.
+func (d *dashboard) selectedSubdirectory(r *http.Request) (string, error) {
+	selection := strings.TrimSpace(r.FormValue("subdirectory"))
+	if selection == "" {
+		return "", nil
+	}
+	candidates, err := d.subdirectories(r.Context())
+	if err != nil {
+		return "", fmt.Errorf("cannot verify subdirectory %q: the file list is unavailable right now; refresh the page and try again", selection)
+	}
+	for _, candidate := range candidates {
+		if candidate == selection {
+			return selection, nil
+		}
+	}
+	return "", fmt.Errorf("subdirectory %q is not in the file list; refresh the page and try again", selection)
 }
 
 func (d *dashboard) stop(w http.ResponseWriter, r *http.Request) {

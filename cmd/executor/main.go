@@ -29,6 +29,7 @@ func run() error {
 
 	databasePath := flags.String("database", "", "path to the fileexplorer SQLite database (required)")
 	rootPath := flags.String("root", "", "filesystem root for paths in the database (required)")
+	subdirectory := flags.String("subdirectory", "", "optional folder under -root to scope the run to (default: the whole root)")
 	instructionsPath := flags.String("instructions", "instructions.md", "fallback instructions file when no indexed ancestor instructions.md exists")
 	gatewayURL := flags.String("gateway-url", "http://127.0.0.1:18789", "OpenClaw Gateway base URL")
 	fileExplorerURL := flags.String("fileexplorer-url", "http://127.0.0.1:8080", "fileexplorer base URL for refreshing the file index")
@@ -58,6 +59,7 @@ func run() error {
 	runner, err := executor.New(executor.Config{
 		DatabasePath:     *databasePath,
 		RootPath:         *rootPath,
+		Subdirectory:     *subdirectory,
 		InstructionsPath: *instructionsPath,
 		GatewayURL:       *gatewayURL,
 		FileExplorerURL:  *fileExplorerURL,

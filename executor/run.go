@@ -28,6 +28,7 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		slog.String("agent_id", e.config.AgentID),
 		slog.String("gateway_url", e.config.GatewayURL),
 		slog.String("fileexplorer_url", e.config.FileExplorerURL),
+		slog.String("subdirectory", e.config.Subdirectory),
 	)
 	defer func() {
 		attrs := []slog.Attr{slog.Duration("elapsed", time.Since(runStarted))}
@@ -177,7 +178,15 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		return nil
 	}
 
-	coordinator, err := NewCoordinator(refresher, index, processFile)
+	lister := FileLister(index)
+	if e.config.Subdirectory != "" {
+		lister = newSubdirectoryLister(index, e.config.Subdirectory)
+		logAttrs(logger, ctx, slog.LevelInfo, "Scoping run to subdirectory",
+			slog.String("subdirectory", e.config.Subdirectory),
+		)
+	}
+
+	coordinator, err := NewCoordinator(refresher, lister, processFile)
 	if err != nil {
 		return err
 	}

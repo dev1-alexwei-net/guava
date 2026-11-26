@@ -97,6 +97,108 @@ func TestExecutorRunProcessesFilesSequentially(t *testing.T) {
 	}
 }
 
+func TestExecutorRunScopesToSubdirectory(t *testing.T) {
+	rootPath := t.TempDir()
+	for rel, content := range map[string]string{
+		"zeta.txt":          "root level content",
+		"folder/alpha.txt":  "alpha content",
+		"folder/beta.txt":   "beta content",
+		"folder2/other.txt": "sibling folder content",
+	} {
+		directory := filepath.Dir(filepath.Join(rootPath, rel))
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(rootPath, rel), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createIndexFixture(t, databasePath,
+		[]indexedFile{
+			{path: "zeta.txt", name: "zeta.txt", size: 20},
+			{path: "folder/alpha.txt", name: "alpha.txt", size: 13},
+			{path: "folder/beta.txt", name: "beta.txt", size: 12},
+			{path: "folder2/other.txt", name: "other.txt", size: 22},
+			{path: "instructions.md", name: "instructions.md", size: 27},
+		},
+		[]string{"folder", "folder2"},
+	)
+	// The indexed instructions file lives at the root, outside the scoped subdirectory.
+	const indexedInstructions = "Use the indexed root instructions."
+	if err := os.WriteFile(filepath.Join(rootPath, "instructions.md"), []byte(indexedInstructions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fallbackPath := filepath.Join(t.TempDir(), "fallback-instructions.md")
+	const fallbackInstructions = "Use the fallback instructions."
+	if err := os.WriteFile(fallbackPath, []byte(fallbackInstructions), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests []responsesRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var request responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, request)
+		response := responsesAPIResponse{
+			ID:     fmt.Sprintf("resp_%d", len(requests)),
+			Output: assistantText(completionMarker),
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.DatabasePath = databasePath
+	config.RootPath = rootPath
+	config.Subdirectory = "folder/"
+	config.InstructionsPath = fallbackPath
+	config.GatewayURL = server.URL
+	config.FileExplorerURL = server.URL
+	config.AgentID = "executor-agent"
+	config.HTTPClient = server.Client()
+	executor, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := executor.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(requests) != 2 {
+		t.Fatalf("got %d requests, want only the two files under the subdirectory: %#v", len(requests), requests)
+	}
+	wantPaths := []string{`Current file path: "folder/alpha.txt"`, `Current file path: "folder/beta.txt"`}
+	for i, want := range wantPaths {
+		if !strings.Contains(requests[i].Input, want) {
+			t.Errorf("request %d does not identify %q: %q", i, want, requests[i].Input)
+		}
+	}
+	for i, request := range requests {
+		if strings.Contains(request.Input, `Current file path: "zeta.txt"`) || strings.Contains(request.Input, `folder2/`) {
+			t.Errorf("request %d escaped the subdirectory scope: %q", i, request.Input)
+		}
+		if !strings.Contains(request.Input, indexedInstructions) {
+			t.Errorf("request %d did not source the indexed instructions.md outside the subdirectory: %q", i, request.Input)
+		}
+		if strings.Contains(request.Input, fallbackInstructions) {
+			t.Errorf("request %d used the fallback instead of the indexed instructions: %q", i, request.Input)
+		}
+	}
+}
+
 func TestExecutorRunDiscoversFilesCreatedDuringRun(t *testing.T) {
 	rootPath := t.TempDir()
 	for name, content := range map[string]string{"a.txt": "first content", "z.txt": "already queued content"} {

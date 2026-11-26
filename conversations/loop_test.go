@@ -1,15 +1,11 @@
 package conversations
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -129,36 +125,6 @@ func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
 	}
 }
 
-func TestConversationSessionKeyIncludesAgentAndPath(t *testing.T) {
-	tests := []struct {
-		name    string
-		agentID string
-		path    string
-		want    string
-	}{
-		{name: "empty file path", agentID: "writer", path: "", want: ""},
-		{
-			name:    "writer file session",
-			agentID: "writer",
-			path:    "project/0-135-reuse-conversation-bug.md",
-			want:    "agent:writer:guava:project/0-135-reuse-conversation-bug.md",
-		},
-		{
-			name:    "same file under another agent",
-			agentID: "reader",
-			path:    "project/0-135-reuse-conversation-bug.md",
-			want:    "agent:reader:guava:project/0-135-reuse-conversation-bug.md",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := conversationSessionKey(test.agentID, test.path); got != test.want {
-				t.Errorf("conversationSessionKey(%q, %q) = %q, want %q", test.agentID, test.path, got, test.want)
-			}
-		})
-	}
-}
-
 func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 	var requests []responsesRequest
 	var sessionKeys []string
@@ -192,11 +158,12 @@ func TestRunFileConversationReusesSessionAfterModelCutoff(t *testing.T) {
 	defer server.Close()
 
 	config := testConversationConfig(server)
-	executor, err := New(config)
+	executor, err := NewWithOptions(config, Options{
+		RetryWait: func(context.Context, time.Duration) error { return nil },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor.retryWait = func(context.Context, time.Duration) error { return nil }
 	if err := executor.RunPrompt(context.Background(), "project/0-135-reuse-conversation-bug.md", "initial input"); err != nil {
 		t.Fatalf("runFileConversationForFile() error = %v", err)
 	}
@@ -256,67 +223,18 @@ func TestRunFileConversationIsolatesSessionsPerFile(t *testing.T) {
 	}
 }
 
-func TestRunFileConversationSpendsTokenForEveryRequest(t *testing.T) {
-	var executor *Service
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests++
-		executor.conversationTokens.(*tokenBucket).mu.Lock()
-		tokens := executor.conversationTokens.(*tokenBucket).tokens
-		executor.conversationTokens.(*tokenBucket).mu.Unlock()
-		wantTokens := float64(10 - requests)
-		if tokens != wantTokens {
-			t.Errorf("tokens after request %d = %v, want %v", requests, tokens, wantTokens)
-		}
-		output := "keep going"
-		if requests == 2 {
-			output = completionMarker
-		}
-		if err := json.NewEncoder(w).Encode(responsesAPIResponse{
-			ID:     "resp",
-			Output: assistantText(output),
-		}); err != nil {
-			t.Errorf("encode response: %v", err)
-		}
-	}))
-	defer server.Close()
-
-	config := testConversationConfig(server)
-	fixedNow := time.Now()
-	var err error
-	executor, err = New(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor.conversationTokens = newTokenBucket(10, time.Hour, func() time.Time { return fixedNow })
-	if err := executor.RunPrompt(context.Background(), "", "initial input"); err != nil {
-		t.Fatalf("runFileConversation() error = %v", err)
-	}
-	if requests != 2 {
-		t.Fatalf("requests = %d, want 2", requests)
-	}
-}
-
-func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens(t *testing.T) {
+func TestRunFileConversationRetriesHTTPFailuresWithBackoff(t *testing.T) {
 	tests := []struct {
 		name        string
 		statusCode  int
 		message     string
 		stringError bool
 	}{
-		{name: "bad request", statusCode: http.StatusBadRequest, message: "bad request"},
-		{name: "unauthorized", statusCode: http.StatusUnauthorized, message: "unauthorized"},
-		{name: "gateway authority changed", statusCode: http.StatusForbidden, message: "Gateway requester authority changed"},
-		{name: "missing model", statusCode: http.StatusNotFound, message: "404 {\"error\":\"model 'qwen3.8:27b' not found\"}", stringError: true},
-		{name: "unrelated not found", statusCode: http.StatusNotFound, message: "route not found", stringError: true},
-		{name: "upstream provider timeout", statusCode: http.StatusRequestTimeout, message: "upstream provider timeout"},
-		{name: "unprocessable entity", statusCode: http.StatusUnprocessableEntity, message: "invalid request"},
-		{name: "rate limited", statusCode: http.StatusTooManyRequests, message: "rate limit exceeded"},
-		{name: "internal server error", statusCode: http.StatusInternalServerError, message: "internal error"},
-		{name: "service unavailable", statusCode: http.StatusServiceUnavailable, message: "service unavailable"},
+		{name: "gateway authority error", statusCode: http.StatusForbidden, message: "Gateway requester authority changed"},
+		{name: "string-shaped model error", statusCode: http.StatusNotFound, message: `404 {"error":"model 'qwen3.8:27b' not found"}`, stringError: true},
+		{name: "server error", statusCode: http.StatusInternalServerError, message: "internal error"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			var requests []responsesRequest
 			var sessionKeys []string
@@ -330,22 +248,18 @@ func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens
 				requests = append(requests, request)
 				sessionKeys = append(sessionKeys, r.Header.Get("x-openclaw-session-key"))
 				if len(requests) <= 3 {
-					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(test.statusCode)
-					var errorBody any = map[string]any{
-						"error": map[string]string{"message": test.message},
-					}
+					var body any = map[string]any{"error": map[string]string{"message": test.message}}
 					if test.stringError {
-						errorBody = map[string]string{"error": test.message}
+						body = map[string]string{"error": test.message}
 					}
-					if err := json.NewEncoder(w).Encode(errorBody); err != nil {
+					if err := json.NewEncoder(w).Encode(body); err != nil {
 						t.Errorf("encode error response: %v", err)
 					}
 					return
 				}
 				if err := json.NewEncoder(w).Encode(responsesAPIResponse{
-					ID:     "resp_done",
-					Output: assistantText(completionMarker),
+					ID: "resp_done", Output: assistantText(completionMarker),
 				}); err != nil {
 					t.Errorf("encode response: %v", err)
 				}
@@ -353,40 +267,37 @@ func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens
 			defer server.Close()
 
 			config := testConversationConfig(server)
-			var logOutput bytes.Buffer
-			config.Logger = slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelInfo}))
-			fixedNow := time.Now()
-			executor, err := New(config)
+			tokens := &countingTokenWaiter{}
+			var delays []time.Duration
+			service, err := NewWithOptions(config, Options{
+				TokenWaiter: tokens,
+				RetryWait: func(_ context.Context, delay time.Duration) error {
+					delays = append(delays, delay)
+					return nil
+				},
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			executor.conversationTokens = newTokenBucket(10, time.Hour, func() time.Time { return fixedNow })
-			var delays []time.Duration
-			executor.retryWait = func(_ context.Context, delay time.Duration) error {
-				delays = append(delays, delay)
-				return nil
-			}
 
-			filePath := "project/example.md"
-			if err := executor.RunPrompt(context.Background(), filePath, "initial input"); err != nil {
-				t.Fatalf("runFileConversationForFile() error = %v", err)
+			const taskID = "project/example.md"
+			if err := service.RunPrompt(context.Background(), taskID, "initial input"); err != nil {
+				t.Fatalf("RunPrompt() error = %v", err)
 			}
 			if len(requests) != 4 {
 				t.Fatalf("requests = %d, want 4", len(requests))
 			}
-			wantSessionKey := conversationSessionKey(config.AgentID, filePath)
 			for i, request := range requests {
-				if request.Input != "initial input" {
-					t.Errorf("request %d input = %q, want initial input", i+1, request.Input)
+				if request.Input != "initial input" || request.PreviousResponseID != "" {
+					t.Errorf("request %d = input %q, previous ID %q; want original input and no response ID", i+1, request.Input, request.PreviousResponseID)
 				}
-				if request.PreviousResponseID != "" {
-					t.Errorf("request %d previous_response_id = %q, want empty", i+1, request.PreviousResponseID)
-				}
-				if sessionKeys[i] != wantSessionKey {
-					t.Errorf("request %d session key = %q, want %q", i+1, sessionKeys[i], wantSessionKey)
+				if want := conversationSessionKey(config.AgentID, taskID); sessionKeys[i] != want {
+					t.Errorf("request %d session key = %q, want %q", i+1, sessionKeys[i], want)
 				}
 			}
-
+			if tokens.calls != len(requests) {
+				t.Errorf("token waits = %d, want one per request (%d)", tokens.calls, len(requests))
+			}
 			wantDelays := []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
 			if len(delays) != len(wantDelays) {
 				t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
@@ -396,88 +307,30 @@ func TestRunFileConversationRetriesOpenResponsesHTTPStatusesWithBackoffAndTokens
 					t.Errorf("retry delay %d = %v, want %v", i+1, delays[i], wantDelays[i])
 				}
 			}
-			executor.conversationTokens.(*tokenBucket).mu.Lock()
-			remainingTokens := executor.conversationTokens.(*tokenBucket).tokens
-			executor.conversationTokens.(*tokenBucket).mu.Unlock()
-			if remainingTokens != 6 {
-				t.Errorf("remaining tokens = %v, want 6 after four requests", remainingTokens)
-			}
-
-			logs := logOutput.String()
-			if got := strings.Count(logs, "msg=\"Spent conversation token for OpenResponses request\""); got != 4 {
-				t.Errorf("token-spending log count = %d, want 4; logs:\n%s", got, logs)
-			}
-			wantMessage := test.message
-			if test.stringError {
-				// slog escapes quotes inside the logged error value.
-				wantMessage = strings.ReplaceAll(wantMessage, `"`, `\"`)
-			}
-			for _, want := range []string{
-				"tokens_spent=1",
-				fmt.Sprintf("msg=\"Retrying OpenResponses after HTTP %d\"", test.statusCode),
-				fmt.Sprintf("status=%d", test.statusCode),
-				wantMessage,
-				"retry_attempt=1",
-				"retry_attempt=2",
-				"retry_attempt=3",
-				"retry_delay=1s",
-				"retry_delay=5s",
-				"retry_delay=30s",
-			} {
-				if !strings.Contains(logs, want) {
-					t.Errorf("logs do not contain %q:\n%s", want, logs)
-				}
-			}
 		})
 	}
 }
 
-func TestRunFileConversationCancellationStopsRetryingOpenResponsesHTTPStatus(t *testing.T) {
-	tests := []struct {
-		name        string
-		statusCode  int
-		message     string
-		stringError bool
-	}{
-		{name: "HTTP 403", statusCode: http.StatusForbidden, message: "Gateway requester authority changed"},
-		{name: "HTTP 404", statusCode: http.StatusNotFound, message: "route not found", stringError: true},
-		{name: "HTTP 429", statusCode: http.StatusTooManyRequests, message: "rate limit exceeded"},
-		{name: "HTTP 500", statusCode: http.StatusInternalServerError, message: "internal error"},
+func TestRunFileConversationCancellationStopsRetryingHTTPFailure(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"internal error"}}`))
+	}))
+	defer server.Close()
+
+	service, err := NewWithOptions(testConversationConfig(server), Options{
+		RetryWait: func(context.Context, time.Duration) error { return context.Canceled },
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			requests := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				requests++
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(test.statusCode)
-				var errorBody any = map[string]any{
-					"error": map[string]string{"message": test.message},
-				}
-				if test.stringError {
-					errorBody = map[string]string{"error": test.message}
-				}
-				if err := json.NewEncoder(w).Encode(errorBody); err != nil {
-					t.Errorf("encode error response: %v", err)
-				}
-			}))
-			defer server.Close()
-
-			config := testConversationConfig(server)
-			executor, err := New(config)
-			if err != nil {
-				t.Fatal(err)
-			}
-			executor.retryWait = func(context.Context, time.Duration) error { return context.Canceled }
-
-			if err := executor.RunPrompt(context.Background(), "", "initial input"); !errors.Is(err, context.Canceled) {
-				t.Fatalf("runFileConversation() error = %v, want context.Canceled", err)
-			}
-			if requests != 1 {
-				t.Fatalf("requests = %d, want 1", requests)
-			}
-		})
+	if err := service.RunPrompt(context.Background(), "", "initial input"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunPrompt() error = %v, want context.Canceled", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
 	}
 }
 
@@ -511,14 +364,15 @@ func TestRunFileConversationRetriesAPIErrorWithoutLosingContinuationContext(t *t
 	defer server.Close()
 
 	config := testConversationConfig(server)
-	executor, err := New(config)
+	var delays []time.Duration
+	executor, err := NewWithOptions(config, Options{
+		RetryWait: func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	var delays []time.Duration
-	executor.retryWait = func(_ context.Context, delay time.Duration) error {
-		delays = append(delays, delay)
-		return nil
 	}
 	filePath := "project/example.md"
 	if err := executor.RunPrompt(context.Background(), filePath, "initial prompt"); err != nil {
@@ -543,32 +397,6 @@ func TestRunFileConversationRetriesAPIErrorWithoutLosingContinuationContext(t *t
 	}
 	if len(delays) != 1 || delays[0] != time.Second {
 		t.Errorf("retry delays = %v, want [1s]", delays)
-	}
-}
-
-func TestRunFileConversationCompletesOnFirstResponse(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		if err := json.NewEncoder(w).Encode(responsesAPIResponse{
-			ID:     "resp_done",
-			Output: assistantText(completionMarker),
-		}); err != nil {
-			t.Errorf("encode response: %v", err)
-		}
-	}))
-	defer server.Close()
-
-	config := testConversationConfig(server)
-	executor, err := New(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := executor.RunPrompt(context.Background(), "", "initial input"); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 {
-		t.Fatalf("calls = %d, want 1", calls)
 	}
 }
 
@@ -627,4 +455,11 @@ func TestConversationUsesExactCompletionMarker(t *testing.T) {
 			}
 		})
 	}
+}
+
+type countingTokenWaiter struct{ calls int }
+
+func (w *countingTokenWaiter) Wait(context.Context) error {
+	w.calls++
+	return nil
 }

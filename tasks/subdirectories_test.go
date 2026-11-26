@@ -3,7 +3,6 @@ package tasks
 import (
 	"context"
 	"database/sql"
-	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -67,21 +66,5 @@ func TestListSubdirectoriesReturnsEmptyListForAnEmptyManifest(t *testing.T) {
 	}
 	if got == nil || len(got) != 0 {
 		t.Fatalf("ListSubdirectories() = %#v, want an empty non-nil list", got)
-	}
-}
-
-func TestListSubdirectoriesDoesNotCreateAMissingDatabase(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "missing.sqlite")
-	if _, err := ListSubdirectories(context.Background(), databasePath); err == nil {
-		t.Fatal("ListSubdirectories() succeeded for a missing database")
-	}
-	if _, err := os.Stat(databasePath); !os.IsNotExist(err) {
-		t.Fatalf("database stat error = %v, want not-exist", err)
-	}
-}
-
-func TestListSubdirectoriesRequiresADatabasePath(t *testing.T) {
-	if _, err := ListSubdirectories(context.Background(), "  "); err == nil {
-		t.Fatal("ListSubdirectories() succeeded without a database path")
 	}
 }

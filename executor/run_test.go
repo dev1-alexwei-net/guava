@@ -591,3 +591,98 @@ func TestExecutorConfigCopyCarriesProgressFields(t *testing.T) {
 		t.Errorf("Config() did not preserve the validated configuration: %+v", config)
 	}
 }
+
+func TestExecutorRunProcessesFilesDiscoveredAfterResume(t *testing.T) {
+	rootPath := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(rootPath, name), []byte(name+" content"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createIndexFixture(t, databasePath,
+		[]indexedFile{{path: "a.txt", name: "a.txt"}, {path: "b.txt", name: "b.txt"}},
+		nil,
+	)
+	instructionsPath := filepath.Join(rootPath, "instructions.md")
+	if err := os.WriteFile(instructionsPath, []byte("fallback"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The run resumed from a session that already completed a.txt. The next
+	// fileexplorer sync reports c.txt, a file first discovered after the
+	// resume, and b.txt's conversation is what causes c.txt to appear.
+	var mu sync.Mutex
+	synced := false
+	var requests []testResponsesRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			mu.Lock()
+			if !synced {
+				if _, err := os.Stat(filepath.Join(rootPath, "c.txt")); err == nil {
+					synced = true
+					db, err := sql.Open("sqlite", databasePath)
+					if err != nil {
+						mu.Unlock()
+						t.Fatalf("open index for sync: %v", err)
+					}
+					if _, err := db.Exec(`
+						INSERT INTO files (path, name, is_dir, size, mtime) VALUES ('c.txt', 'c.txt', 0, 11, 0)
+					`); err != nil {
+						mu.Unlock()
+						t.Fatalf("sync c.txt into the index: %v", err)
+					}
+					db.Close()
+				}
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var request testResponsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		requests = append(requests, request)
+		mu.Unlock()
+		if strings.Contains(request.Input, `Current file path: "b.txt"`) {
+			if err := os.WriteFile(filepath.Join(rootPath, "c.txt"), []byte("c.txt content"), 0o600); err != nil {
+				t.Errorf("create c.txt: %v", err)
+			}
+		}
+		response := testResponsesAPIResponse{ID: "resp_1", Output: testAssistantText(testCompletionMarker)}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	config := validConfig()
+	config.DatabasePath = databasePath
+	config.RootPath = rootPath
+	config.InstructionsPath = instructionsPath
+	config.GatewayURL = server.URL
+	config.FileExplorerURL = server.URL
+	config.CompletedPaths = []string{"a.txt"}
+	runner, err := New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("got %d conversations, want the unfinished and the newly discovered file: %#v", len(requests), requests)
+	}
+	if !strings.Contains(requests[0].Input, `Current file path: "b.txt"`) {
+		t.Errorf("first conversation input = %q, want the unfinished file b.txt", requests[0].Input)
+	}
+	if !strings.Contains(requests[1].Input, `Current file path: "c.txt"`) {
+		t.Errorf("second conversation input = %q, want the file discovered after the resume", requests[1].Input)
+	}
+	if !strings.Contains(requests[1].Input, "c.txt content") {
+		t.Errorf("second conversation input = %q, want the current content of c.txt", requests[1].Input)
+	}
+}

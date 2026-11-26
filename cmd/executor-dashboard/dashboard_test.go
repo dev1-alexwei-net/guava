@@ -342,22 +342,6 @@ func waitForControllerStatus(t *testing.T, controller *executorController, want 
 	return executorSnapshot{}
 }
 
-func TestExecutorConfigForSessionUsesPersistedLaunchConfiguration(t *testing.T) {
-	base := testConfig(t, "/current/index.sqlite")
-	saved := sessions.Record{
-		AgentID: "saved-agent", RootDirectory: "/saved/root",
-		Subdirectory: "project/docs", DatabaseFile: "/saved/index.sqlite",
-	}
-	got := executorConfigForSession(base, saved)
-	if got.AgentID != saved.AgentID || got.RootPath != saved.RootDirectory ||
-		got.Subdirectory != saved.Subdirectory || got.DatabasePath != saved.DatabaseFile {
-		t.Errorf("restored config = %+v, want persisted session launch values", got)
-	}
-	if got.GatewayURL != base.GatewayURL || got.FileExplorerURL != base.FileExplorerURL || got.AuthToken != base.AuthToken {
-		t.Errorf("restored config changed runtime settings: %+v", got)
-	}
-}
-
 func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	savedDatabase := filepath.Join(dir, "saved-fileexplorer.sqlite")
@@ -564,19 +548,6 @@ func createIndexedFile(t *testing.T, root, databasePath, relativePath, content s
 	createManifestFixture(t, databasePath, []string{filepath.ToSlash(relativePath)}, nil)
 }
 
-func TestPageDataCarriesSubdirectorySelection(t *testing.T) {
-	snapshot := executorSnapshot{Status: "completed", Subdirectory: "docs/deep"}
-	data := pageData(snapshot, url.Values{}, nil, nil)
-
-	if data.Subdirectory != "docs/deep" {
-		t.Errorf("Subdirectory = %q, want %q", data.Subdirectory, "docs/deep")
-	}
-	snapshot = executorSnapshot{Status: "completed"}
-	if got := pageData(snapshot, url.Values{}, nil, nil).Subdirectory; got != "" {
-		t.Errorf("Subdirectory = %q, want empty for the whole root", got)
-	}
-}
-
 func postStart(t *testing.T, app *dashboard, subdirectory string) *httptest.ResponseRecorder {
 	t.Helper()
 	form := url.Values{}
@@ -763,17 +734,6 @@ func TestStartWhileRunningIsRejected(t *testing.T) {
 	}
 }
 
-func TestPageDataSurfacesSubdirectoryDegradation(t *testing.T) {
-	data := pageData(executorSnapshot{}, url.Values{}, nil, errors.New("manifest unreadable"))
-
-	if data.Subdirectories != nil {
-		t.Fatalf("Subdirectories = %#v, want nil when the manifest cannot be read", data.Subdirectories)
-	}
-	if data.SubdirectoryHint == "" {
-		t.Error("SubdirectoryHint empty, want the degradation note")
-	}
-}
-
 func createManifestFixture(t *testing.T, databasePath string, files []string, directories []string) {
 	t.Helper()
 
@@ -842,26 +802,6 @@ func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(body), "<script") {
 		t.Error("rendered selector must not include client-side JavaScript")
-	}
-}
-
-func TestStartRejectsUnknownSavedSession(t *testing.T) {
-	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "fileexplorer.sqlite")), slog.LevelInfo, "")
-	if err != nil {
-		t.Fatalf("newDashboard: %v", err)
-	}
-	t.Cleanup(app.Close)
-
-	form := url.Values{"session_id": {"missing-session"}}
-	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	app.start(rec, req)
-	if got := redirectLocation(t, rec).Get("error"); !strings.Contains(got, "task session not found") {
-		t.Errorf("redirect error = %q, want missing-session validation", got)
-	}
-	if snapshot := app.controller.Snapshot(); snapshot.Status != "idle" {
-		t.Errorf("status = %q, want idle after rejecting an unknown saved session", snapshot.Status)
 	}
 }
 

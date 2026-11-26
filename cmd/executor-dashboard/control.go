@@ -69,11 +69,7 @@ func (b *tailLogBuffer) String() string {
 	return string(b.content)
 }
 
-func newExecutorController(config executor.Config, level slog.Level) (*executorController, error) {
-	return newExecutorControllerWithSessionLifecycle(config, level, nil)
-}
-
-func newExecutorControllerWithSessionLifecycle(config executor.Config, level slog.Level, store taskSessionStore) (*executorController, error) {
+func newExecutorController(config executor.Config, level slog.Level, store taskSessionStore) (*executorController, error) {
 	logs := &tailLogBuffer{}
 	logger := executor.NewTextLogger(logs, level)
 	config.Logger = logger

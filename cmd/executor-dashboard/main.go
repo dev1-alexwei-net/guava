@@ -60,11 +60,7 @@ func run() error {
 		return err
 	}
 
-	storePath := strings.TrimSpace(*sessionStorePath)
-	if storePath == "" {
-		storePath = defaultSessionStorePath(*databasePath)
-	}
-	app, err := newDashboardWithSessionStore(executor.Config{
+	app, err := newDashboard(executor.Config{
 		DatabasePath:     *databasePath,
 		RootPath:         *rootPath,
 		InstructionsPath: *instructionsPath,
@@ -74,7 +70,7 @@ func run() error {
 		AuthToken:        os.Getenv("OPENCLAW_AUTH_TOKEN"),
 		HTTPClient:       executor.NewGatewayHTTPClient(*verifyTLS),
 		CLIArgs:          strings.Join(os.Args, " "),
-	}, parsedLogLevel, storePath)
+	}, parsedLogLevel, strings.TrimSpace(*sessionStorePath))
 	if err != nil {
 		return fmt.Errorf("configure executor dashboard: %w", err)
 	}

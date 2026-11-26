@@ -33,17 +33,11 @@ type taskSessionManager struct {
 }
 
 func newTaskSessionManager(config executor.Config, store taskSessionStore) *taskSessionManager {
-	if store == nil {
-		return nil
-	}
 	return &taskSessionManager{baseConfig: config, store: store}
 }
 
 // Create records the launch configuration for a fresh run before it starts.
 func (m *taskSessionManager) Create(runner *executor.Executor) (*sessions.Record, error) {
-	if m == nil {
-		return nil, nil
-	}
 	summary := runner.SessionSummary()
 	record, err := m.store.Create(context.Background(), sessions.Record{
 		AgentID: summary.AgentID, RootDirectory: m.baseConfig.RootPath,
@@ -59,9 +53,6 @@ func (m *taskSessionManager) Create(runner *executor.Executor) (*sessions.Record
 // Resume loads an explicitly selected inactive record, rehydrates its runner,
 // and marks the record active before returning it to the controller.
 func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Record, error) {
-	if m == nil {
-		return nil, nil, errors.New("task session persistence is unavailable")
-	}
 	record, err := m.store.Get(context.Background(), strings.TrimSpace(id))
 	if err != nil {
 		return nil, nil, err
@@ -97,9 +88,6 @@ func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Re
 
 // Finish persists the terminal lifecycle state after a run exits.
 func (m *taskSessionManager) Finish(record *sessions.Record, status sessions.Status, finishedAt time.Time, lastError string) error {
-	if m == nil || record == nil {
-		return nil
-	}
 	record.Status = status
 	record.FinishedAt = finishedAt
 	record.LastError = lastError
@@ -109,9 +97,6 @@ func (m *taskSessionManager) Finish(record *sessions.Record, status sessions.Sta
 
 // Delete removes an inactive record and its saved history.
 func (m *taskSessionManager) Delete(id string) error {
-	if m == nil {
-		return errors.New("task session persistence is unavailable")
-	}
 	record, err := m.store.Get(context.Background(), id)
 	if err != nil {
 		return err

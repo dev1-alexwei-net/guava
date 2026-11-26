@@ -42,7 +42,13 @@ func testConfig(t *testing.T, databasePath string) executor.Config {
 
 func newTestController(t *testing.T, databasePath string) *executorController {
 	t.Helper()
-	controller, err := newExecutorController(testConfig(t, databasePath), slog.LevelInfo)
+	config := testConfig(t, databasePath)
+	store, err := sessions.OpenStore(filepath.Join(t.TempDir(), "task-sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	controller, err := newExecutorController(config, slog.LevelInfo, store)
 	if err != nil {
 		t.Fatalf("newExecutorController: %v", err)
 	}
@@ -254,7 +260,7 @@ func TestSessionDuration(t *testing.T) {
 }
 
 func TestShowRendersDashboardPage(t *testing.T) {
-	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -282,7 +288,7 @@ func TestShowRendersDashboardPage(t *testing.T) {
 }
 
 func TestShowRendersSessionSummaryCard(t *testing.T) {
-	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -384,9 +390,9 @@ func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testi
 	base := testConfig(t, filepath.Join(dir, "wrong-fileexplorer.sqlite"))
 	base.FileExplorerURL = refreshServer.URL
 	base.AgentID = "fresh-agent"
-	app, err := newDashboardWithSessionStore(base, slog.LevelInfo, storePath)
+	app, err := newDashboard(base, slog.LevelInfo, storePath)
 	if err != nil {
-		t.Fatalf("newDashboardWithSessionStore: %v", err)
+		t.Fatalf("newDashboard: %v", err)
 	}
 	t.Cleanup(app.Close)
 	if snapshot := app.controller.Snapshot(); snapshot.Status != "idle" || snapshot.AgentID != "fresh-agent" {
@@ -479,9 +485,9 @@ func TestFreshAndResumedSessionsDiscoverFilesAndStopThroughLifecycle(t *testing.
 			config.GatewayURL = gateway.URL
 			config.FileExplorerURL = gateway.URL
 			config.HTTPClient = gateway.Client()
-			app, err := newDashboardWithSessionStore(config, slog.LevelInfo, storePath)
+			app, err := newDashboard(config, slog.LevelInfo, storePath)
 			if err != nil {
-				t.Fatalf("newDashboardWithSessionStore: %v", err)
+				t.Fatalf("newDashboard: %v", err)
 			}
 			t.Cleanup(app.Close)
 
@@ -603,7 +609,7 @@ func TestStartRejectsUnknownSubdirectory(t *testing.T) {
 		[]string{"root.txt", "docs/notes.md"},
 		[]string{"docs"},
 	)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -619,7 +625,7 @@ func TestStartRejectsUnknownSubdirectory(t *testing.T) {
 }
 
 func TestStartRejectsSubdirectoryWhenManifestUnavailable(t *testing.T) {
-	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -640,7 +646,7 @@ func TestStartAppliesSelectedSubdirectory(t *testing.T) {
 		[]string{"root.txt", "docs/notes.md", "docs/deep/page.md"},
 		[]string{"docs", "docs/deep"},
 	)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -679,7 +685,7 @@ func TestStartEmptySelectionKeepsWholeRoot(t *testing.T) {
 		[]string{"root.txt", "docs/notes.md"},
 		[]string{"docs"},
 	)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -728,7 +734,7 @@ func TestStartWhileRunningIsRejected(t *testing.T) {
 	config.GatewayURL = gateway.URL
 	config.FileExplorerURL = gateway.URL
 	config.HTTPClient = gateway.Client()
-	app, err := newDashboard(config, slog.LevelInfo)
+	app, err := newDashboard(config, slog.LevelInfo, "")
 	if err != nil {
 		gateway.Close()
 		t.Fatalf("newDashboard: %v", err)
@@ -795,7 +801,7 @@ func createManifestFixture(t *testing.T, databasePath string, files []string, di
 func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
 	createManifestFixture(t, databasePath, nil, nil)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -840,7 +846,7 @@ func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
 }
 
 func TestStartRejectsUnknownSavedSession(t *testing.T) {
-	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "fileexplorer.sqlite")), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "fileexplorer.sqlite")), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -860,7 +866,7 @@ func TestStartRejectsUnknownSavedSession(t *testing.T) {
 }
 
 func TestDeleteSessionRequiresConfirmationAndRemovesHistory(t *testing.T) {
-	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "fileexplorer.sqlite")), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "fileexplorer.sqlite")), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -949,7 +955,7 @@ func TestShowRendersSubdirectorySelectFromManifest(t *testing.T) {
 		[]string{"root.txt", "docs/notes.md", "docs/deep/page.md", "misc/file.txt"},
 		[]string{"docs", "docs/deep"},
 	)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -1000,7 +1006,7 @@ func TestShowRefreshesSubdirectorySelectFromManifestOnEveryRequest(t *testing.T)
 		[]string{"docs/notes.md"},
 		[]string{"docs"},
 	)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -1047,7 +1053,7 @@ func TestShowRefreshesSubdirectorySelectFromManifestOnEveryRequest(t *testing.T)
 }
 
 func TestShowRendersRootOnlyWhenManifestCannotBeRead(t *testing.T) {
-	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo)
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}

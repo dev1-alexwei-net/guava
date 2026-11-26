@@ -242,20 +242,13 @@ func (s *Store) RecoverInterrupted(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("task session store is not open")
 	}
-	records, err := s.List(ctx)
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		if record.Status != StatusActive {
-			continue
-		}
-		record.Status = StatusPaused
-		record.FinishedAt = time.Now().UTC()
-		record.LastError = "interrupted when the dashboard process exited"
-		if _, err := s.Update(ctx, record); err != nil {
-			return fmt.Errorf("recover interrupted task session %q: %w", record.ID, err)
-		}
+	now := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE task_sessions
+		SET status = ?, updated_at = ?, finished_at = ?, last_error = ?
+		WHERE status = ?
+	`, string(StatusPaused), now.UnixNano(), now.UnixNano(), "interrupted when the dashboard process exited", string(StatusActive)); err != nil {
+		return fmt.Errorf("recover interrupted task sessions: %w", err)
 	}
 	return nil
 }

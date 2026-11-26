@@ -69,15 +69,14 @@ type savedSessionChoice struct {
 	CanDelete    bool
 }
 
-func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
-	return newDashboardWithSessionStore(config, logLevel, defaultSessionStorePath(config.DatabasePath))
-}
-
 func defaultSessionStorePath(databasePath string) string {
 	return databasePath + ".sessions.sqlite"
 }
 
-func newDashboardWithSessionStore(config executor.Config, logLevel slog.Level, sessionStorePath string) (*dashboard, error) {
+func newDashboard(config executor.Config, logLevel slog.Level, sessionStorePath string) (*dashboard, error) {
+	if sessionStorePath == "" {
+		sessionStorePath = defaultSessionStorePath(config.DatabasePath)
+	}
 	if filepath.Clean(sessionStorePath) == filepath.Clean(config.DatabasePath) {
 		return nil, fmt.Errorf("task session metadata database must be separate from the fileexplorer database")
 	}
@@ -89,7 +88,7 @@ func newDashboardWithSessionStore(config executor.Config, logLevel slog.Level, s
 		_ = store.Close()
 		return nil, err
 	}
-	controller, err := newExecutorControllerWithSessionLifecycle(config, logLevel, store)
+	controller, err := newExecutorController(config, logLevel, store)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -327,14 +326,9 @@ func (d *dashboard) deleteSession(w http.ResponseWriter, r *http.Request) {
 		redirectDashboard(w, r, err)
 		return
 	}
-	query := url.Values{"notice": {"session_deleted"}}
-	if refresh := parseRefresh(r.URL.Query().Get("refresh")); refresh > 0 {
-		query.Set("refresh", strconv.Itoa(refresh))
-	}
-	if theme := parseTheme(r.URL.Query().Get("theme")); theme == "dark" {
-		query.Set("theme", theme)
-	}
-	http.Redirect(w, r, "/?"+query.Encode(), http.StatusSeeOther)
+	query := redirectQuery(r)
+	query.Set("notice", "session_deleted")
+	respondRedirect(w, r, query)
 }
 
 func noticeMessage(value string) string {
@@ -349,7 +343,7 @@ func (d *dashboard) stop(w http.ResponseWriter, r *http.Request) {
 	redirectDashboard(w, r, err)
 }
 
-func redirectDashboard(w http.ResponseWriter, r *http.Request, err error) {
+func redirectQuery(r *http.Request) url.Values {
 	query := url.Values{}
 	if refresh := parseRefresh(r.URL.Query().Get("refresh")); refresh > 0 {
 		query.Set("refresh", strconv.Itoa(refresh))
@@ -357,14 +351,23 @@ func redirectDashboard(w http.ResponseWriter, r *http.Request, err error) {
 	if theme := parseTheme(r.URL.Query().Get("theme")); theme == "dark" {
 		query.Set("theme", theme)
 	}
-	if err != nil {
-		query.Set("error", err.Error())
-	}
+	return query
+}
+
+func respondRedirect(w http.ResponseWriter, r *http.Request, query url.Values) {
 	target := "/"
 	if encoded := query.Encode(); encoded != "" {
 		target += "?" + encoded
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+func redirectDashboard(w http.ResponseWriter, r *http.Request, err error) {
+	query := redirectQuery(r)
+	if err != nil {
+		query.Set("error", err.Error())
+	}
+	respondRedirect(w, r, query)
 }
 
 func parseTheme(value string) string {

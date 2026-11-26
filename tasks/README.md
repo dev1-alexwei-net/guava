@@ -30,13 +30,16 @@ err = provider.Tasks(func(task tasks.Task) bool {
 })
 ```
 
-The provider refreshes fileexplorer before each task selection and appends
-newly discovered files to an in-memory FIFO queue, so files created during a
-run can be picked up after the next refresh. Tasks are yielded in stable
-manifest path order, scoped to the configured subdirectory when present.
+The provider refreshes fileexplorer before each task selection and puts
+newly discovered files ahead of older pending work, so files created during a
+run are selected immediately after the current task. Each new batch is ordered
+by manifest path; older pending tasks keep their FIFO order behind it. Tasks
+are scoped to the configured subdirectory when present.
 The provider owns its SQLite index and rooted filesystem reader and must be
 closed after use.
 
 `ListSubdirectories` returns deterministic manifest-backed choices without
 starting a task run. `HTTPRefresher` implements the fileexplorer GET refresh,
-and `WorkQueue` holds append-only per-run file discovery state.
+and `WorkQueue` holds per-run file discovery state. `EnqueueNext` prioritizes
+newly discovered paths for the next provider selection while retaining the order
+of older pending paths.

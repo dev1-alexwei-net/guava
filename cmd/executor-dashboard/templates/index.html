@@ -37,11 +37,14 @@
             <p class="text-body-secondary small">Start fresh by default, or explicitly choose an available saved session to resume.</p>
             <div class="row g-3">
               <div class="col-12">
-                <label class="card h-100 border-primary" for="session-fresh">
+                <label class="card h-100" for="session-fresh">
                   <span class="card-body d-flex align-items-start gap-3">
                     <input class="form-check-input mt-1 flex-shrink-0" id="session-fresh" type="radio" name="session_id" value="" checked>
                     <span>
-                      <span class="fw-semibold d-block">Fresh session</span>
+                      <span class="d-flex flex-wrap align-items-center gap-2">
+                        <span class="fw-semibold">Fresh session</span>
+                        <span class="badge text-bg-primary">Default</span>
+                      </span>
                       <span class="text-body-secondary small">Start a new run with the dashboard's current configuration.</span>
                     </span>
                   </span>

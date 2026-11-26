@@ -106,10 +106,6 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		return nil, err
 	}
 
-	var lister FileLister = index
-	if subdirectory != "" {
-		lister = newSubdirectoryLister(index, subdirectory)
-	}
 	queue := NewWorkQueue()
 	if _, err := queue.Seed(config.InitialPending); err != nil {
 		_ = reader.close()
@@ -167,7 +163,7 @@ func (p *FileProvider) Tasks(fn func(conversations.Task) error) error {
 			// seeded unfinished files, keeping them ahead of newly reported
 			// files; later passes prioritize files created by the current
 			// task exactly as on a fresh run.
-			if _, err := p.queue.Enqueue(paths); err != nil {
+			if _, err := p.queue.EnqueueNext(paths); err != nil {
 				return fmt.Errorf("enqueue discovered files: %w", err)
 			}
 			p.firstSelection = false

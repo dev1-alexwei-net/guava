@@ -65,11 +65,7 @@ func ListFilePaths(ctx context.Context, databasePath, subdirectory string) ([]st
 		err = errors.Join(err, index.close())
 	}()
 
-	var lister FileLister = index
-	if sub != "" {
-		lister = newSubdirectoryLister(index, sub)
-	}
-	return lister.FilePaths(ctx)
+	return index.FilePaths(ctx, sub)
 }
 
 // subdirectories derives the candidate subdirectories from the manifest: the

@@ -24,17 +24,21 @@ func (p closingTaskProvider) Tasks(fn func(conversations.Task) error) (err error
 // coordinator observed. A task the coordinator did not complete (failed or
 // canceled) is reported as unfinished, so a resume processes it again.
 type progressTaskProvider struct {
-	provider tasks.TaskProvider
+	provider conversations.TaskProvider
 	report   func(taskID string, completed bool)
 }
 
-func (p progressTaskProvider) Tasks(fn func(tasks.Task) bool) error {
-	return p.provider.Tasks(func(task tasks.Task) bool {
-		completed := fn(task)
+func (p progressTaskProvider) Tasks(fn func(conversations.Task) error) error {
+	return p.provider.Tasks(func(task conversations.Task) error {
+		var completed bool = false
+		err := fn(task)
+		if err == nil {
+			completed = true
+		}
 		if p.report != nil {
 			p.report(task.ID(), completed)
 		}
-		return completed
+		return err
 	})
 }
 
@@ -67,7 +71,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	if err != nil {
 		return e.conversationService.Run(ctx, failedTaskProvider{err: err})
 	}
-	runProvider := tasks.TaskProvider(closingTaskProvider{provider: provider})
+	runProvider := conversations.TaskProvider(closingTaskProvider{provider: provider})
 	if e.config.OnFileProgress != nil {
 		runProvider = progressTaskProvider{provider: runProvider, report: e.config.OnFileProgress}
 	}

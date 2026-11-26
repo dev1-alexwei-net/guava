@@ -3,7 +3,9 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -51,7 +53,7 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 				break
 			}
 			var responseErr *responsesHTTPError
-			if errors.As(err, &responseErr) && responseErr.statusCode == 500 {
+			if errors.As(err, &responseErr) && isRetryableOpenResponsesStatus(responseErr.statusCode) {
 				consecutiveFailures++
 				retryDelay := openResponsesRetryDelay(consecutiveFailures)
 				retryAttrs := responseLogAttrs(filePath, turn)
@@ -61,7 +63,8 @@ func (e *Executor) runFileConversationForFile(ctx context.Context, filePath, ini
 					slog.Duration("retry_delay", retryDelay),
 					slog.Any("error", err),
 				)
-				logAttrs(e.config.Logger, ctx, slog.LevelInfo, "Retrying OpenResponses after HTTP 500", retryAttrs...)
+				message := fmt.Sprintf("Retrying OpenResponses after HTTP %d", responseErr.statusCode)
+				logAttrs(e.config.Logger, ctx, slog.LevelInfo, message, retryAttrs...)
 				if err := e.waitBeforeRetry(ctx, retryDelay); err != nil {
 					return err
 				}
@@ -107,6 +110,10 @@ func (e *Executor) waitBeforeRetry(ctx context.Context, delay time.Duration) err
 	case <-timer.C:
 		return nil
 	}
+}
+
+func isRetryableOpenResponsesStatus(statusCode int) bool {
+	return statusCode == http.StatusInternalServerError || statusCode == http.StatusRequestTimeout
 }
 
 func openResponsesRetryDelay(consecutiveFailures int) time.Duration {

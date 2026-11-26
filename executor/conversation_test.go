@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -288,103 +289,148 @@ func TestRunFileConversationSpendsTokenForEveryRequest(t *testing.T) {
 	}
 }
 
-func TestRunFileConversationRetriesHTTP500WithBackoffAndTokens(t *testing.T) {
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests++
-		if requests <= 3 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(`{"error":{"message":"internal error"}}`))
-			return
-		}
-		if err := json.NewEncoder(w).Encode(responsesAPIResponse{
-			ID:     "resp_done",
-			Output: assistantText(completionMarker),
-		}); err != nil {
-			t.Errorf("encode response: %v", err)
-		}
-	}))
-	defer server.Close()
+func TestRunFileConversationRetriesHTTP500And408WithBackoffAndTokens(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		message    string
+	}{
+		{name: "internal server error", statusCode: http.StatusInternalServerError, message: "internal error"},
+		{name: "upstream provider timeout", statusCode: http.StatusRequestTimeout, message: "upstream provider timeout"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requests []responsesRequest
+			var sessionKeys []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request responsesRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				requests = append(requests, request)
+				sessionKeys = append(sessionKeys, r.Header.Get("x-openclaw-session-key"))
+				if len(requests) <= 3 {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(test.statusCode)
+					if err := json.NewEncoder(w).Encode(map[string]any{
+						"error": map[string]string{"message": test.message},
+					}); err != nil {
+						t.Errorf("encode error response: %v", err)
+					}
+					return
+				}
+				if err := json.NewEncoder(w).Encode(responsesAPIResponse{
+					ID:     "resp_done",
+					Output: assistantText(completionMarker),
+				}); err != nil {
+					t.Errorf("encode response: %v", err)
+				}
+			}))
+			defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	var logOutput bytes.Buffer
-	config.Logger = NewTextLogger(&logOutput, slog.LevelInfo)
-	fixedNow := time.Now()
-	executor := &Executor{
-		config:             config,
-		conversationTokens: newTokenBucket(10, time.Hour, func() time.Time { return fixedNow }),
-	}
-	var delays []time.Duration
-	executor.retryWait = func(_ context.Context, delay time.Duration) error {
-		delays = append(delays, delay)
-		return nil
-	}
+			config := validConfig()
+			config.GatewayURL = server.URL
+			config.HTTPClient = server.Client()
+			var logOutput bytes.Buffer
+			config.Logger = NewTextLogger(&logOutput, slog.LevelInfo)
+			fixedNow := time.Now()
+			executor := &Executor{
+				config:             config,
+				conversationTokens: newTokenBucket(10, time.Hour, func() time.Time { return fixedNow }),
+			}
+			var delays []time.Duration
+			executor.retryWait = func(_ context.Context, delay time.Duration) error {
+				delays = append(delays, delay)
+				return nil
+			}
 
-	if err := executor.runFileConversation(context.Background(), "initial input"); err != nil {
-		t.Fatalf("runFileConversation() error = %v", err)
-	}
-	if requests != 4 {
-		t.Fatalf("requests = %d, want 4", requests)
-	}
-	wantDelays := []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
-	if len(delays) != len(wantDelays) {
-		t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
-	}
-	for i := range wantDelays {
-		if delays[i] != wantDelays[i] {
-			t.Errorf("retry delay %d = %v, want %v", i+1, delays[i], wantDelays[i])
-		}
-	}
-	executor.conversationTokens.mu.Lock()
-	remainingTokens := executor.conversationTokens.tokens
-	executor.conversationTokens.mu.Unlock()
-	if remainingTokens != 6 {
-		t.Errorf("remaining tokens = %v, want 6 after four requests", remainingTokens)
-	}
-	logs := logOutput.String()
-	if got := strings.Count(logs, `msg="Spent conversation token for OpenResponses request"`); got != 4 {
-		t.Errorf("token-spending log count = %d, want 4; logs:\n%s", got, logs)
-	}
-	for _, want := range []string{
-		"tokens_spent=1",
-		`msg="Retrying OpenResponses after HTTP 500"`,
-		"retry_attempt=1",
-		"retry_attempt=2",
-		"retry_attempt=3",
-		"retry_delay=1s",
-		"retry_delay=5s",
-		"retry_delay=30s",
-	} {
-		if !strings.Contains(logs, want) {
-			t.Errorf("logs do not contain %q:\n%s", want, logs)
-		}
+			filePath := "project/example.md"
+			if err := executor.runFileConversationForFile(context.Background(), filePath, "initial input"); err != nil {
+				t.Fatalf("runFileConversationForFile() error = %v", err)
+			}
+			if len(requests) != 4 {
+				t.Fatalf("requests = %d, want 4", len(requests))
+			}
+			wantSessionKey := conversationSessionKey(config.AgentID, filePath)
+			for i, request := range requests {
+				if request.Input != "initial input" {
+					t.Errorf("request %d input = %q, want initial input", i+1, request.Input)
+				}
+				if request.PreviousResponseID != "" {
+					t.Errorf("request %d previous_response_id = %q, want empty", i+1, request.PreviousResponseID)
+				}
+				if sessionKeys[i] != wantSessionKey {
+					t.Errorf("request %d session key = %q, want %q", i+1, sessionKeys[i], wantSessionKey)
+				}
+			}
+
+			wantDelays := []time.Duration{time.Second, 5 * time.Second, 30 * time.Second}
+			if len(delays) != len(wantDelays) {
+				t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
+			}
+			for i := range wantDelays {
+				if delays[i] != wantDelays[i] {
+					t.Errorf("retry delay %d = %v, want %v", i+1, delays[i], wantDelays[i])
+				}
+			}
+			executor.conversationTokens.mu.Lock()
+			remainingTokens := executor.conversationTokens.tokens
+			executor.conversationTokens.mu.Unlock()
+			if remainingTokens != 6 {
+				t.Errorf("remaining tokens = %v, want 6 after four requests", remainingTokens)
+			}
+
+			logs := logOutput.String()
+			if got := strings.Count(logs, `msg="Spent conversation token for OpenResponses request"`); got != 4 {
+				t.Errorf("token-spending log count = %d, want 4; logs:\n%s", got, logs)
+			}
+			for _, want := range []string{
+				"tokens_spent=1",
+				fmt.Sprintf(`msg="Retrying OpenResponses after HTTP %d"`, test.statusCode),
+				fmt.Sprintf("status=%d", test.statusCode),
+				test.message,
+				"retry_attempt=1",
+				"retry_attempt=2",
+				"retry_attempt=3",
+				"retry_delay=1s",
+				"retry_delay=5s",
+				"retry_delay=30s",
+			} {
+				if !strings.Contains(logs, want) {
+					t.Errorf("logs do not contain %q:\n%s", want, logs)
+				}
+			}
+		})
 	}
 }
 
-func TestRunFileConversationCancellationStopsHTTP500Retry(t *testing.T) {
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":{"message":"internal error"}}`))
-	}))
-	defer server.Close()
+func TestRunFileConversationCancellationStopsRetryableHTTPStatus(t *testing.T) {
+	for _, statusCode := range []int{http.StatusInternalServerError, http.StatusRequestTimeout} {
+		t.Run(fmt.Sprintf("HTTP %d", statusCode), func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(statusCode)
+				_, _ = w.Write([]byte(`{"error":{"message":"transient error"}}`))
+			}))
+			defer server.Close()
 
-	config := validConfig()
-	config.GatewayURL = server.URL
-	config.HTTPClient = server.Client()
-	executor := &Executor{config: config}
-	executor.retryWait = func(context.Context, time.Duration) error { return context.Canceled }
+			config := validConfig()
+			config.GatewayURL = server.URL
+			config.HTTPClient = server.Client()
+			executor := &Executor{config: config}
+			executor.retryWait = func(context.Context, time.Duration) error { return context.Canceled }
 
-	if err := executor.runFileConversation(context.Background(), "initial input"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("runFileConversation() error = %v, want context.Canceled", err)
-	}
-	if requests != 1 {
-		t.Fatalf("requests = %d, want 1", requests)
+			if err := executor.runFileConversation(context.Background(), "initial input"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("runFileConversation() error = %v, want context.Canceled", err)
+			}
+			if requests != 1 {
+				t.Fatalf("requests = %d, want 1", requests)
+			}
+		})
 	}
 }
 

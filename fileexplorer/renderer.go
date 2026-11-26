@@ -302,43 +302,13 @@ func canonicalQuery(query url.Values) {
 }
 
 func (r *renderer) toggleThemeURL(current *url.URL, theme string) string {
-	if current == nil {
-		return "/?theme=dark"
-	}
-	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
-	if u.Path == "" {
-		u.Path = "/"
-	}
-	query := current.Query()
-	if theme == "dark" {
-		query.Del("theme")
-	} else {
-		query.Set("theme", "dark")
-	}
-	canonicalQuery(query)
-	u.RawQuery = query.Encode()
-	return u.String()
+	return toggleURL(current, "theme", "dark", theme != "dark")
 }
 
 // toggleWrapURL flips the wrap preference on the current page's URL, keeping
 // every other query value, mirroring toggleThemeURL.
 func (r *renderer) toggleWrapURL(current *url.URL, wrap string) string {
-	if current == nil {
-		return "/?wrap=off"
-	}
-	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
-	if u.Path == "" {
-		u.Path = "/"
-	}
-	query := current.Query()
-	if wrap == "off" {
-		query.Del("wrap")
-	} else {
-		query.Set("wrap", "off")
-	}
-	canonicalQuery(query)
-	u.RawQuery = query.Encode()
-	return u.String()
+	return toggleURL(current, "wrap", "off", wrap != "off")
 }
 
 // toggleColumnURL advances the large-screen preview column width through the
@@ -348,24 +318,7 @@ func (r *renderer) toggleWrapURL(current *url.URL, wrap string) string {
 // drops out of the URL the way the other defaults do.
 func (r *renderer) toggleColumnURL(current *url.URL, column string) string {
 	next := nextColumn(column)
-	if current == nil {
-		if next == defaultColumn {
-			return "/"
-		}
-		return "/?width=" + next
-	}
-	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
-	if u.Path == "" {
-		u.Path = "/"
-	}
-	query := current.Query()
-	if next == defaultColumn {
-		query.Del("width")
-	} else {
-		query.Set("width", next)
-	}
-	u.RawQuery = query.Encode()
-	return u.String()
+	return toggleURL(current, "width", next, next != defaultColumn)
 }
 
 // togglePreviewPaneURL flips the large-screen preview pane state on the
@@ -374,18 +327,24 @@ func (r *renderer) toggleColumnURL(current *url.URL, column string) string {
 // restores the preview for the same file the page rendered and the selected
 // file survives the round trip.
 func (r *renderer) togglePreviewPaneURL(current *url.URL, pane string) string {
-	if current == nil {
-		return "/?pane=collapsed"
+	return toggleURL(current, "pane", "collapsed", pane != "collapsed")
+}
+
+// toggleURL changes one preference without disturbing the current page or
+// its other query values. Default preferences are omitted from the URL.
+func toggleURL(current *url.URL, key, value string, enabled bool) string {
+	u := &url.URL{Path: "/"}
+	if current != nil {
+		u.Path, u.RawPath, u.RawQuery = current.Path, current.RawPath, current.RawQuery
+		if u.Path == "" {
+			u.Path = "/"
+		}
 	}
-	u := &url.URL{Path: current.Path, RawPath: current.RawPath}
-	if u.Path == "" {
-		u.Path = "/"
-	}
-	query := current.Query()
-	if pane == "collapsed" {
-		query.Del("pane")
+	query := u.Query()
+	if enabled {
+		query.Set(key, value)
 	} else {
-		query.Set("pane", "collapsed")
+		query.Del(key)
 	}
 	canonicalQuery(query)
 	u.RawQuery = query.Encode()

@@ -32,76 +32,54 @@
     <section class="card shadow-sm mb-4" aria-labelledby="controls-heading">
       <div class="card-body">
         <h2 class="h5" id="controls-heading">Controls</h2>
-        <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post">
-          <fieldset class="border-0 p-0 mb-3">
-            <legend class="h6">Choose a task session</legend>
-            <p class="text-body-secondary small">Start fresh by default, or explicitly choose an available saved session to resume.</p>
-            <div class="row g-3">
-              <div class="col-12">
-                <label class="card h-100" for="session-fresh">
-                  <span class="card-body d-flex align-items-start gap-3">
-                    <input class="form-check-input mt-1 flex-shrink-0" id="session-fresh" type="radio" name="session_id" value="" checked>
-                    <span>
-                      <span class="d-flex flex-wrap align-items-center gap-2">
-                        <span class="fw-semibold">Fresh session</span>
-                        <span class="badge text-bg-primary">Default</span>
-                      </span>
-                      <span class="text-body-secondary small">Start a new run with the dashboard's current configuration.</span>
-                    </span>
-                  </span>
-                </label>
+        <h3 class="h6 mt-0" id="fresh-session-heading">Start a fresh session</h3>
+        <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" aria-labelledby="fresh-session-heading" class="mb-4">
+          <label class="form-label mb-1" for="subdirectory">Subdirectory</label>
+          <select class="form-select" id="subdirectory" name="subdirectory">
+            <option value="" selected>All files (root)</option>
+            {{range .Subdirectories}}
+            <option value="{{.}}">{{.}}</option>
+            {{end}}
+          </select>
+          {{if .SubdirectoryHint}}<p class="text-body-secondary small mt-1 mb-2">{{.SubdirectoryHint}}</p>{{else}}<p class="text-body-secondary small mt-1 mb-2">Limits this fresh run to the selected subdirectory; the root option processes all files.</p>{{end}}
+          <button class="btn btn-primary" type="submit" {{if .Busy}}disabled{{end}}>Start fresh session</button>
+        </form>
+
+        <h3 class="h6" id="resume-heading">Resume a saved session</h3>
+        {{if .SavedSessionsHint}}<div class="alert alert-warning" role="status">{{.SavedSessionsHint}}</div>{{else if not .SavedSessions}}<p class="text-body-secondary small mb-3">No saved sessions yet.</p>{{end}}
+        <div class="row g-3 mb-3">
+          {{range .SavedSessions}}
+          <div class="col-12 col-md-6">
+            <div class="card h-100">
+              <div class="card-body">
+                <span class="d-flex flex-wrap align-items-center gap-2">
+                  <span class="fw-semibold text-break">{{.AgentID}}</span>
+                  <span class="badge {{.StatusClass}}">{{.Status}}</span>
+                </span>
+                <span class="d-block small">{{if .Subdirectory}}/{{.Subdirectory}}{{else}}All files (root){{end}}</span>
+                <span class="d-block text-body-secondary small">Updated {{.UpdatedAt}}</span>
+                <span class="d-block text-body-secondary small font-monospace">{{.ID}}</span>
+                {{if or $.Busy (not .CanResume)}}<p class="text-body-secondary small">This session cannot be resumed right now.</p>{{end}}
+                <form action="/start?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post">
+                  <input type="hidden" name="session_id" value="{{.ID}}">
+                  <button class="btn btn-outline-primary" type="submit" {{if or $.Busy (not .CanResume)}}disabled{{end}}>Resume</button>
+                </form>
               </div>
-              {{range .SavedSessions}}
-              <div class="col-12 col-md-6">
-                <div class="card h-100">
-                  <label class="card-body d-flex align-items-start gap-3" for="saved-session-{{.ID}}">
-                    <input class="form-check-input mt-1 flex-shrink-0" id="saved-session-{{.ID}}" type="radio" name="session_id" value="{{.ID}}" {{if or $.Busy (not .CanResume)}}disabled{{end}}>
-                    <span class="min-w-0">
-                      <span class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                        <span class="fw-semibold text-break">{{.AgentID}}</span>
-                        <span class="badge {{.StatusClass}}">{{.Status}}</span>
-                      </span>
-                      <span class="d-block small">{{if .Subdirectory}}/{{.Subdirectory}}{{else}}All files (root){{end}}</span>
-                      <span class="d-block text-body-secondary small">Updated {{.UpdatedAt}}</span>
-                      <span class="d-block text-body-secondary small font-monospace">{{.ID}}</span>
-                      {{if not .CanResume}}<span class="d-block text-body-secondary small">This session is active and cannot be resumed.</span>{{end}}
-                    </span>
-                  </label>
-                  {{if .CanDelete}}
-                  <div class="card-body pt-0">
-                    <div class="form-check mb-2">
-                      <input class="form-check-input" id="confirm-delete-{{.ID}}" type="checkbox" name="confirm" value="yes" form="delete-session-{{.ID}}" required>
-                      <label class="form-check-label small" for="confirm-delete-{{.ID}}">I confirm permanent deletion of this saved history.</label>
-                    </div>
-                    <button class="btn btn-outline-danger btn-sm" type="submit" form="delete-session-{{.ID}}">Delete saved session</button>
-                  </div>
-                  {{else}}
-                  <p class="card-body pt-0 small text-body-secondary mb-0">Active sessions cannot be deleted.</p>
-                  {{end}}
+              {{if .CanDelete}}
+              <div class="card-body pt-0">
+                <div class="form-check mb-2">
+                  <input class="form-check-input" id="confirm-delete-{{.ID}}" type="checkbox" name="confirm" value="yes" form="delete-session-{{.ID}}" required>
+                  <label class="form-check-label small" for="confirm-delete-{{.ID}}">I confirm permanent deletion of this saved history.</label>
                 </div>
+                <button class="btn btn-outline-danger btn-sm" type="submit" form="delete-session-{{.ID}}">Delete saved session</button>
               </div>
+              {{else}}
+              <p class="card-body pt-0 small text-body-secondary mb-0">Active sessions cannot be deleted.</p>
               {{end}}
             </div>
-            {{if .SavedSessionsHint}}<p class="alert alert-warning mt-3 mb-0" role="status">{{.SavedSessionsHint}}</p>{{else if not .SavedSessions}}<p class="text-body-secondary small mt-3 mb-0">No saved sessions yet.</p>{{end}}
-          </fieldset>
-
-          <div class="row g-2 align-items-end mb-3">
-            <div class="col-12 col-sm-8 col-lg-6">
-              <label class="form-label mb-1" for="subdirectory">Fresh session subdirectory</label>
-              <select class="form-select" id="subdirectory" name="subdirectory">
-                <option value="" selected>All files (root)</option>
-                {{range .Subdirectories}}
-                <option value="{{.}}">{{.}}</option>
-                {{end}}
-              </select>
-              <div class="form-text">Used only for a fresh session; saved sessions keep their original configuration.</div>
-            </div>
-            <div class="col-12 col-sm-auto">
-              <button class="btn btn-primary w-100" type="submit" {{if .Busy}}disabled{{end}}>Continue with selection</button>
-            </div>
           </div>
-          {{if .SubdirectoryHint}}<p class="text-body-secondary small mb-3">{{.SubdirectoryHint}}</p>{{end}}
-        </form>
+          {{end}}
+        </div>
         {{range .SavedSessions}}
         {{if .CanDelete}}<form id="delete-session-{{.ID}}" action="/sessions/delete?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post"><input type="hidden" name="session_id" value="{{.ID}}"></form>{{end}}
         {{end}}

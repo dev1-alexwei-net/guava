@@ -486,6 +486,62 @@ func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testi
 	}
 }
 
+func TestResumeIgnoresFormSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	savedDatabase := filepath.Join(dir, "saved-fileexplorer.sqlite")
+	createManifestFixture(t, savedDatabase, nil, nil)
+	savedRoot := filepath.Join(dir, "saved-root")
+	if err := os.MkdirAll(savedRoot, 0o755); err != nil {
+		t.Fatalf("create saved root: %v", err)
+	}
+	storePath := filepath.Join(dir, "task-sessions.sqlite")
+	store, err := sessions.OpenStore(storePath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	saved, err := store.Create(context.Background(), sessions.Record{
+		AgentID: "saved-agent", RootDirectory: savedRoot, Subdirectory: "docs",
+		DatabaseFile: savedDatabase, Status: sessions.StatusFailed,
+		LastError: "gateway unavailable", FinishedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Create saved session: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close initial store: %v", err)
+	}
+
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer refreshServer.Close()
+	base := testConfig(t, filepath.Join(dir, "wrong-fileexplorer.sqlite"))
+	base.FileExplorerURL = refreshServer.URL
+	base.AgentID = "fresh-agent"
+	app, err := newDashboard(base, slog.LevelInfo, storePath)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	// A resume request must use the saved configuration even when the form
+	// carries a subdirectory selection. An unknown value would reject a fresh
+	// start, so this pins the resume path to the saved record.
+	form := url.Values{"session_id": {saved.ID}, "subdirectory": {"stale-subdirectory"}}
+	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	app.start(rec, req)
+	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("resume response = %d %q, want a successful redirect without subdirectory validation", rec.Code, rec.Header().Get("Location"))
+	}
+
+	snapshot := waitForControllerStatus(t, app.controller, "completed")
+	if snapshot.AgentID != "saved-agent" || snapshot.Subdirectory != "docs" {
+		t.Errorf("resumed session summary = %+v, want saved agent and subdirectory", snapshot)
+	}
+}
+
 func createIndexedFile(t *testing.T, root, databasePath, relativePath, content string) {
 	t.Helper()
 	filePath := filepath.Join(root, filepath.FromSlash(relativePath))
@@ -653,7 +709,7 @@ func createManifestFixture(t *testing.T, databasePath string, files []string, di
 	}
 }
 
-func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
+func TestShowRendersSubdirectoryControlOnlyForFreshSession(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
 	createManifestFixture(t, databasePath, nil, nil)
 	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
@@ -679,16 +735,47 @@ func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`<link href="/static/bootstrap.min.css" rel="stylesheet">`,
-		`id="session-fresh" type="radio" name="session_id" value="" checked`,
-		`value="paused-session"`, `agent-paused`, `paused`, `/docs`,
-		`value="active-session"`, `agent-active`, `active`,
-		`id="saved-session-active-session" type="radio" name="session_id" value="active-session" disabled`,
+		`id="fresh-session-heading"`, `>Start a fresh session<`, `>Start fresh session<`,
+		`id="resume-heading"`, `>Resume a saved session<`,
+		`name="subdirectory"`, `id="subdirectory"`,
+		`name="session_id" value="paused-session"`, `agent-paused`, `>paused<`, `/docs`, `>Resume<`,
+		`name="session_id" value="active-session"`, `agent-active`, `>active<`,
+		`type="submit" disabled>Resume<`,
 		`col-12 col-md-6`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered page missing %q", want)
 		}
 	}
+	if got := strings.Count(body, `name="subdirectory"`); got != 1 {
+		t.Errorf("rendered page has %d subdirectory controls, want exactly one", got)
+	}
+	for _, gone := range []string{`Choose a task session`, `Continue with selection`, `id="session-fresh"`, `type="radio"`} {
+		if strings.Contains(body, gone) {
+			t.Errorf("rendered page still contains %q", gone)
+		}
+	}
+
+	// The subdirectory control belongs to the fresh-session section, before
+	// the resume section, and the fresh form carries no session_id field.
+	freshHeading := strings.Index(body, `id="fresh-session-heading"`)
+	resumeHeading := strings.Index(body, `id="resume-heading"`)
+	subdirectoryControl := strings.Index(body, `id="subdirectory"`)
+	if freshHeading == -1 || resumeHeading == -1 || subdirectoryControl == -1 ||
+		!(freshHeading < subdirectoryControl && subdirectoryControl < resumeHeading) {
+		t.Errorf("subdirectory control must sit between the fresh-session heading (at %d) and the resume heading (at %d), got %d", freshHeading, resumeHeading, subdirectoryControl)
+	}
+	freshSection := body[freshHeading:resumeHeading]
+	if strings.Contains(freshSection, `name="session_id"`) {
+		t.Error("fresh-session section must not include a session_id control")
+	}
+	resumeSection := body[resumeHeading:]
+	for _, want := range []string{`name="session_id" value="paused-session"`, `name="session_id" value="active-session"`} {
+		if !strings.Contains(resumeSection, want) {
+			t.Errorf("resume section missing %q", want)
+		}
+	}
+
 	if !strings.Contains(body, `name="confirm" value="yes" form="delete-session-paused-session" required`) {
 		t.Error("rendered page missing explicit saved-history deletion confirmation")
 	}

@@ -167,8 +167,8 @@ func TestPreviewPaneKeepsBoundedHeightWithInternalScroll(t *testing.T) {
 // TestRowActionsRevealOnHoverAndFocusForDesktop pins the #180 interaction
 // contract from #178: on hover-capable devices the row action cluster rests
 // calm and is revealed by the row's :hover or :focus-within. The hidden rest
-// state uses opacity/visibility, not display, so the cluster keeps its layout
-// box and the row never reflows when the menu appears. Outside the hover
+// state uses opacity/visibility, not display, and the absolute positioning
+// keeps the row from reflowing when the menu appears. Outside the hover
 // query the cluster stays visible for non-hover devices (#181).
 func TestRowActionsRevealOnHoverAndFocusForDesktop(t *testing.T) {
 	root := t.TempDir()
@@ -279,12 +279,11 @@ func TestRowActionsTouchContract(t *testing.T) {
 	assertNoClientSideJavaScript(t, body)
 }
 
-// TestRowActionsSmallScreenAlignment pins the #209 contract: below the sm
-// breakpoint the row action cluster is a column whose buttons stretch to the
-// full row width (equal size, aligned edges, regardless of label), while at
-// sm and up it hands back to the side-by-side row with centered buttons — the
-// desktop layout is unchanged.
-func TestRowActionsSmallScreenAlignment(t *testing.T) {
+// TestRowActionsOverlayAndSmallScreenLayout pins the #216 contract: action
+// controls are absolutely positioned within each entry and may overlap its
+// name, while narrow screens use a bounded two-column grid that stays inside
+// the row and preserves the existing touch-target behavior.
+func TestRowActionsOverlayAndSmallScreenLayout(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
 		t.Fatal(err)
@@ -300,24 +299,34 @@ func TestRowActionsSmallScreenAlignment(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// The cluster is a column below sm (flex-column) and a row at sm and up
-	// (flex-sm-row), exactly as before…
-	cluster := `<div class="row-actions d-flex flex-column flex-sm-row flex-wrap align-items-stretch align-items-sm-center gap-2">`
-	if !strings.Contains(body, cluster) {
-		t.Error("row action cluster does not pin the #209 alignment contract")
+	for _, want := range []string{
+		"class=\"list-group-item p-3 entry-row\"",
+		"class=\"list-group-item p-3 entry-row entry-row-file\"",
+		"li.list-group-item.entry-row { position: relative;",
+		"li.list-group-item.entry-row .row-actions {",
+		"position: absolute;",
+		"inset-block-start: 50%;",
+		"inset-inline-end: .75rem;",
+		"transform: translateY(-50%);",
+		"max-inline-size: calc(100% - 1.5rem);",
+		"background-color: var(--bs-body-bg);",
+		"@media (max-width: 575.98px)",
+		"grid-template-columns: repeat(2, minmax(0, 1fr));",
+		"inline-size: max-content;",
+		"li.list-group-item.entry-row .row-actions .btn { inline-size: 100%; }",
+		"li.list-group-item.entry-row-file { min-block-size: 8.5rem; }",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("row-action overlay contract missing %q", want)
+		}
 	}
-	// …with stretch alignment as the base (mobile column: every button takes
-	// the full row width, so Edit/Download/Rename/Delete all render at the
-	// same size with aligned edges)…
-	if !strings.Contains(body, "align-items-stretch") {
-		t.Error("small-screen column mode is missing align-items-stretch, so label widths would differ")
+	if strings.Contains(body, "class=\"row-actions d-flex") {
+		t.Error("row action cluster remains in the entry's flex layout instead of overlaying it")
 	}
-	// …and the sm-prefixed override restores the desktop row's centering.
-	if !strings.Contains(body, "align-items-sm-center") {
-		t.Error("sm-and-up row mode is missing align-items-sm-center; the desktop layout would change")
+	if strings.Contains(body, "overflow: hidden") || strings.Contains(body, "overflow: clip") {
+		t.Error("row layout clips action focus indicators")
 	}
-	// Every action is still rendered in both entry kinds.
-	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</a>`, `>Delete</a>`} {
+	for _, want := range []string{">Edit</a>", ">Download</a>", ">Rename</a>", ">Delete</a>"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("row action %q missing from the listing", want)
 		}

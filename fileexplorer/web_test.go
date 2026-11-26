@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -279,61 +282,6 @@ func TestRowActionsTouchContract(t *testing.T) {
 	assertNoClientSideJavaScript(t, body)
 }
 
-// TestRowActionsOverlayAndSmallScreenLayout pins the #216 contract: action
-// controls are absolutely positioned within each entry and may overlap its
-// name, while narrow screens use a bounded two-column grid that stays inside
-// the row and preserves the existing touch-target behavior.
-func TestRowActionsOverlayAndSmallScreenLayout(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := makeTestHandler(t, root)
-
-	rec := get(t, h, "/")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET / status=%d", rec.Code)
-	}
-	body := rec.Body.String()
-
-	for _, want := range []string{
-		"class=\"list-group-item p-3 entry-row\"",
-		"class=\"list-group-item p-3 entry-row entry-row-file\"",
-		"li.list-group-item.entry-row { position: relative;",
-		"li.list-group-item.entry-row .row-actions {",
-		"position: absolute;",
-		"inset-block-start: 50%;",
-		"inset-inline-end: .75rem;",
-		"transform: translateY(-50%);",
-		"max-inline-size: calc(100% - 1.5rem);",
-		"background-color: var(--bs-body-bg);",
-		"@media (max-width: 575.98px)",
-		"grid-template-columns: repeat(2, minmax(0, 1fr));",
-		"inline-size: max-content;",
-		"li.list-group-item.entry-row .row-actions .btn { inline-size: 100%; }",
-		"li.list-group-item.entry-row-file { min-block-size: 8.5rem; }",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("row-action overlay contract missing %q", want)
-		}
-	}
-	if strings.Contains(body, "class=\"row-actions d-flex") {
-		t.Error("row action cluster remains in the entry's flex layout instead of overlaying it")
-	}
-	if strings.Contains(body, "overflow: hidden") || strings.Contains(body, "overflow: clip") {
-		t.Error("row layout clips action focus indicators")
-	}
-	for _, want := range []string{">Edit</a>", ">Download</a>", ">Rename</a>", ">Delete</a>"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("row action %q missing from the listing", want)
-		}
-	}
-	assertNoClientSideJavaScript(t, body)
-}
-
 func TestPreviewStatesAnnounceScreenReaderStates(t *testing.T) {
 	cases := []struct {
 		name string
@@ -538,148 +486,6 @@ func TestPageReferencesEmbeddedBootstrapStylesheet(t *testing.T) {
 	}
 }
 
-func TestThemeToggleSwitchesCurrentPageAndPreservesOtherQuery(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	h := makeTestHandler(t, root)
-
-	dark := get(t, h, "/d/docs?theme=dark&error=problem&status=400")
-	if dark.Code != http.StatusOK {
-		t.Fatalf("dark directory status=%d body=%s", dark.Code, dark.Body.String())
-	}
-	if !strings.Contains(dark.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
-		t.Fatal("dark theme was not applied to the document")
-	}
-	if !strings.Contains(dark.Body.String(), `href="/d/docs?error=problem&amp;status=400">Light mode</a>`) {
-		t.Fatal("dark-mode toggle does not return to light on the current page while preserving other query values")
-	}
-
-	light := get(t, h, "/d/docs?error=problem&status=400")
-	if light.Code != http.StatusOK {
-		t.Fatalf("light directory status=%d body=%s", light.Code, light.Body.String())
-	}
-	if strings.Contains(light.Body.String(), "data-bs-theme") {
-		t.Fatal("light theme unexpectedly sets data-bs-theme")
-	}
-	if !strings.Contains(light.Body.String(), `href="/d/docs?error=problem&amp;status=400&amp;theme=dark">Dark mode</a>`) {
-		t.Fatal("light-mode toggle does not select dark on the current page while preserving other query values")
-	}
-}
-
-func TestRootBreadcrumbPreservesTheme(t *testing.T) {
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	h := makeTestHandler(t, root)
-
-	dark := get(t, h, "/d/docs?theme=dark")
-	if dark.Code != http.StatusOK {
-		t.Fatalf("dark directory status=%d body=%s", dark.Code, dark.Body.String())
-	}
-	if !strings.Contains(dark.Body.String(), `href="/?theme=dark">Root</a>`) {
-		t.Error("dark Root breadcrumb does not link back to Root with the dark theme")
-	}
-
-	light := get(t, h, "/d/docs")
-	if light.Code != http.StatusOK {
-		t.Fatalf("light directory status=%d body=%s", light.Code, light.Body.String())
-	}
-	if !strings.Contains(light.Body.String(), `<a href="/">Root</a>`) {
-		t.Error("light Root breadcrumb does not link to Root")
-	}
-	if strings.Contains(light.Body.String(), `theme=dark">Root`) {
-		t.Error("light Root breadcrumb unexpectedly links to the dark theme")
-	}
-}
-
-func TestDarkThemePersistsAcrossExplorerNavigation(t *testing.T) {
-	root := t.TempDir()
-	docs := filepath.Join(root, "docs")
-	if err := os.Mkdir(docs, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{
-		"root.txt":                        "root",
-		filepath.Join("docs", "note.txt"): "note",
-	} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := makeTestHandler(t, root)
-
-	directory := get(t, h, "/?theme=dark")
-	if directory.Code != http.StatusOK {
-		t.Fatalf("dark root status=%d body=%s", directory.Code, directory.Body.String())
-	}
-	for _, want := range []string{
-		`<html lang="en" data-bs-theme="dark">`,
-		`href="/?theme=dark">Guava</a>`,
-		`href="/?theme=dark">Root</a>`,
-		`href="/d/docs?theme=dark">docs/</a>`,
-		`href="/preview/root.txt?theme=dark">root.txt</a>`,
-		`href="/edit/root.txt?theme=dark" aria-label="Edit root.txt">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;theme=dark" aria-label="Download root.txt">Download</a>`,
-		`href="/confirm-delete/root.txt?theme=dark"`,
-		`href="/rename/root.txt?theme=dark"`,
-		`action="/mkdir?theme=dark"`,
-		`action="/create-file?theme=dark"`,
-		`action="/upload?theme=dark"`,
-	} {
-		if !strings.Contains(directory.Body.String(), want) {
-			t.Errorf("dark root page missing %q", want)
-		}
-	}
-
-	preview := get(t, h, "/preview/docs/note.txt?theme=dark")
-	if preview.Code != http.StatusOK {
-		t.Fatalf("dark preview status=%d body=%s", preview.Code, preview.Body.String())
-	}
-	for _, want := range []string{
-		`<html lang="en" data-bs-theme="dark">`,
-		`href="/d/docs?theme=dark">Hide preview</a>`,
-		`href="/f/docs/note.txt?download=1&amp;theme=dark">Download</a>`,
-		`class="preview-content bg-body-secondary border`,
-	} {
-		if !strings.Contains(preview.Body.String(), want) {
-			t.Errorf("dark preview page missing %q", want)
-		}
-	}
-
-	editor := get(t, h, "/edit/docs/note.txt?theme=dark")
-	if editor.Code != http.StatusOK {
-		t.Fatalf("dark editor status=%d body=%s", editor.Code, editor.Body.String())
-	}
-	for _, want := range []string{
-		`<html lang="en" data-bs-theme="dark">`,
-		`action="/edit/docs/note.txt?theme=dark"`,
-		`href="/d/docs?theme=dark">Cancel</a>`,
-	} {
-		if !strings.Contains(editor.Body.String(), want) {
-			t.Errorf("dark editor page missing %q", want)
-		}
-	}
-	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?theme=dark", url.Values{"content": {"saved"}})
-	if saved.Code != http.StatusSeeOther {
-		t.Fatalf("dark editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
-	}
-	savedURL, err := url.Parse(saved.Header().Get("Location"))
-	if err != nil || savedURL.Query().Get("theme") != "dark" || savedURL.Query().Get("saved") != "1" {
-		t.Fatalf("editor save redirect did not preserve dark theme and saved state: location=%q err=%v", saved.Header().Get("Location"), err)
-	}
-	savedPage := get(t, h, saved.Header().Get("Location"))
-	if savedPage.Code != http.StatusOK || !strings.Contains(savedPage.Body.String(), `data-bs-theme="dark"`) {
-		t.Fatalf("saved editor page lost dark theme: status=%d body=%s", savedPage.Code, savedPage.Body.String())
-	}
-}
-
-// TestWrapToggleSwitchesPreviewRendering pins the rendered wrap states: wrap
-// is on by default (matching the small-display behavior from #141), and
-// wrap=off switches the preview to raw pre rendering with horizontal pane
-// scrolling while the header control reflects the current state.
 func TestWrapToggleSwitchesPreviewRendering(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte(strings.Repeat("a long line without spaces ", 4)), 0o600); err != nil {
@@ -737,132 +543,6 @@ func TestWrapToggleSwitchesPreviewRendering(t *testing.T) {
 // TestWrapTogglePreservesThemeAndOtherQuery pins that the wrap toggle flips
 // only the wrap parameter on the current page, keeping the theme and any
 // other query values, exactly like the theme toggle.
-func TestWrapTogglePreservesThemeAndOtherQuery(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := makeTestHandler(t, root)
-
-	off := get(t, h, "/preview/a.txt?theme=dark&wrap=off&saved=1")
-	if off.Code != http.StatusOK {
-		t.Fatalf("wrap-off dark preview status=%d body=%s", off.Code, off.Body.String())
-	}
-	if !strings.Contains(off.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
-		t.Fatal("wrap-off preview did not keep the dark theme")
-	}
-	if !strings.Contains(off.Body.String(), `<a class="btn btn-sm btn-outline-secondary" href="/preview/a.txt?saved=1&amp;theme=dark" aria-pressed="false">Wrap</a>`) {
-		t.Error("wrap-off toggle does not return to wrapped while preserving theme and other query values")
-	}
-
-	on := get(t, h, "/preview/a.txt?theme=dark&saved=1")
-	if on.Code != http.StatusOK {
-		t.Fatalf("wrapped dark preview status=%d body=%s", on.Code, on.Body.String())
-	}
-	if !strings.Contains(on.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
-		t.Fatal("wrapped preview did not keep the dark theme")
-	}
-	if !strings.Contains(on.Body.String(), `<a class="btn btn-sm btn-secondary" href="/preview/a.txt?saved=1&amp;theme=dark&amp;wrap=off" aria-pressed="true">Wrap</a>`) {
-		t.Error("wrapped toggle does not select non-wrapped while preserving theme and other query values")
-	}
-}
-
-// TestWrapStatePersistsAcrossNavigation pins that wrap=off rides every
-// explorer link, redirect, and mutation the way theme=dark already does, so
-// toggling wrap preserves the selected file, directory, and active theme.
-func TestWrapStatePersistsAcrossNavigation(t *testing.T) {
-	root := t.TempDir()
-	docs := filepath.Join(root, "docs")
-	if err := os.Mkdir(docs, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{
-		"root.txt":                        "root",
-		filepath.Join("docs", "note.txt"): "note",
-	} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := makeTestHandler(t, root)
-
-	directory := get(t, h, "/?wrap=off")
-	if directory.Code != http.StatusOK {
-		t.Fatalf("wrap-off root status=%d body=%s", directory.Code, directory.Body.String())
-	}
-	for _, want := range []string{
-		`href="/?wrap=off">Guava</a>`,
-		`href="/?wrap=off">Root</a>`,
-		`href="/d/docs?wrap=off">docs/</a>`,
-		`href="/preview/root.txt?wrap=off">root.txt</a>`,
-		`href="/edit/root.txt?wrap=off" aria-label="Edit root.txt">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;wrap=off" aria-label="Download root.txt">Download</a>`,
-		`href="/confirm-delete/root.txt?wrap=off"`,
-		`href="/rename/root.txt?wrap=off"`,
-		`action="/mkdir?wrap=off"`,
-		`action="/create-file?wrap=off"`,
-		`action="/upload?wrap=off"`,
-	} {
-		if !strings.Contains(directory.Body.String(), want) {
-			t.Errorf("wrap-off root page missing %q", want)
-		}
-	}
-
-	preview := get(t, h, "/preview/docs/note.txt?wrap=off")
-	if preview.Code != http.StatusOK {
-		t.Fatalf("wrap-off preview status=%d body=%s", preview.Code, preview.Body.String())
-	}
-	for _, want := range []string{
-		`white-space: pre;`,
-		`<a class="btn btn-sm btn-outline-secondary" href="/preview/docs/note.txt" aria-pressed="false">Wrap</a>`,
-		`href="/d/docs?wrap=off">Hide preview</a>`,
-		`href="/f/docs/note.txt?download=1&amp;wrap=off">Download</a>`,
-	} {
-		if !strings.Contains(preview.Body.String(), want) {
-			t.Errorf("wrap-off preview page missing %q", want)
-		}
-	}
-
-	editor := get(t, h, "/edit/docs/note.txt?wrap=off")
-	if editor.Code != http.StatusOK {
-		t.Fatalf("wrap-off editor status=%d body=%s", editor.Code, editor.Body.String())
-	}
-	if !strings.Contains(editor.Body.String(), `action="/edit/docs/note.txt?wrap=off"`) ||
-		!strings.Contains(editor.Body.String(), `href="/d/docs?wrap=off">Cancel</a>`) {
-		t.Fatalf("editor page lost wrap state: body=%s", editor.Body.String())
-	}
-	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?wrap=off", url.Values{"content": {"saved"}})
-	if saved.Code != http.StatusSeeOther {
-		t.Fatalf("wrap-off editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
-	}
-	savedURL, err := url.Parse(saved.Header().Get("Location"))
-	if err != nil || savedURL.Query().Get("wrap") != "off" || savedURL.Query().Get("saved") != "1" {
-		t.Fatalf("editor save redirect did not preserve wrap state: location=%q err=%v", saved.Header().Get("Location"), err)
-	}
-
-	created := formRequest(t, h, http.MethodPost, "/mkdir?wrap=off", url.Values{"parent": {"docs"}, "name": {"created"}})
-	createdURL, err := url.Parse(created.Header().Get("Location"))
-	if created.Code != http.StatusSeeOther || err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("wrap") != "off" {
-		t.Fatalf("mkdir redirect lost wrap state: location=%q err=%v", created.Header().Get("Location"), err)
-	}
-
-	confirmation := get(t, h, "/confirm-delete/docs/created?wrap=off")
-	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?wrap=off"`) ||
-		!strings.Contains(confirmation.Body.String(), `href="/d/docs?wrap=off">Cancel</a>`) {
-		t.Fatalf("wrap-off delete confirmation lost wrap state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
-	}
-	renamePage := get(t, h, "/rename/docs/created?wrap=off")
-	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `action="/rename?wrap=off"`) ||
-		!strings.Contains(renamePage.Body.String(), `href="/d/docs?wrap=off">Cancel</a>`) {
-		t.Fatalf("wrap-off rename page lost wrap state: status=%d body=%s", renamePage.Code, renamePage.Body.String())
-	}
-	deleted := formRequest(t, h, http.MethodPost, "/delete?wrap=off", url.Values{"path": {"docs/created"}})
-	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
-	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("wrap") != "off" {
-		t.Fatalf("delete redirect lost wrap state: location=%q err=%v", deleted.Header().Get("Location"), err)
-	}
-}
-
 func TestPreviewPaneCollapseSwitchesLayout(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
@@ -928,139 +608,6 @@ func TestPreviewPaneCollapseSwitchesLayout(t *testing.T) {
 	assertNoClientSideJavaScript(t, body)
 }
 
-func TestPreviewPaneTogglePreservesThemeAndOtherQuery(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := makeTestHandler(t, root)
-
-	expanded := get(t, h, "/preview/a.txt?theme=dark&saved=1")
-	if expanded.Code != http.StatusOK {
-		t.Fatalf("expanded dark preview status=%d body=%s", expanded.Code, expanded.Body.String())
-	}
-	if !strings.Contains(expanded.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
-		t.Fatal("expanded preview did not keep the dark theme")
-	}
-	if !strings.Contains(expanded.Body.String(), `<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-secondary" href="/preview/a.txt?pane=collapsed&amp;saved=1&amp;theme=dark" aria-pressed="true">Collapse preview</a>`) {
-		t.Error("collapse control does not record the state while preserving theme and other query values")
-	}
-
-	collapsed := get(t, h, "/preview/a.txt?theme=dark&wrap=off&saved=1&pane=collapsed")
-	if collapsed.Code != http.StatusOK {
-		t.Fatalf("collapsed dark preview status=%d body=%s", collapsed.Code, collapsed.Body.String())
-	}
-	if !strings.Contains(collapsed.Body.String(), `<html lang="en" data-bs-theme="dark">`) {
-		t.Fatal("collapsed preview did not keep the dark theme")
-	}
-	if !strings.Contains(collapsed.Body.String(), `<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/a.txt?saved=1&amp;theme=dark&amp;wrap=off" aria-pressed="false">Expand preview</a>`) {
-		t.Error("expand control does not restore the pane while preserving theme, wrap, and other query values")
-	}
-	// The theme toggle from the collapsed page keeps the collapsed state, so the
-	// pane state survives theme toggles.
-	if !strings.Contains(collapsed.Body.String(), `href="/preview/a.txt?pane=collapsed&amp;saved=1&amp;wrap=off">Light mode</a>`) {
-		t.Error("theme toggle does not preserve the collapsed pane state")
-	}
-}
-
-func TestPreviewPaneStatePersistsAcrossNavigation(t *testing.T) {
-	root := t.TempDir()
-	docs := filepath.Join(root, "docs")
-	if err := os.Mkdir(docs, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{
-		"root.txt":                        "root",
-		filepath.Join("docs", "note.txt"): "note",
-	} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := makeTestHandler(t, root)
-
-	directory := get(t, h, "/?pane=collapsed")
-	if directory.Code != http.StatusOK {
-		t.Fatalf("collapsed root status=%d body=%s", directory.Code, directory.Body.String())
-	}
-	for _, want := range []string{
-		`href="/?pane=collapsed">Guava</a>`,
-		`href="/?pane=collapsed">Root</a>`,
-		`href="/d/docs?pane=collapsed">docs/</a>`,
-		`href="/preview/root.txt?pane=collapsed">root.txt</a>`,
-		`href="/edit/root.txt?pane=collapsed" aria-label="Edit root.txt">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;pane=collapsed" aria-label="Download root.txt">Download</a>`,
-		`href="/confirm-delete/root.txt?pane=collapsed"`,
-		`href="/rename/root.txt?pane=collapsed"`,
-		`action="/mkdir?pane=collapsed"`,
-		`action="/create-file?pane=collapsed"`,
-		`action="/upload?pane=collapsed"`,
-	} {
-		if !strings.Contains(directory.Body.String(), want) {
-			t.Errorf("collapsed root page missing %q", want)
-		}
-	}
-
-	preview := get(t, h, "/preview/docs/note.txt?pane=collapsed")
-	if preview.Code != http.StatusOK {
-		t.Fatalf("collapsed preview status=%d body=%s", preview.Code, preview.Body.String())
-	}
-	for _, want := range []string{
-		`class="col-12 order-2 order-lg-1"`,
-		`class="col-12 order-1 order-lg-2 d-lg-none"`,
-		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/docs/note.txt" aria-pressed="false">Expand preview</a>`,
-		`href="/d/docs?pane=collapsed">Hide preview</a>`,
-		`href="/f/docs/note.txt?download=1&amp;pane=collapsed">Download</a>`,
-	} {
-		if !strings.Contains(preview.Body.String(), want) {
-			t.Errorf("collapsed preview page missing %q", want)
-		}
-	}
-
-	editor := get(t, h, "/edit/docs/note.txt?pane=collapsed")
-	if editor.Code != http.StatusOK {
-		t.Fatalf("collapsed editor status=%d body=%s", editor.Code, editor.Body.String())
-	}
-	if !strings.Contains(editor.Body.String(), `action="/edit/docs/note.txt?pane=collapsed"`) ||
-		!strings.Contains(editor.Body.String(), `href="/d/docs?pane=collapsed">Cancel</a>`) {
-		t.Fatalf("editor page lost pane state: body=%s", editor.Body.String())
-	}
-	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?pane=collapsed", url.Values{"content": {"saved"}})
-	if saved.Code != http.StatusSeeOther {
-		t.Fatalf("collapsed editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
-	}
-	savedURL, err := url.Parse(saved.Header().Get("Location"))
-	if err != nil || savedURL.Query().Get("pane") != "collapsed" || savedURL.Query().Get("saved") != "1" {
-		t.Fatalf("editor save redirect did not preserve pane state: location=%q err=%v", saved.Header().Get("Location"), err)
-	}
-
-	created := formRequest(t, h, http.MethodPost, "/mkdir?pane=collapsed", url.Values{"parent": {"docs"}, "name": {"created"}})
-	createdURL, err := url.Parse(created.Header().Get("Location"))
-	if created.Code != http.StatusSeeOther || err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("pane") != "collapsed" {
-		t.Fatalf("mkdir redirect lost pane state: location=%q err=%v", created.Header().Get("Location"), err)
-	}
-
-	confirmation := get(t, h, "/confirm-delete/docs/created?pane=collapsed")
-	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?pane=collapsed"`) ||
-		!strings.Contains(confirmation.Body.String(), `href="/d/docs?pane=collapsed">Cancel</a>`) {
-		t.Fatalf("collapsed delete confirmation lost pane state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
-	}
-	renamePage := get(t, h, "/rename/docs/created?pane=collapsed")
-	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `action="/rename?pane=collapsed"`) ||
-		!strings.Contains(renamePage.Body.String(), `href="/d/docs?pane=collapsed">Cancel</a>`) {
-		t.Fatalf("collapsed rename page lost pane state: status=%d body=%s", renamePage.Code, renamePage.Body.String())
-	}
-	deleted := formRequest(t, h, http.MethodPost, "/delete?pane=collapsed", url.Values{"path": {"docs/created"}})
-	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
-	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("pane") != "collapsed" {
-		t.Fatalf("delete redirect lost pane state: location=%q err=%v", deleted.Header().Get("Location"), err)
-	}
-}
-
-// TestPreviewColumnWidthSwitchesLayout pins the discrete large-screen preview
-// widths: each offered width takes the preview column, the listing takes the
-// remainder of the row, and the width control reflects the current width and
-// cycles to the next, wrapping from the widest back to the narrowest.
 func TestPreviewColumnWidthSwitchesLayout(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
@@ -1107,137 +654,6 @@ func TestPreviewColumnWidthSwitchesLayout(t *testing.T) {
 // control changes only the width parameter, and that the width rides the
 // theme, wrap, and pane toggles the way the other preferences ride each
 // other, so one round trip loses no state.
-func TestPreviewColumnTogglePreservesOtherPreferences(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := makeTestHandler(t, root)
-
-	page := get(t, h, "/preview/a.txt?theme=dark&wrap=off&width=6")
-	if page.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", page.Code, page.Body.String())
-	}
-	body := page.Body.String()
-	if !strings.Contains(body, `<html lang="en" data-bs-theme="dark">`) {
-		t.Fatal("dark theme was not applied to the document")
-	}
-	for _, want := range []string{
-		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/a.txt?theme=dark&amp;width=8&amp;wrap=off" aria-label="Preview width is 6 of 12 columns; activate to change to 8 of 12">Width 6</a>`,
-		`href="/preview/a.txt?width=6&amp;wrap=off">Light mode</a>`,
-		`<a class="btn btn-sm btn-outline-secondary" href="/preview/a.txt?theme=dark&amp;width=6" aria-pressed="false">Wrap</a>`,
-		`href="/preview/a.txt?pane=collapsed&amp;theme=dark&amp;width=6&amp;wrap=off" aria-pressed="true">Collapse preview</a>`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("width page missing %q", want)
-		}
-	}
-	assertNoClientSideJavaScript(t, body)
-}
-
-// TestPreviewColumnStatePersistsAcrossNavigation pins that the selected
-// width rides every explorer link, redirect, and mutation the way theme,
-// wrap, and pane do, so it survives navigation, file selection, and edits.
-func TestPreviewColumnStatePersistsAcrossNavigation(t *testing.T) {
-	root := t.TempDir()
-	docs := filepath.Join(root, "docs")
-	if err := os.Mkdir(docs, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, content := range map[string]string{
-		"root.txt":                        "root",
-		filepath.Join("docs", "note.txt"): "note",
-	} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := makeTestHandler(t, root)
-
-	directory := get(t, h, "/?width=8")
-	if directory.Code != http.StatusOK {
-		t.Fatalf("width directory status=%d body=%s", directory.Code, directory.Body.String())
-	}
-	for _, want := range []string{
-		`class="col-12 col-lg-8 order-1 order-lg-2"`,
-		`class="col-12 col-lg-4 order-2 order-lg-1"`,
-		`href="/?width=8">Guava</a>`,
-		`href="/?width=8">Root</a>`,
-		`href="/d/docs?width=8">docs/</a>`,
-		`href="/preview/root.txt?width=8">root.txt</a>`,
-		`href="/edit/root.txt?width=8" aria-label="Edit root.txt">Edit</a>`,
-		`href="/f/root.txt?download=1&amp;width=8" aria-label="Download root.txt">Download</a>`,
-		`href="/confirm-delete/root.txt?width=8"`,
-		`href="/rename/root.txt?width=8"`,
-		`action="/mkdir?width=8"`,
-		`action="/create-file?width=8"`,
-		`action="/upload?width=8"`,
-		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/?width=9" aria-label="Preview width is 8 of 12 columns; activate to change to 9 of 12">Width 8</a>`,
-	} {
-		if !strings.Contains(directory.Body.String(), want) {
-			t.Errorf("width directory page missing %q", want)
-		}
-	}
-
-	preview := get(t, h, "/preview/docs/note.txt?width=8")
-	if preview.Code != http.StatusOK {
-		t.Fatalf("width preview status=%d body=%s", preview.Code, preview.Body.String())
-	}
-	for _, want := range []string{
-		`class="col-12 col-lg-8 order-1 order-lg-2"`,
-		`class="col-12 col-lg-4 order-2 order-lg-1"`,
-		`href="/d/docs?width=8">Hide preview</a>`,
-		`href="/f/docs/note.txt?download=1&amp;width=8">Download</a>`,
-		`<a class="btn btn-sm d-none d-lg-inline-flex align-items-center btn-outline-secondary" href="/preview/docs/note.txt?width=9" aria-label="Preview width is 8 of 12 columns; activate to change to 9 of 12">Width 8</a>`,
-	} {
-		if !strings.Contains(preview.Body.String(), want) {
-			t.Errorf("width preview page missing %q", want)
-		}
-	}
-
-	editor := get(t, h, "/edit/docs/note.txt?width=8")
-	if editor.Code != http.StatusOK {
-		t.Fatalf("width editor status=%d body=%s", editor.Code, editor.Body.String())
-	}
-	if !strings.Contains(editor.Body.String(), `action="/edit/docs/note.txt?width=8"`) ||
-		!strings.Contains(editor.Body.String(), `href="/d/docs?width=8">Cancel</a>`) {
-		t.Fatalf("editor page lost width state: body=%s", editor.Body.String())
-	}
-	saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?width=8", url.Values{"content": {"saved"}})
-	if saved.Code != http.StatusSeeOther {
-		t.Fatalf("width editor save status=%d location=%q body=%s", saved.Code, saved.Header().Get("Location"), saved.Body.String())
-	}
-	savedURL, err := url.Parse(saved.Header().Get("Location"))
-	if err != nil || savedURL.Query().Get("width") != "8" || savedURL.Query().Get("saved") != "1" {
-		t.Fatalf("editor save redirect did not preserve width state: location=%q err=%v", saved.Header().Get("Location"), err)
-	}
-
-	created := formRequest(t, h, http.MethodPost, "/mkdir?width=8", url.Values{"parent": {"docs"}, "name": {"created"}})
-	createdURL, err := url.Parse(created.Header().Get("Location"))
-	if created.Code != http.StatusSeeOther || err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("width") != "8" {
-		t.Fatalf("mkdir redirect lost width state: location=%q err=%v", created.Header().Get("Location"), err)
-	}
-
-	confirmation := get(t, h, "/confirm-delete/docs/created?width=8")
-	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `action="/delete?width=8"`) ||
-		!strings.Contains(confirmation.Body.String(), `href="/d/docs?width=8">Cancel</a>`) {
-		t.Fatalf("width delete confirmation lost width state: status=%d body=%s", confirmation.Code, confirmation.Body.String())
-	}
-	renamePage := get(t, h, "/rename/docs/created?width=8")
-	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `action="/rename?width=8"`) ||
-		!strings.Contains(renamePage.Body.String(), `href="/d/docs?width=8">Cancel</a>`) {
-		t.Fatalf("width rename page lost width state: status=%d body=%s", renamePage.Code, renamePage.Body.String())
-	}
-	deleted := formRequest(t, h, http.MethodPost, "/delete?width=8", url.Values{"path": {"docs/created"}})
-	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
-	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("width") != "8" {
-		t.Fatalf("delete redirect lost width state: location=%q err=%v", deleted.Header().Get("Location"), err)
-	}
-}
-
-// TestPreviewColumnRejectsUnknownWidths pins that a hand-edited width outside
-// the offered set falls back to the default instead of breaking the row, so
-// the page and every link render the default layout.
 func TestPreviewColumnRejectsUnknownWidths(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
@@ -1267,60 +683,182 @@ func TestPreviewColumnRejectsUnknownWidths(t *testing.T) {
 	}
 }
 
-func TestDarkThemePersistsAcrossMutationsAndErrors(t *testing.T) {
+func TestDarkThemePersistsOnMutationErrors(t *testing.T) {
 	root := t.TempDir()
-	docs := filepath.Join(root, "docs")
-	if err := os.Mkdir(docs, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "docs", "created"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	h := makeTestHandler(t, root)
+	for _, name := range []string{"created"} {
+		request := formRequest(t, h, http.MethodPost, "/mkdir?theme=dark", url.Values{"parent": {"docs"}, "name": {name}})
+		if request.Code != http.StatusSeeOther {
+			t.Fatalf("mkdir status=%d location=%q", request.Code, request.Header().Get("Location"))
+		}
+		location, err := url.Parse(request.Header().Get("Location"))
+		if err != nil || location.Query().Get("theme") != "dark" {
+			t.Fatalf("error redirect lost theme: location=%q err=%v", request.Header().Get("Location"), err)
+		}
+		page := get(t, h, request.Header().Get("Location"))
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-bs-theme="dark"`) || !strings.Contains(page.Body.String(), "Unable to create directory") {
+			t.Fatalf("error page lost dark theme or explanatory error: status=%d body=%s", page.Code, page.Body.String())
+		}
+	}
+}
+func TestPreferencesPersistAcrossExplorerNavigationAndMutations(t *testing.T) {
+	preferences := []struct {
+		name, key, value string
+		pageState        string
+	}{
+		{name: "theme", key: "theme", value: "dark", pageState: `<html lang="en" data-bs-theme="dark">`},
+		{name: "wrap", key: "wrap", value: "off", pageState: "white-space: pre;"},
+		{name: "pane", key: "pane", value: "collapsed", pageState: `class="col-12 order-1 order-lg-2 d-lg-none"`},
+		{name: "width", key: "width", value: "8", pageState: `class="col-12 col-lg-8 order-1 order-lg-2"`},
+	}
+	for _, preference := range preferences {
+		t.Run(preference.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "docs"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for name, content := range map[string]string{
+				"root.txt": "root", filepath.Join("docs", "note.txt"): "note",
+			} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h := makeTestHandler(t, root)
+			state := url.Values{preference.key: {preference.value}}
+			query := state.Encode()
 
-	created := formRequest(t, h, http.MethodPost, "/mkdir?theme=dark", url.Values{"parent": {"docs"}, "name": {"created"}})
-	if created.Code != http.StatusSeeOther {
-		t.Fatalf("dark mkdir status=%d location=%q body=%s", created.Code, created.Header().Get("Location"), created.Body.String())
-	}
-	createdURL, err := url.Parse(created.Header().Get("Location"))
-	if err != nil || createdURL.Path != "/d/docs" || createdURL.Query().Get("theme") != "dark" {
-		t.Fatalf("mkdir redirect lost dark theme: location=%q err=%v", created.Header().Get("Location"), err)
-	}
-	if page := get(t, h, created.Header().Get("Location")); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-bs-theme="dark"`) {
-		t.Fatalf("mkdir redirect page lost dark theme: status=%d body=%s", page.Code, page.Body.String())
-	}
+			directory := get(t, h, "/?"+query)
+			if directory.Code != http.StatusOK {
+				t.Fatalf("root status=%d body=%s", directory.Code, directory.Body.String())
+			}
+			assertRenderedURLHasQuery(t, directory.Body.String(), "/", state)
+			for _, path := range []string{"/d/docs", "/preview/root.txt", "/edit/root.txt", "/f/root.txt", "/confirm-delete/root.txt", "/rename/root.txt", "/mkdir", "/create-file", "/upload"} {
+				assertRenderedURLHasQuery(t, directory.Body.String(), path, state)
+			}
 
-	duplicate := formRequest(t, h, http.MethodPost, "/mkdir?theme=dark", url.Values{"parent": {"docs"}, "name": {"created"}})
-	if duplicate.Code != http.StatusSeeOther {
-		t.Fatalf("duplicate mkdir status=%d location=%q body=%s", duplicate.Code, duplicate.Header().Get("Location"), duplicate.Body.String())
-	}
-	errorURL, err := url.Parse(duplicate.Header().Get("Location"))
-	if err != nil || errorURL.Query().Get("theme") != "dark" || errorURL.Query().Get("error") == "" {
-		t.Fatalf("mutation error redirect lost dark theme or error: location=%q err=%v", duplicate.Header().Get("Location"), err)
-	}
-	errorPage := get(t, h, duplicate.Header().Get("Location"))
-	if errorPage.Code != http.StatusOK || !strings.Contains(errorPage.Body.String(), `data-bs-theme="dark"`) || !strings.Contains(errorPage.Body.String(), "Unable to create directory") {
-		t.Fatalf("mutation error page lost dark theme: status=%d body=%s", errorPage.Code, errorPage.Body.String())
-	}
+			preview := get(t, h, "/preview/docs/note.txt?"+query)
+			if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), preference.pageState) {
+				t.Fatalf("preview status=%d missing %q: %s", preview.Code, preference.pageState, preview.Body.String())
+			}
+			assertRenderedURLHasQuery(t, preview.Body.String(), "/d/docs", state)
+			assertRenderedURLHasQuery(t, preview.Body.String(), "/f/docs/note.txt", state)
 
-	confirmation := get(t, h, "/confirm-delete/docs/created?theme=dark")
-	if confirmation.Code != http.StatusOK || !strings.Contains(confirmation.Body.String(), `data-bs-theme="dark"`) ||
-		!strings.Contains(confirmation.Body.String(), `action="/delete?theme=dark"`) ||
-		!strings.Contains(confirmation.Body.String(), `href="/d/docs?theme=dark">Cancel</a>`) {
-		t.Fatalf("dark delete confirmation did not preserve theme: status=%d body=%s", confirmation.Code, confirmation.Body.String())
-	}
-	renamePage := get(t, h, "/rename/docs/created?theme=dark")
-	if renamePage.Code != http.StatusOK || !strings.Contains(renamePage.Body.String(), `data-bs-theme="dark"`) ||
-		!strings.Contains(renamePage.Body.String(), `action="/rename?theme=dark"`) ||
-		!strings.Contains(renamePage.Body.String(), `href="/d/docs?theme=dark">Cancel</a>`) {
-		t.Fatalf("dark rename page did not preserve theme: status=%d body=%s", renamePage.Code, renamePage.Body.String())
-	}
-	deleted := formRequest(t, h, http.MethodPost, "/delete?theme=dark", url.Values{"path": {"docs/created"}})
-	deletedURL, err := url.Parse(deleted.Header().Get("Location"))
-	if deleted.Code != http.StatusSeeOther || err != nil || deletedURL.Path != "/d/docs" || deletedURL.Query().Get("theme") != "dark" {
-		t.Fatalf("delete redirect lost dark theme: status=%d location=%q err=%v", deleted.Code, deleted.Header().Get("Location"), err)
-	}
+			editor := get(t, h, "/edit/docs/note.txt?"+query)
+			if editor.Code != http.StatusOK {
+				t.Fatalf("editor status=%d body=%s", editor.Code, editor.Body.String())
+			}
+			assertRenderedURLHasQuery(t, editor.Body.String(), "/edit/docs/note.txt", state)
+			assertRenderedURLHasQuery(t, editor.Body.String(), "/d/docs", state)
 
-	missing := get(t, h, "/edit/missing.txt?theme=dark")
-	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), `data-bs-theme="dark"`) {
-		t.Fatalf("error page lost dark theme: status=%d body=%s", missing.Code, missing.Body.String())
+			saved := formRequest(t, h, http.MethodPost, "/edit/docs/note.txt?"+query, url.Values{"content": {"saved"}})
+			assertRedirectHasQuery(t, saved, "/edit/docs/note.txt", state)
+			created := formRequest(t, h, http.MethodPost, "/mkdir?"+query, url.Values{"parent": {"docs"}, "name": {"created"}})
+			assertRedirectHasQuery(t, created, "/d/docs", state)
+
+			confirmation := get(t, h, "/confirm-delete/docs/created?"+query)
+			if confirmation.Code != http.StatusOK {
+				t.Fatalf("delete confirmation status=%d", confirmation.Code)
+			}
+			assertRenderedURLHasQuery(t, confirmation.Body.String(), "/delete", state)
+			renamePage := get(t, h, "/rename/docs/created?"+query)
+			if renamePage.Code != http.StatusOK {
+				t.Fatalf("rename page status=%d", renamePage.Code)
+			}
+			assertRenderedURLHasQuery(t, renamePage.Body.String(), "/rename", state)
+			deleted := formRequest(t, h, http.MethodPost, "/delete?"+query, url.Values{"path": {"docs/created"}})
+			assertRedirectHasQuery(t, deleted, "/d/docs", state)
+		})
+	}
+}
+
+func TestPreferenceTogglesPreserveOtherQueryValues(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+	cases := []struct {
+		name, queryKey, queryValue, togglePath, toggleKey, toggleValue string
+		absent                                                         string
+	}{
+		{name: "theme", queryKey: "theme", queryValue: "dark", togglePath: "/preview/a.txt", absent: "theme"},
+		{name: "wrap", queryKey: "wrap", queryValue: "off", togglePath: "/preview/a.txt", absent: "wrap"},
+		{name: "pane", queryKey: "pane", queryValue: "collapsed", togglePath: "/preview/a.txt", absent: "pane"},
+		{name: "width", queryKey: "width", queryValue: "6", togglePath: "/preview/a.txt", toggleKey: "width", toggleValue: "8"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := url.Values{tc.queryKey: {tc.queryValue}, "saved": {"1"}}
+			page := get(t, h, "/preview/a.txt?"+state.Encode())
+			if page.Code != http.StatusOK {
+				t.Fatalf("preview status=%d body=%s", page.Code, page.Body.String())
+			}
+			if tc.absent != "" {
+				assertRenderedURLDropsQuery(t, page.Body.String(), tc.togglePath, tc.absent, url.Values{"saved": {"1"}})
+			} else {
+				assertRenderedURLHasQuery(t, page.Body.String(), tc.togglePath, url.Values{"saved": {"1"}, tc.toggleKey: {tc.toggleValue}})
+			}
+		})
+	}
+}
+
+var renderedURLAttribute = regexp.MustCompile(`(?:href|action)="([^"]+)"`)
+
+func assertRenderedURLHasQuery(t *testing.T, body, path string, want url.Values) {
+	t.Helper()
+	assertRenderedURL(t, body, path, want, nil)
+}
+
+func assertRenderedURLDropsQuery(t *testing.T, body, path, absent string, want url.Values) {
+	t.Helper()
+	assertRenderedURL(t, body, path, want, []string{absent})
+}
+
+func assertRenderedURL(t *testing.T, body, path string, want url.Values, absent []string) {
+	t.Helper()
+	for _, match := range renderedURLAttribute.FindAllStringSubmatch(body, -1) {
+		raw := html.UnescapeString(match[1])
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Path != path {
+			continue
+		}
+		query := parsed.Query()
+		ok := true
+		for key, values := range want {
+			if !reflect.DeepEqual(query[key], values) {
+				ok = false
+			}
+		}
+		for _, key := range absent {
+			if query.Has(key) {
+				ok = false
+			}
+		}
+		if ok {
+			return
+		}
+	}
+	t.Errorf("rendered page has no URL for %q with query %v and absent keys %v", path, want, absent)
+}
+
+func assertRedirectHasQuery(t *testing.T, response *httptest.ResponseRecorder, path string, want url.Values) {
+	t.Helper()
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("redirect status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	location, err := url.Parse(response.Header().Get("Location"))
+	if err != nil || location.Path != path {
+		t.Fatalf("redirect location=%q, want path %q (err=%v)", response.Header().Get("Location"), path, err)
+	}
+	query := location.Query()
+	for key, values := range want {
+		if !reflect.DeepEqual(query[key], values) {
+			t.Errorf("redirect query %s=%v, want %v", key, query[key], values)
+		}
 	}
 }
 

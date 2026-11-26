@@ -43,13 +43,37 @@ const (
 	ProgressAborted ProgressStatus = "aborted"
 )
 
+// Origin records where a pending file came from. A carried file was already
+// unfinished when the session's latest run started; a new file was reported
+// by the file list and is not completed yet.
+type Origin string
+
+const (
+	// OriginNew identifies a file reported by the file list that has not
+	// completed yet.
+	OriginNew Origin = "new"
+	// OriginCarried identifies a file that was unfinished in an earlier run
+	// of the same session.
+	OriginCarried Origin = "carried"
+)
+
+// PendingEntry is one path in a session's unfinished file set. Carried marks
+// files that were unfinished in an earlier run of the same session; every
+// other entry is a newly discovered file.
+type PendingEntry struct {
+	Path    string
+	Carried bool
+}
+
 // FileProgress is the persisted per-file state of one task session: which file
 // reached which outcome, and when. SessionID and Path are stable identity; a
-// session has at most one row per file path.
+// session has at most one row per file path. Origin is meaningful for
+// unfinished rows and records how the file entered the pending set.
 type FileProgress struct {
 	SessionID string
 	Path      string
 	Status    ProgressStatus
+	Origin    Origin
 	UpdatedAt time.Time
 }
 
@@ -111,6 +135,7 @@ func OpenStore(path string) (*Store, error) {
 			session_id TEXT NOT NULL,
 			file_path TEXT NOT NULL,
 			status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'aborted')),
+			origin TEXT NOT NULL DEFAULT 'new' CHECK (origin IN ('new', 'carried')),
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY (session_id, file_path)
 		);
@@ -118,7 +143,53 @@ func OpenStore(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize task session store: %w", err)
 	}
+	if err := (&Store{db: db}).migrateFileProgressOrigin(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate task session store: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// migrateFileProgressOrigin upgrades databases created before the origin
+// column existed. Existing rows default to newly discovered; a resume
+// reclassifies them against the current manifest before it starts, so the
+// default only matters for sessions that are inspected without resuming.
+func (s *Store) migrateFileProgressOrigin() error {
+	hasOrigin := false
+	rows, err := s.db.Query(`PRAGMA table_info(session_file_progress)`)
+	if err != nil {
+		return fmt.Errorf("inspect session_file_progress schema: %w", err)
+	}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notnull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("inspect session_file_progress schema: %w", err)
+		}
+		if name == "origin" {
+			hasOrigin = true
+		}
+	}
+	if err := rows.Err(); err == nil {
+		err = rows.Close()
+	}
+	if err != nil {
+		return fmt.Errorf("inspect session_file_progress schema: %w", err)
+	}
+	if hasOrigin {
+		return nil
+	}
+	if _, err := s.db.Exec(`
+		ALTER TABLE session_file_progress
+		ADD COLUMN origin TEXT NOT NULL DEFAULT 'new' CHECK (origin IN ('new', 'carried'))
+	`); err != nil {
+		return fmt.Errorf("add origin column to session_file_progress: %w", err)
+	}
+	return nil
 }
 
 // Create stores a new record and returns it with a stable ID and timestamps.
@@ -321,7 +392,10 @@ func (s *Store) Close() error {
 }
 
 // SaveFileProgress records or replaces the latest per-file outcome for one
-// session. The store owns the timestamp when the caller leaves it zero.
+// session. A new row's origin defaults to newly discovered; an existing row
+// keeps its stored origin, so progress updates never clobber the
+// classification set when the pending set was replaced. The store owns the
+// timestamp when the caller leaves it zero.
 func (s *Store) SaveFileProgress(ctx context.Context, progress FileProgress) (FileProgress, error) {
 	if s == nil || s.db == nil {
 		return FileProgress{}, errors.New("task session store is not open")
@@ -329,16 +403,19 @@ func (s *Store) SaveFileProgress(ctx context.Context, progress FileProgress) (Fi
 	if err := validateFileProgress(progress); err != nil {
 		return FileProgress{}, err
 	}
+	if progress.Origin == "" {
+		progress.Origin = OriginNew
+	}
 	if progress.UpdatedAt.IsZero() {
 		progress.UpdatedAt = time.Now().UTC()
 	}
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO session_file_progress (session_id, file_path, status, updated_at)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO session_file_progress (session_id, file_path, status, origin, updated_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (session_id, file_path) DO UPDATE SET
 			status = excluded.status,
 			updated_at = excluded.updated_at
-	`, progress.SessionID, progress.Path, string(progress.Status), progress.UpdatedAt.UnixNano()); err != nil {
+	`, progress.SessionID, progress.Path, string(progress.Status), string(progress.Origin), progress.UpdatedAt.UnixNano()); err != nil {
 		return FileProgress{}, fmt.Errorf("save task session file progress: %w", err)
 	}
 	return progress, nil
@@ -354,7 +431,7 @@ func (s *Store) ListFileProgress(ctx context.Context, sessionID string) ([]FileP
 		return nil, errors.New("task session ID is required")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT session_id, file_path, status, updated_at
+		SELECT session_id, file_path, status, origin, updated_at
 		FROM session_file_progress WHERE session_id = ?
 		ORDER BY file_path ASC
 	`, sessionID)
@@ -441,19 +518,56 @@ func (s *Store) PendingPaths(ctx context.Context, sessionID string) ([]string, e
 	return paths, nil
 }
 
-// SetPendingPaths replaces the session's unfinished (pending/aborted) file
-// set with paths, storing every path as a pending row. Unfinished rows for
-// any other paths — for example files that no longer exist under the
-// session's root — are dropped, and completed rows are left untouched.
-func (s *Store) SetPendingPaths(ctx context.Context, sessionID string, paths []string) error {
+// PendingProgress returns the session's unfinished rows — the files whose
+// status is pending or aborted — with each file's origin, ordered by path.
+// The dashboard renders exactly this view; a resumed run reclassifies these
+// files against the current manifest before it starts.
+func (s *Store) PendingProgress(ctx context.Context, sessionID string) ([]FileProgress, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("task session store is not open")
+	}
+	if sessionID == "" {
+		return nil, errors.New("task session ID is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT session_id, file_path, status, origin, updated_at
+		FROM session_file_progress
+		WHERE session_id = ? AND status IN (?, ?)
+		ORDER BY file_path ASC
+	`, sessionID, string(ProgressPending), string(ProgressAborted))
+	if err != nil {
+		return nil, fmt.Errorf("list pending task session files: %w", err)
+	}
+	defer rows.Close()
+	progress := make([]FileProgress, 0)
+	for rows.Next() {
+		row, err := scanFileProgress(rows)
+		if err != nil {
+			return nil, fmt.Errorf("read pending task session file: %w", err)
+		}
+		progress = append(progress, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending task session files: %w", err)
+	}
+	return progress, nil
+}
+
+// SetPendingSet replaces the session's unfinished (pending/aborted) file
+// set with entries, storing every path as a pending row with the entry's
+// origin: carried entries were unfinished in an earlier run of the same
+// session, uncarried entries were reported by the file list. Unfinished
+// rows for any other paths — for example files that no longer exist under
+// the session's root — are dropped, and completed rows are left untouched.
+func (s *Store) SetPendingSet(ctx context.Context, sessionID string, entries []PendingEntry) error {
 	if s == nil || s.db == nil {
 		return errors.New("task session store is not open")
 	}
 	if sessionID == "" {
 		return errors.New("task session ID is required")
 	}
-	for _, path := range paths {
-		if path == "" {
+	for _, entry := range entries {
+		if entry.Path == "" {
 			return errors.New("task session pending file path is required")
 		}
 	}
@@ -469,11 +583,15 @@ func (s *Store) SetPendingPaths(ctx context.Context, sessionID string, paths []s
 		return fmt.Errorf("drop unfinished task session files: %w", err)
 	}
 	now := time.Now().UTC().UnixNano()
-	for _, path := range paths {
+	for _, entry := range entries {
+		origin := OriginNew
+		if entry.Carried {
+			origin = OriginCarried
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO session_file_progress (session_id, file_path, status, updated_at)
-			VALUES (?, ?, ?, ?)
-		`, sessionID, path, string(ProgressPending), now); err != nil {
+			INSERT INTO session_file_progress (session_id, file_path, status, origin, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+		`, sessionID, entry.Path, string(ProgressPending), string(origin), now); err != nil {
 			return fmt.Errorf("persist task session pending file: %w", err)
 		}
 	}
@@ -541,10 +659,15 @@ func validateFileProgress(progress FileProgress) error {
 	}
 	switch progress.Status {
 	case ProgressPending, ProgressCompleted, ProgressAborted:
-		return nil
 	default:
 		return fmt.Errorf("invalid task session file progress status %q", progress.Status)
 	}
+	switch progress.Origin {
+	case "", OriginNew, OriginCarried:
+	default:
+		return fmt.Errorf("invalid task session file progress origin %q", progress.Origin)
+	}
+	return nil
 }
 
 func nullableTime(value time.Time) any {
@@ -560,12 +683,13 @@ type rowScanner interface {
 
 func scanFileProgress(row rowScanner) (FileProgress, error) {
 	var progress FileProgress
-	var status string
+	var status, origin string
 	var updatedAt int64
-	if err := row.Scan(&progress.SessionID, &progress.Path, &status, &updatedAt); err != nil {
+	if err := row.Scan(&progress.SessionID, &progress.Path, &status, &origin, &updatedAt); err != nil {
 		return FileProgress{}, err
 	}
 	progress.Status = ProgressStatus(status)
+	progress.Origin = Origin(origin)
 	progress.UpdatedAt = time.Unix(0, updatedAt).UTC()
 	return progress, nil
 }

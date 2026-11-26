@@ -54,6 +54,15 @@ type dashboardPageData struct {
 	SavedSessions     []savedSessionChoice
 	SavedSessionsHint string
 	Notice            string
+	PendingFiles      []pendingFileRow
+}
+
+// pendingFileRow is one row of the dashboard's pending-files view: the
+// file's path and whether it was carried over from an earlier run of the
+// session or newly discovered in the current file list.
+type pendingFileRow struct {
+	Path    string
+	Carried bool
 }
 
 // savedSessionChoice contains only the fields needed to identify and choose a
@@ -133,12 +142,14 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 		// only, and a hint explains the empty list.
 		subdirectories = nil
 	}
-	data := pageData(d.controller.Snapshot(), r.URL.Query(), subdirectories, subdirectoryErr)
+	snapshot := d.controller.Snapshot()
+	data := pageData(snapshot, r.URL.Query(), subdirectories, subdirectoryErr)
 	savedSessions, sessionErr := d.savedSessions(r.Context())
 	data.SavedSessions = savedSessions
 	if sessionErr != nil {
 		data.SavedSessionsHint = "Saved sessions are unavailable right now; you can still start a fresh session."
 	}
+	data.PendingFiles = d.pendingFiles(r.Context(), snapshot.SessionID)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -146,6 +157,24 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 	if err := d.page.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
 	}
+}
+
+// pendingFiles reads the session's unfinished file set for the dashboard's
+// pending-files view. A failed read leaves the list empty rather than
+// failing the page; the rest of the dashboard keeps rendering.
+func (d *dashboard) pendingFiles(ctx context.Context, sessionID string) []pendingFileRow {
+	if sessionID == "" {
+		return nil
+	}
+	files, err := d.store.PendingProgress(ctx, sessionID)
+	if err != nil {
+		return nil
+	}
+	rows := make([]pendingFileRow, 0, len(files))
+	for _, file := range files {
+		rows = append(rows, pendingFileRow{Path: file.Path, Carried: file.Origin == sessions.OriginCarried})
+	}
+	return rows
 }
 
 func (d *dashboard) savedSessions(ctx context.Context) ([]savedSessionChoice, error) {

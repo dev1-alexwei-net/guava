@@ -24,7 +24,7 @@ type taskSessionStore interface {
 	SaveFileProgress(context.Context, sessions.FileProgress) (sessions.FileProgress, error)
 	CompletedPaths(context.Context, string) ([]string, error)
 	PendingPaths(context.Context, string) ([]string, error)
-	SetPendingPaths(context.Context, string, []string) error
+	SetPendingSet(context.Context, string, []sessions.PendingEntry) error
 	MarkFileStatus(context.Context, string, sessions.ProgressStatus, sessions.ProgressStatus) error
 }
 
@@ -129,8 +129,11 @@ func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Re
 // the files the manifest currently reports. Unfinished files that no longer
 // exist under the session's root and subdirectory are dropped; surviving
 // unfinished files keep their persisted position ahead of the newly reported
-// files, which keep the manifest's binary path order. The merged set
-// replaces the session's persisted unfinished set before the run starts.
+// files, which keep the manifest's binary path order. Each entry is
+// classified against the latest run: surviving unfinished files are carried
+// over, newly reported files are newly discovered. The merged set replaces
+// the session's persisted unfinished set, including its origins, before the
+// run starts.
 func (m *taskSessionManager) mergePendingSet(ctx context.Context, record sessions.Record, completed, pending []string) ([]string, error) {
 	if err := m.refreshFileExplorer(ctx); err != nil {
 		return nil, fmt.Errorf("refresh fileexplorer for resume: %w", err)
@@ -154,6 +157,7 @@ func (m *taskSessionManager) mergePendingSet(ctx context.Context, record session
 	}
 
 	merged := make([]string, 0, len(manifest))
+	entries := make([]sessions.PendingEntry, 0, len(manifest))
 	for _, path := range pending {
 		if _, gone := manifestSet[path]; !gone {
 			continue
@@ -162,6 +166,7 @@ func (m *taskSessionManager) mergePendingSet(ctx context.Context, record session
 			continue
 		}
 		merged = append(merged, path)
+		entries = append(entries, sessions.PendingEntry{Path: path, Carried: true})
 	}
 	for _, path := range manifest {
 		if _, wasPending := pendingSet[path]; wasPending {
@@ -171,9 +176,10 @@ func (m *taskSessionManager) mergePendingSet(ctx context.Context, record session
 			continue
 		}
 		merged = append(merged, path)
+		entries = append(entries, sessions.PendingEntry{Path: path})
 	}
 
-	if err := m.store.SetPendingPaths(ctx, record.ID, merged); err != nil {
+	if err := m.store.SetPendingSet(ctx, record.ID, entries); err != nil {
 		return nil, fmt.Errorf("persist merged pending set: %w", err)
 	}
 	return merged, nil

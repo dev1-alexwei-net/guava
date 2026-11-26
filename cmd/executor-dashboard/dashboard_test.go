@@ -280,7 +280,7 @@ func TestShowRendersDashboardPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Executor dashboard", "idle", "refresh", "dark", "Session summary", "No session yet"} {
+	for _, want := range []string{"Executor dashboard", "idle", "refresh", "dark", "Session summary", "Pending files", "No session yet"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("rendered page missing %q", want)
 		}
@@ -340,6 +340,87 @@ func waitForControllerStatus(t *testing.T, controller *executorController, want 
 	}
 	t.Fatalf("timed out waiting for status %q; last = %+v", want, controller.Snapshot())
 	return executorSnapshot{}
+}
+
+func TestShowRendersPendingFilesView(t *testing.T) {
+	cases := []struct {
+		name    string
+		entries []sessions.PendingEntry
+		want    []string
+		unwant  []string
+	}{
+		{
+			name:   "empty pending set",
+			want:   []string{"Pending files", "No pending files"},
+			unwant: []string{"Carried over", "Newly discovered"},
+		},
+		{
+			name: "partial pending set",
+			entries: []sessions.PendingEntry{
+				{Path: "carried/report.txt", Carried: true},
+				{Path: "fresh/data.txt"},
+			},
+			want: []string{
+				"Pending files", "2 unfinished",
+				"carried/report.txt", "Carried over",
+				"fresh/data.txt", "Newly discovered",
+			},
+			unwant: []string{"No pending files"},
+		},
+		{
+			name: "full pending set",
+			entries: []sessions.PendingEntry{
+				{Path: "carried/report.txt", Carried: true},
+				{Path: "fresh/data.txt"},
+				{Path: "fresh/notes.txt"},
+			},
+			want: []string{
+				"Pending files", "3 unfinished",
+				"carried/report.txt", "Carried over",
+				"fresh/data.txt", "Newly discovered",
+				"fresh/notes.txt", "Newly discovered",
+			},
+			unwant: []string{"No pending files"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
+			if err != nil {
+				t.Fatalf("newDashboard: %v", err)
+			}
+			t.Cleanup(app.Close)
+
+			if err := app.controller.Start(""); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			snapshot := waitForControllerStatus(t, app.controller, "failed")
+			if snapshot.SessionID == "" {
+				t.Fatal("Start: session ID is empty")
+			}
+			if err := app.store.SetPendingSet(context.Background(), snapshot.SessionID, tc.entries); err != nil {
+				t.Fatalf("SetPendingSet: %v", err)
+			}
+
+			req := httptest.NewRequest("GET", "/", nil)
+			rec := httptest.NewRecorder()
+			app.show(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			body := rec.Body.String()
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("rendered page missing %q", want)
+				}
+			}
+			for _, absent := range tc.unwant {
+				if strings.Contains(body, absent) {
+					t.Errorf("rendered page unexpectedly contains %q", absent)
+				}
+			}
+		})
+	}
 }
 
 func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testing.T) {

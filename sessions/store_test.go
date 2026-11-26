@@ -2,11 +2,14 @@ package sessions
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestStorePersistsSessionConfigurationAndLifecycleAcrossReopen(t *testing.T) {
@@ -481,7 +484,7 @@ func TestStorePendingPathsListsOnlyUnfinishedFilesInPathOrder(t *testing.T) {
 	}
 }
 
-func TestStoreSetPendingPathsReplacesUnfinishedSet(t *testing.T) {
+func TestStoreSetPendingSetReplacesUnfinishedSet(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -504,11 +507,15 @@ func TestStoreSetPendingPathsReplacesUnfinishedSet(t *testing.T) {
 		}
 	}
 
-	// Surviving unfinished files keep their place, new files join the set,
-	// and unfinished files left out of the set are dropped while completed
+	// Surviving unfinished files keep their place and are classified as
+	// carried over, new files join the set as newly discovered, and
+	// unfinished files left out of the set are dropped while completed
 	// files stay completed.
-	if err := store.SetPendingPaths(context.Background(), record.ID, []string{"d.txt", "b.txt"}); err != nil {
-		t.Fatalf("SetPendingPaths: %v", err)
+	if err := store.SetPendingSet(context.Background(), record.ID, []PendingEntry{
+		{Path: "d.txt"},
+		{Path: "b.txt", Carried: true},
+	}); err != nil {
+		t.Fatalf("SetPendingSet: %v", err)
 	}
 	if got, err := store.PendingPaths(context.Background(), record.ID); err != nil {
 		t.Fatalf("PendingPaths after replace: %v", err)
@@ -520,6 +527,7 @@ func TestStoreSetPendingPathsReplacesUnfinishedSet(t *testing.T) {
 		t.Fatalf("ListFileProgress: %v", err)
 	}
 	wantStatus := map[string]ProgressStatus{"a.txt": ProgressCompleted, "b.txt": ProgressPending, "d.txt": ProgressPending}
+	wantOrigin := map[string]Origin{"a.txt": OriginNew, "b.txt": OriginCarried, "d.txt": OriginNew}
 	if len(rows) != len(wantStatus) {
 		t.Fatalf("ListFileProgress = %+v, want exactly %v", rows, wantStatus)
 	}
@@ -529,11 +537,14 @@ func TestStoreSetPendingPathsReplacesUnfinishedSet(t *testing.T) {
 		} else if row.Status != want {
 			t.Errorf("file %s = %s, want %s", row.Path, row.Status, want)
 		}
+		if want := wantOrigin[row.Path]; row.Origin != want {
+			t.Errorf("file %s origin = %s, want %s", row.Path, row.Origin, want)
+		}
 	}
 
 	// A rejected update leaves the persisted set untouched.
-	if err := store.SetPendingPaths(context.Background(), record.ID, []string{"e.txt", ""}); err == nil {
-		t.Error("SetPendingPaths with an empty path succeeded, want error")
+	if err := store.SetPendingSet(context.Background(), record.ID, []PendingEntry{{Path: "e.txt"}, {Path: ""}}); err == nil {
+		t.Error("SetPendingSet with an empty path succeeded, want error")
 	}
 	if got, err := store.PendingPaths(context.Background(), record.ID); err != nil {
 		t.Fatalf("PendingPaths after rejected update: %v", err)
@@ -543,8 +554,8 @@ func TestStoreSetPendingPathsReplacesUnfinishedSet(t *testing.T) {
 
 	// Replacing with an empty set clears the unfinished files and keeps the
 	// completed ones.
-	if err := store.SetPendingPaths(context.Background(), record.ID, nil); err != nil {
-		t.Fatalf("SetPendingPaths(nil): %v", err)
+	if err := store.SetPendingSet(context.Background(), record.ID, nil); err != nil {
+		t.Fatalf("SetPendingSet(nil): %v", err)
 	}
 	if got, err := store.PendingPaths(context.Background(), record.ID); err != nil || len(got) != 0 {
 		t.Errorf("PendingPaths after clear = %#v, %v, want empty", got, err)
@@ -555,7 +566,125 @@ func TestStoreSetPendingPathsReplacesUnfinishedSet(t *testing.T) {
 		t.Errorf("CompletedPaths after clear = %#v, want %#v", completed, want)
 	}
 
-	if err := store.SetPendingPaths(context.Background(), "", []string{"a.txt"}); err == nil {
-		t.Error("SetPendingPaths(\"\", ...) succeeded, want error")
+	if err := store.SetPendingSet(context.Background(), "", []PendingEntry{{Path: "a.txt"}}); err == nil {
+		t.Error(`SetPendingSet("", ...) succeeded, want error`)
+	}
+}
+
+// TestStorePendingProgressReportsOrigins checks that the dashboard's pending
+// view reads only unfinished rows and reports each file's origin.
+func TestStorePendingProgressReportsOrigins(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	record, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.SetPendingSet(context.Background(), record.ID, []PendingEntry{
+		{Path: "carried.txt", Carried: true},
+		{Path: "new.txt"},
+	}); err != nil {
+		t.Fatalf("SetPendingSet: %v", err)
+	}
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{
+		SessionID: record.ID, Path: "done.txt", Status: ProgressCompleted,
+	}); err != nil {
+		t.Fatalf("SaveFileProgress: %v", err)
+	}
+
+	got, err := store.PendingProgress(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("PendingProgress: %v", err)
+	}
+	if len(got) != 2 || got[0].Path != "carried.txt" || got[1].Path != "new.txt" {
+		t.Fatalf("PendingProgress = %+v, want carried.txt then new.txt in path order", got)
+	}
+	if got[0].Origin != OriginCarried {
+		t.Errorf("carried.txt origin = %s, want %s", got[0].Origin, OriginCarried)
+	}
+	if got[1].Origin != OriginNew {
+		t.Errorf("new.txt origin = %s, want %s", got[1].Origin, OriginNew)
+	}
+
+	if rows, err := store.PendingProgress(context.Background(), "unknown"); err != nil || len(rows) != 0 {
+		t.Errorf("PendingProgress(unknown) = %+v, %v, want empty with no error", rows, err)
+	}
+	if _, err := store.PendingProgress(context.Background(), ""); err == nil {
+		t.Error(`PendingProgress("") succeeded, want error`)
+	}
+}
+
+// TestStoreOpenStoreMigratesOriginColumn checks that a store opened over a
+// database created before the origin column existed gains the column, with
+// existing rows defaulting to newly discovered.
+func TestStoreOpenStoreMigratesOriginColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.sqlite")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE IF NOT EXISTS task_sessions (
+			id TEXT PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			root_directory TEXT NOT NULL,
+			subdirectory TEXT NOT NULL,
+			database_file TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'ended', 'failed')),
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			started_at INTEGER,
+			finished_at INTEGER,
+			last_error TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE IF NOT EXISTS session_file_progress (
+			session_id TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'aborted')),
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (session_id, file_path)
+		);
+		INSERT INTO session_file_progress (session_id, file_path, status, updated_at)
+		VALUES ('legacy', 'old.txt', 'pending', 1)
+	`); err != nil {
+		legacy.Close()
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatalf("close legacy store: %v", err)
+	}
+
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	rows, err := store.db.Query(`SELECT file_path, status, origin FROM session_file_progress WHERE session_id = 'legacy'`)
+	if err != nil {
+		t.Fatalf("query legacy rows: %v", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("legacy row missing after migration")
+	}
+	var filePath, status, origin string
+	if err := rows.Scan(&filePath, &status, &origin); err != nil {
+		t.Fatalf("scan legacy row: %v", err)
+	}
+	if filePath != "old.txt" || status != "pending" {
+		t.Errorf("legacy row = %s/%s, want old.txt/pending", filePath, status)
+	}
+	if origin != string(OriginNew) {
+		t.Errorf("legacy row origin = %q, want %q", origin, OriginNew)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate legacy rows: %v", err)
 	}
 }

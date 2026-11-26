@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"html/template"
 	"log/slog"
@@ -17,9 +18,10 @@ import (
 var dashboardFiles embed.FS
 
 type dashboard struct {
-	controller *executorController
-	page       *template.Template
-	routes     http.Handler
+	controller   *executorController
+	page         *template.Template
+	databasePath string
+	routes       http.Handler
 }
 
 type dashboardPageData struct {
@@ -40,6 +42,8 @@ type dashboardPageData struct {
 	StartedFormatted string
 	Duration         string
 	HasSession       bool
+	Subdirectories   []string
+	SubdirectoryHint string
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
@@ -53,7 +57,11 @@ func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, erro
 		return nil, err
 	}
 
-	app := &dashboard{controller: controller, page: page}
+	app := &dashboard{
+		controller:   controller,
+		page:         page,
+		databasePath: config.DatabasePath,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", app.show)
 	mux.HandleFunc("POST /start", app.start)
@@ -72,7 +80,13 @@ func (d *dashboard) Close() {
 }
 
 func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
-	data := pageData(d.controller.Snapshot(), r.URL.Query())
+	subdirectories, subdirectoryErr := d.subdirectories(r.Context())
+	if subdirectoryErr != nil {
+		// The page still renders: the select falls back to the root option
+		// only, and a hint explains the empty list.
+		subdirectories = nil
+	}
+	data := pageData(d.controller.Snapshot(), r.URL.Query(), subdirectories, subdirectoryErr)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -82,7 +96,17 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func pageData(snapshot executorSnapshot, query url.Values) dashboardPageData {
+// subdirectories reads the candidate subdirectories from the fileexplorer
+// manifest, fresh on every page render so the listing stays current when the
+// page refreshes. The database is opened read-only; a failed read is an
+// error the caller degrades on rather than a page failure.
+func (d *dashboard) subdirectories(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return executor.ListSubdirectories(ctx, d.databasePath)
+}
+
+func pageData(snapshot executorSnapshot, query url.Values, subdirectories []string, subdirectoryErr error) dashboardPageData {
 	refresh := parseRefresh(query.Get("refresh"))
 	theme := parseTheme(query.Get("theme"))
 	nextTheme := "dark"
@@ -95,6 +119,11 @@ func pageData(snapshot executorSnapshot, query url.Values) dashboardPageData {
 	var startedFormatted string
 	if hasSession {
 		startedFormatted = snapshot.StartedAt.Format(time.DateTime)
+	}
+
+	var subdirectoryHint string
+	if subdirectoryErr != nil {
+		subdirectoryHint = "The subdirectory list is unavailable right now; the root option still works."
 	}
 
 	return dashboardPageData{
@@ -115,6 +144,8 @@ func pageData(snapshot executorSnapshot, query url.Values) dashboardPageData {
 		StartedFormatted: startedFormatted,
 		Duration:         duration,
 		HasSession:       hasSession,
+		Subdirectories:   subdirectories,
+		SubdirectoryHint: subdirectoryHint,
 	}
 }
 

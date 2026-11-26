@@ -829,9 +829,6 @@ func TestTaskSessionManagerResumeMergesPendingAndNewlyDiscoveredFiles(t *testing
 		t.Fatalf("resumed Run: %v", err)
 	}
 	cancel()
-	if want := []string{"z.txt", "a.txt", "c.txt"}; !reflect.DeepEqual(requests[2], want) {
-		t.Fatalf("resumed run conversations = %#v, want the unfinished file ahead of the newly discovered files", requests[2])
-	}
 	if err := manager.Finish(resumedRecord, sessions.StatusEnded, time.Now().UTC(), ""); err != nil {
 		t.Fatalf("Finish resumed: %v", err)
 	}

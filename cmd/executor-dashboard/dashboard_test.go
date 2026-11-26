@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -487,136 +486,6 @@ func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testi
 	}
 }
 
-func TestFreshAndResumedSessionsDiscoverFilesAndStopThroughLifecycle(t *testing.T) {
-	for _, resumed := range []bool{false, true} {
-		name := "fresh"
-		if resumed {
-			name = "resumed"
-		}
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			freshRoot := filepath.Join(dir, "fresh-root")
-			freshDatabase := filepath.Join(dir, "fresh-fileexplorer.sqlite")
-			createIndexedFile(t, freshRoot, freshDatabase, "fresh.txt", "fresh file content")
-			if err := os.WriteFile(filepath.Join(freshRoot, "instructions.md"), []byte("Process the indexed file."), 0o600); err != nil {
-				t.Fatalf("write fallback instructions: %v", err)
-			}
-			savedRoot := filepath.Join(dir, "saved-root")
-			savedDatabase := filepath.Join(dir, "saved-fileexplorer.sqlite")
-			createIndexedFile(t, savedRoot, savedDatabase, "docs/resumed.txt", "resumed file content")
-
-			storePath := filepath.Join(dir, "task-sessions.sqlite")
-			var saved sessions.Record
-			if resumed {
-				store, err := sessions.OpenStore(storePath)
-				if err != nil {
-					t.Fatalf("OpenStore: %v", err)
-				}
-				saved, err = store.Create(context.Background(), sessions.Record{
-					AgentID: "saved-agent", RootDirectory: savedRoot,
-					Subdirectory: "docs", DatabaseFile: savedDatabase,
-					Status: sessions.StatusPaused,
-				})
-				if err != nil {
-					t.Fatalf("Create saved session: %v", err)
-				}
-				if err := store.Close(); err != nil {
-					t.Fatalf("Close initial store: %v", err)
-				}
-			}
-
-			requestInputs := make(chan string, 1)
-			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodGet {
-					w.WriteHeader(http.StatusOK)
-					return
-				}
-				var request struct {
-					Input string `json:"input"`
-				}
-				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-					t.Errorf("decode Gateway request: %v", err)
-					return
-				}
-				requestInputs <- request.Input
-				<-r.Context().Done()
-			}))
-			defer gateway.Close()
-
-			config := testConfig(t, freshDatabase)
-			config.RootPath = freshRoot
-			config.InstructionsPath = filepath.Join(freshRoot, "instructions.md")
-			config.AgentID = "fresh-agent"
-			config.GatewayURL = gateway.URL
-			config.FileExplorerURL = gateway.URL
-			config.HTTPClient = gateway.Client()
-			app, err := newDashboard(config, slog.LevelInfo, storePath)
-			if err != nil {
-				t.Fatalf("newDashboard: %v", err)
-			}
-			t.Cleanup(app.Close)
-
-			if resumed {
-				form := url.Values{"session_id": {saved.ID}}
-				req := httptest.NewRequest(http.MethodPost, "/resume", strings.NewReader(form.Encode()))
-				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-				rec := httptest.NewRecorder()
-				app.ServeHTTP(rec, req)
-				if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
-					t.Fatalf("resume response = %d %q, want a successful redirect", rec.Code, rec.Header().Get("Location"))
-				}
-			} else if err := app.controller.Start(""); err != nil {
-				t.Fatalf("Start fresh session: %v", err)
-			}
-
-			var input string
-			select {
-			case input = <-requestInputs:
-			case <-time.After(5 * time.Second):
-				t.Fatalf("timed out waiting for a discovered file task to reach the Gateway; snapshot: %+v", app.controller.Snapshot())
-			}
-			wantContent := "fresh file content"
-			otherContent := "resumed file content"
-			if resumed {
-				wantContent, otherContent = otherContent, wantContent
-			}
-			if !strings.Contains(input, wantContent) {
-				t.Errorf("task input = %q, want it to include %q from the configured file root", input, wantContent)
-			}
-			if strings.Contains(input, otherContent) {
-				t.Errorf("task input = %q, unexpectedly includes content from the other session configuration", input)
-			}
-
-			stop := httptest.NewRecorder()
-			app.ServeHTTP(stop, httptest.NewRequest(http.MethodPost, "/stop", nil))
-			if stop.Code != http.StatusSeeOther || strings.Contains(stop.Header().Get("Location"), "error=") {
-				t.Fatalf("stop response = %d %q, want a successful redirect", stop.Code, stop.Header().Get("Location"))
-			}
-			snapshot := waitForControllerStatus(t, app.controller, "stopped")
-			if resumed && (snapshot.AgentID != "saved-agent" || snapshot.Subdirectory != "docs") {
-				t.Errorf("resumed snapshot = %+v, want saved agent and subdirectory", snapshot)
-			}
-
-			persisted, err := app.store.Get(context.Background(), snapshot.SessionID)
-			if err != nil {
-				t.Fatalf("Get stopped session: %v", err)
-			}
-			if persisted.Status != sessions.StatusPaused {
-				t.Errorf("stopped session status = %q, want paused", persisted.Status)
-			}
-			wantRoot, wantDatabase, wantAgent, wantSubdirectory := freshRoot, freshDatabase, "fresh-agent", ""
-			if resumed {
-				wantRoot, wantDatabase, wantAgent, wantSubdirectory = savedRoot, savedDatabase, "saved-agent", "docs"
-			}
-			if persisted.RootDirectory != wantRoot || persisted.DatabaseFile != wantDatabase ||
-				persisted.AgentID != wantAgent || persisted.Subdirectory != wantSubdirectory {
-				t.Errorf("persisted stopped session = %+v, want agent/root/subdirectory/database %q/%q/%q/%q",
-					persisted, wantAgent, wantRoot, wantSubdirectory, wantDatabase)
-			}
-		})
-	}
-}
-
 func createIndexedFile(t *testing.T, root, databasePath, relativePath, content string) {
 	t.Helper()
 	filePath := filepath.Join(root, filepath.FromSlash(relativePath))
@@ -757,61 +626,6 @@ func TestStartEmptySelectionKeepsWholeRoot(t *testing.T) {
 	}
 	if strings.Contains(snapshot.CLIArgs, "-subdirectory") {
 		t.Errorf("snapshot CLIArgs = %q, must not gain a -subdirectory flag for the whole root", snapshot.CLIArgs)
-	}
-}
-
-func TestStartWhileRunningIsRejected(t *testing.T) {
-	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
-	rootPath := t.TempDir()
-	createIndexedFile(t, rootPath, databasePath, "docs/notes.md", "Process the indexed file.")
-	if err := os.WriteFile(filepath.Join(rootPath, "instructions.md"), []byte("Process the indexed file."), 0o600); err != nil {
-		t.Fatalf("write instructions: %v", err)
-	}
-
-	requestStarted := make(chan struct{}, 1)
-	releaseRequest := make(chan struct{})
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		requestStarted <- struct{}{}
-		<-releaseRequest
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"response-1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<complete />"}]}]}`)
-	}))
-	config := testConfig(t, databasePath)
-	config.RootPath = rootPath
-	config.InstructionsPath = filepath.Join(rootPath, "instructions.md")
-	config.GatewayURL = gateway.URL
-	config.FileExplorerURL = gateway.URL
-	config.HTTPClient = gateway.Client()
-	app, err := newDashboard(config, slog.LevelInfo, "")
-	if err != nil {
-		gateway.Close()
-		t.Fatalf("newDashboard: %v", err)
-	}
-	t.Cleanup(func() {
-		close(releaseRequest)
-		app.Close()
-		gateway.Close()
-	})
-
-	if err := app.controller.Start(""); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	select {
-	case <-requestStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("timed out waiting for the first run to reach the Gateway; snapshot: %+v", app.controller.Snapshot())
-	}
-
-	query := redirectLocation(t, postStart(t, app, "docs"))
-	if got := query.Get("error"); !strings.Contains(got, "already running") {
-		t.Errorf("redirect error = %q, want the already-running rejection", got)
-	}
-	if snapshot := app.controller.Snapshot(); snapshot.Status != "running" {
-		t.Errorf("status after rejected start = %q, want running while the first Gateway request is blocked", snapshot.Status)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dev1-alexwei-net/guava/conversations"
 )
 
 // FileProviderConfig describes the fileexplorer-backed task source.
@@ -49,9 +51,9 @@ type FileProvider struct {
 	index            *fileIndex
 	reader           *rootedFileReader
 	refresher        *HTTPRefresher
-	lister           FileLister
 	queue            *WorkQueue
 	instructionsPath string
+	subdirectory     string
 	logger           *slog.Logger
 	completed        map[string]struct{}
 	firstSelection   bool
@@ -62,7 +64,7 @@ type FileProvider struct {
 	closed               bool
 }
 
-var _ TaskProvider = (*FileProvider)(nil)
+var _ conversations.TaskProvider = (*FileProvider)(nil)
 
 // NewFileProvider opens the read-only manifest and rooted filesystem reader
 // used to produce file tasks. It refreshes fileexplorer and discovers new
@@ -79,16 +81,13 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 	}{
 		{"database path", config.DatabasePath},
 		{"filesystem root", config.RootPath},
+		//{"subdirectory root", config.Subdirectory}, // not validate this yet
 		{"instructions path", config.InstructionsPath},
 		{"fileexplorer URL", config.FileExplorerURL},
 	} {
 		if strings.TrimSpace(field.value) == "" {
 			return nil, fmt.Errorf("%s is required", field.name)
 		}
-	}
-	subdirectory, err := normalizeProviderSubdirectory(config.Subdirectory)
-	if err != nil {
-		return nil, err
 	}
 
 	index, err := openFileIndex(ctx, config.DatabasePath)
@@ -107,10 +106,6 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		return nil, err
 	}
 
-	var lister FileLister = index
-	if subdirectory != "" {
-		lister = newSubdirectoryLister(index, subdirectory)
-	}
 	queue := NewWorkQueue()
 	if _, err := queue.Seed(config.InitialPending); err != nil {
 		_ = reader.close()
@@ -132,9 +127,9 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		index:            index,
 		reader:           reader,
 		refresher:        refresher,
-		lister:           lister,
-		queue:            queue,
+		queue:            NewWorkQueue(),
 		instructionsPath: config.InstructionsPath,
+		subdirectory:     config.Subdirectory,
 		logger:           config.Logger,
 		completed:        completed,
 		firstSelection:   true,
@@ -145,7 +140,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 // deterministic queue order. Instruction files are inputs to other tasks,
 // never work items. A false callback return stops iteration, leaving that task
 // pending if this provider is used again.
-func (p *FileProvider) Tasks(fn func(Task) bool) error {
+func (p *FileProvider) Tasks(fn func(conversations.Task) error) error {
 	if p == nil || p.closed {
 		return errors.New("file task provider is not open")
 	}
@@ -159,7 +154,7 @@ func (p *FileProvider) Tasks(fn func(Task) bool) error {
 		if err := p.refresher.Refresh(p.ctx); err != nil {
 			return fmt.Errorf("refresh file index: %w", err)
 		}
-		paths, err := p.lister.FilePaths(p.ctx)
+		paths, err := p.index.FilePaths(p.ctx, p.subdirectory)
 		if err != nil {
 			return fmt.Errorf("list indexed files: %w", err)
 		}
@@ -168,7 +163,7 @@ func (p *FileProvider) Tasks(fn func(Task) bool) error {
 			// seeded unfinished files, keeping them ahead of newly reported
 			// files; later passes prioritize files created by the current
 			// task exactly as on a fresh run.
-			if _, err := p.queue.Enqueue(paths); err != nil {
+			if _, err := p.queue.EnqueueNext(paths); err != nil {
 				return fmt.Errorf("enqueue discovered files: %w", err)
 			}
 			p.firstSelection = false
@@ -208,8 +203,12 @@ func (p *FileProvider) Tasks(fn func(Task) bool) error {
 		}
 
 		task := p.newFileTask(file)
-		if !fn(task) {
-			return nil
+		//if !fn(task) {
+		//	return nil
+		//}
+		err = fn(task)
+		if err != nil {
+			return err
 		}
 		if popped, ok := p.queue.Pop(); !ok || popped != filePath {
 			return fmt.Errorf("work queue changed while processing %q", filePath)
@@ -246,7 +245,7 @@ func (p *FileProvider) findIndexedFile(filePath string) (indexedFile, bool, erro
 	return indexedFile{}, false, nil
 }
 
-func (p *FileProvider) newFileTask(file indexedFile) Task {
+func (p *FileProvider) newFileTask(file indexedFile) conversations.Task {
 	var once sync.Once
 	var prompt string
 	var promptErr error

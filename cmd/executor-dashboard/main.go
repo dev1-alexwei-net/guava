@@ -31,6 +31,7 @@ func run() error {
 	port := flags.String("port", envOrDefault("PORT", "8081"), "bind port; defaults to $PORT or 8081")
 	addr := flags.String("addr", "", "deprecated: complete listen address or port; overrides -host and -port")
 	databasePath := flags.String("database", "", "path to the fileexplorer SQLite database (required)")
+	sessionStorePath := flags.String("session-store", "", "path to the task-session metadata SQLite database (defaults to -database + .sessions.sqlite)")
 	rootPath := flags.String("root", "", "filesystem root for paths in the database (required)")
 	instructionsPath := flags.String("instructions", "instructions.md", "fallback instructions file")
 	gatewayURL := flags.String("gateway-url", "http://127.0.0.1:18789", "OpenClaw Gateway base URL")
@@ -59,7 +60,11 @@ func run() error {
 		return err
 	}
 
-	app, err := newDashboard(executor.Config{
+	storePath := strings.TrimSpace(*sessionStorePath)
+	if storePath == "" {
+		storePath = defaultSessionStorePath(*databasePath)
+	}
+	app, err := newDashboardWithSessionStore(executor.Config{
 		DatabasePath:     *databasePath,
 		RootPath:         *rootPath,
 		InstructionsPath: *instructionsPath,
@@ -69,7 +74,7 @@ func run() error {
 		AuthToken:        os.Getenv("OPENCLAW_AUTH_TOKEN"),
 		HTTPClient:       executor.NewGatewayHTTPClient(*verifyTLS),
 		CLIArgs:          strings.Join(os.Args, " "),
-	}, parsedLogLevel)
+	}, parsedLogLevel, storePath)
 	if err != nil {
 		return fmt.Errorf("configure executor dashboard: %w", err)
 	}

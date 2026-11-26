@@ -47,18 +47,19 @@ docker run --rm \
   -fileexplorer-url http://fileexplorer:8080
 ```
 
-To run the dashboard from the same image, set the dashboard binary as the entrypoint and bind it to the container interface:
+To run the dashboard from the same image, set the dashboard binary as the entrypoint and bind it to the container interface. The dashboard writes its task-session metadata database under `/data`, so mount that directory read-write:
 
 ```sh
 docker run --rm -p 8081:8081 \
   --add-host host.docker.internal:host-gateway \
-  -v "$PWD/data:/data:ro" \
+  -v "$PWD/data:/data" \
   -v "$PWD/files:/files:ro" \
   -v "$PWD/instructions.md:/app/instructions.md:ro" \
   -e OPENCLAW_AUTH_TOKEN \
   --entrypoint /usr/local/bin/executor-dashboard \
   ghcr.io/dev1-alexwei-net/guava/executor:latest \
   -addr 0.0.0.0:8081 -database /data/fileexplorer.sqlite \
+  -session-store /data/task-sessions.sqlite \
   -root /files -instructions /app/instructions.md \
   -gateway-url http://host.docker.internal:18789 \
   -fileexplorer-url http://fileexplorer:8080

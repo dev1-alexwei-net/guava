@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dev1-alexwei-net/guava/executor"
+	"github.com/dev1-alexwei-net/guava/sessions"
 )
 
 // rawCLIArgs models the raw dump of a server command line, including an
@@ -330,6 +333,86 @@ func waitForControllerStatus(t *testing.T, controller *executorController, want 
 	}
 	t.Fatalf("timed out waiting for status %q; last = %+v", want, controller.Snapshot())
 	return executorSnapshot{}
+}
+
+func TestExecutorConfigForSessionUsesPersistedLaunchConfiguration(t *testing.T) {
+	base := testConfig(t, "/current/index.sqlite")
+	saved := sessions.Record{
+		AgentID: "saved-agent", RootDirectory: "/saved/root",
+		Subdirectory: "project/docs", DatabaseFile: "/saved/index.sqlite",
+	}
+	got := executorConfigForSession(base, saved)
+	if got.AgentID != saved.AgentID || got.RootPath != saved.RootDirectory ||
+		got.Subdirectory != saved.Subdirectory || got.DatabasePath != saved.DatabaseFile {
+		t.Errorf("restored config = %+v, want persisted session launch values", got)
+	}
+	if got.GatewayURL != base.GatewayURL || got.FileExplorerURL != base.FileExplorerURL || got.AuthToken != base.AuthToken {
+		t.Errorf("restored config changed runtime settings: %+v", got)
+	}
+}
+
+func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	savedDatabase := filepath.Join(dir, "saved-fileexplorer.sqlite")
+	createManifestFixture(t, savedDatabase, nil, nil)
+	savedRoot := filepath.Join(dir, "saved-root")
+	if err := os.MkdirAll(savedRoot, 0o755); err != nil {
+		t.Fatalf("create saved root: %v", err)
+	}
+	storePath := filepath.Join(dir, "task-sessions.sqlite")
+	store, err := sessions.OpenStore(storePath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	saved, err := store.Create(context.Background(), sessions.Record{
+		AgentID: "saved-agent", RootDirectory: savedRoot, Subdirectory: "docs",
+		DatabaseFile: savedDatabase, Status: sessions.StatusFailed,
+		LastError: "gateway unavailable", FinishedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Create saved session: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close initial store: %v", err)
+	}
+
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer refreshServer.Close()
+	base := testConfig(t, filepath.Join(dir, "wrong-fileexplorer.sqlite"))
+	base.FileExplorerURL = refreshServer.URL
+	base.AgentID = "fresh-agent"
+	app, err := newDashboardWithSessionStore(base, slog.LevelInfo, storePath)
+	if err != nil {
+		t.Fatalf("newDashboardWithSessionStore: %v", err)
+	}
+	t.Cleanup(app.Close)
+	if snapshot := app.controller.Snapshot(); snapshot.Status != "idle" || snapshot.AgentID != "fresh-agent" {
+		t.Fatalf("dashboard implicitly resumed saved session: %+v", snapshot)
+	}
+
+	form := url.Values{"session_id": {saved.ID}}
+	req := httptest.NewRequest("POST", "/resume", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	app.resume(rec, req)
+	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("resume response = %d %q, want a successful redirect", rec.Code, rec.Header().Get("Location"))
+	}
+
+	snapshot := waitForControllerStatus(t, app.controller, "completed")
+	if snapshot.AgentID != "saved-agent" || snapshot.Subdirectory != "docs" {
+		t.Errorf("resumed session summary = %+v, want saved agent and subdirectory", snapshot)
+	}
+	persisted, err := app.store.Get(context.Background(), saved.ID)
+	if err != nil {
+		t.Fatalf("Get resumed record: %v", err)
+	}
+	if persisted.Status != sessions.StatusEnded || persisted.AgentID != "saved-agent" ||
+		persisted.RootDirectory != savedRoot || persisted.Subdirectory != "docs" || persisted.DatabaseFile != savedDatabase {
+		t.Errorf("persisted resumed session = %+v, want ended record with original configuration", persisted)
+	}
 }
 
 func TestPageDataCarriesSubdirectorySelection(t *testing.T) {

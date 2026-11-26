@@ -212,6 +212,31 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 	return records, nil
 }
 
+// RecoverInterrupted marks records left active by a process exit as paused so
+// they remain available for an explicit resume. It does not start a run or
+// alter records that already reached a terminal state.
+func (s *Store) RecoverInterrupted(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("task session store is not open")
+	}
+	records, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Status != StatusActive {
+			continue
+		}
+		record.Status = StatusPaused
+		record.FinishedAt = time.Now().UTC()
+		record.LastError = "interrupted when the dashboard process exited"
+		if _, err := s.Update(ctx, record); err != nil {
+			return fmt.Errorf("recover interrupted task session %q: %w", record.ID, err)
+		}
+	}
+	return nil
+}
+
 // Close releases the SQLite connection. A nil or already-closed Store is safe.
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {

@@ -11,4 +11,6 @@ Supported lifecycle states are:
 - `ended`: a run completed normally.
 - `failed`: a run ended with an error.
 
-Opening a store initializes its schema. The current executor/dashboard lifecycle remains unchanged until a later integration step uses this persistence layer.
+Opening a store initializes its schema. The dashboard stores metadata beside the fileexplorer database by default, using the suffix `.sessions.sqlite`; pass `-session-store` to choose another persistent path. Keep the metadata database separate from the fileexplorer index.
+
+On dashboard startup, records left in `active` state are changed to `paused` with an interruption note. The dashboard never resumes a saved session automatically. A caller must explicitly select a record ID and submit it to `POST /resume` as `session_id`. Resuming restores the saved agent ID, root directory, subdirectory, and fileexplorer database path. Successful completion is stored as `ended`, cancellation as `paused`, and run errors as `failed`, preserving failed sessions for later resume.

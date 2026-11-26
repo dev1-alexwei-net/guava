@@ -176,6 +176,30 @@ func (c *executorController) Resume(id string) error {
 	return c.startLocked(runner, &updated)
 }
 
+// DeleteSession permanently removes the saved history for an inactive session.
+func (c *executorController) DeleteSession(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("task session ID is required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.store == nil {
+		return errors.New("task session persistence is unavailable")
+	}
+	if (c.status == "running" || c.status == "stopping") && sessionID(c.session) == id {
+		return errors.New("the active task session cannot be deleted")
+	}
+	record, err := c.store.Get(context.Background(), id)
+	if err != nil {
+		return err
+	}
+	if record.Status == sessions.StatusActive {
+		return errors.New("task session is still active and cannot be deleted")
+	}
+	return c.store.Delete(context.Background(), id)
+}
+
 func (c *executorController) startLocked(runner *executor.Executor, record *sessions.Record) error {
 	c.active = runner
 	c.session = record

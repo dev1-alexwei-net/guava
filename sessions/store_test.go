@@ -106,6 +106,40 @@ func TestStoreUpdatesLifecycleAndListsRecords(t *testing.T) {
 	}
 }
 
+func TestStoreDeleteRemovesSavedSessionHistory(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	record, err := store.Create(context.Background(), Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.Delete(context.Background(), record.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := store.Get(context.Background(), record.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get deleted record error = %v, want ErrNotFound", err)
+	}
+	records, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != 0 {
+		t.Errorf("List after delete = %+v, want no saved history", records)
+	}
+	if err := store.Delete(context.Background(), record.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Delete missing record error = %v, want ErrNotFound", err)
+	}
+	if err := store.Delete(context.Background(), ""); err == nil {
+		t.Error("Delete empty ID succeeded, want validation error")
+	}
+}
+
 func TestStoreAcceptsEachLifecycleStatus(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
 	if err != nil {

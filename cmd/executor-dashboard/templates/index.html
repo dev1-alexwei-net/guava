@@ -31,24 +31,65 @@
     <section class="card shadow-sm mb-4" aria-labelledby="controls-heading">
       <div class="card-body">
         <h2 class="h5" id="controls-heading">Controls</h2>
-        <div class="d-flex flex-column flex-sm-row gap-2 mb-4">
-          <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="flex-grow-1">
-            <label class="form-label d-block d-sm-none mb-0" for="subdirectory">Subdirectory</label>
-            <div class="d-flex flex-column flex-sm-row gap-2">
+        <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post">
+          <fieldset class="border-0 p-0 mb-3">
+            <legend class="h6">Choose a task session</legend>
+            <p class="text-body-secondary small">Start fresh by default, or explicitly choose an available saved session to resume.</p>
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="card h-100 border-primary" for="session-fresh">
+                  <span class="card-body d-flex align-items-start gap-3">
+                    <input class="form-check-input mt-1 flex-shrink-0" id="session-fresh" type="radio" name="session_id" value="" checked>
+                    <span>
+                      <span class="fw-semibold d-block">Fresh session</span>
+                      <span class="text-body-secondary small">Start a new run with the dashboard's current configuration.</span>
+                    </span>
+                  </span>
+                </label>
+              </div>
+              {{range .SavedSessions}}
+              <div class="col-12 col-md-6">
+                <label class="card h-100" for="saved-session-{{.ID}}">
+                  <span class="card-body d-flex align-items-start gap-3">
+                    <input class="form-check-input mt-1 flex-shrink-0" id="saved-session-{{.ID}}" type="radio" name="session_id" value="{{.ID}}" {{if or $.Busy (not .CanResume)}}disabled{{end}}>
+                    <span class="min-w-0">
+                      <span class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                        <span class="fw-semibold text-break">{{.AgentID}}</span>
+                        <span class="badge {{.StatusClass}}">{{.Status}}</span>
+                      </span>
+                      <span class="d-block small">{{if .Subdirectory}}/{{.Subdirectory}}{{else}}All files (root){{end}}</span>
+                      <span class="d-block text-body-secondary small">Updated {{.UpdatedAt}}</span>
+                      <span class="d-block text-body-secondary small font-monospace">{{.ID}}</span>
+                      {{if not .CanResume}}<span class="d-block text-body-secondary small">This session is active and cannot be resumed.</span>{{end}}
+                    </span>
+                  </span>
+                </label>
+              </div>
+              {{end}}
+            </div>
+            {{if .SavedSessionsHint}}<p class="alert alert-warning mt-3 mb-0" role="status">{{.SavedSessionsHint}}</p>{{else if not .SavedSessions}}<p class="text-body-secondary small mt-3 mb-0">No saved sessions yet.</p>{{end}}
+          </fieldset>
+
+          <div class="row g-2 align-items-end mb-3">
+            <div class="col-12 col-sm-8 col-lg-6">
+              <label class="form-label mb-1" for="subdirectory">Fresh session subdirectory</label>
               <select class="form-select" id="subdirectory" name="subdirectory">
                 <option value="" selected>All files (root)</option>
                 {{range .Subdirectories}}
                 <option value="{{.}}">{{.}}</option>
                 {{end}}
               </select>
-              <button class="btn btn-primary" type="submit" {{if .Busy}}disabled{{end}}>Start executor</button>
+              <div class="form-text">Used only for a fresh session; saved sessions keep their original configuration.</div>
             </div>
-          </form>
-          <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post">
-            <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
-          </form>
-        </div>
-        {{if .SubdirectoryHint}}<p class="text-body-secondary small mb-3">{{.SubdirectoryHint}}</p>{{else}}<p class="d-none"></p>{{end}}
+            <div class="col-12 col-sm-auto">
+              <button class="btn btn-primary w-100" type="submit" {{if .Busy}}disabled{{end}}>Continue with selection</button>
+            </div>
+          </div>
+          {{if .SubdirectoryHint}}<p class="text-body-secondary small mb-3">{{.SubdirectoryHint}}</p>{{end}}
+        </form>
+        <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="mb-3">
+          <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
+        </form>
 
         <form action="/" method="get" class="row g-2 align-items-end">
           <input type="hidden" name="theme" value="{{.Theme}}">

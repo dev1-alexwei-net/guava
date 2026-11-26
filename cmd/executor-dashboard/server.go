@@ -31,26 +31,40 @@ type dashboard struct {
 }
 
 type dashboardPageData struct {
-	Status           string
-	Version          string
-	Logs             string
-	LastErr          string
-	Error            string
-	Refresh          int
-	Theme            string
-	NextTheme        string
-	Running          bool
-	Busy             bool
-	AgentID          string
-	CLIArgs          string
-	Subdirectory     string
-	StartedAt        time.Time
-	FinishedAt       time.Time
-	StartedFormatted string
-	Duration         string
-	HasSession       bool
-	Subdirectories   []string
-	SubdirectoryHint string
+	Status            string
+	Version           string
+	Logs              string
+	LastErr           string
+	Error             string
+	Refresh           int
+	Theme             string
+	NextTheme         string
+	Running           bool
+	Busy              bool
+	AgentID           string
+	CLIArgs           string
+	Subdirectory      string
+	StartedAt         time.Time
+	FinishedAt        time.Time
+	StartedFormatted  string
+	Duration          string
+	HasSession        bool
+	Subdirectories    []string
+	SubdirectoryHint  string
+	SavedSessions     []savedSessionChoice
+	SavedSessionsHint string
+}
+
+// savedSessionChoice contains only the fields needed to identify and choose a
+// saved run; filesystem paths and other launch configuration stay server-side.
+type savedSessionChoice struct {
+	ID           string
+	AgentID      string
+	Subdirectory string
+	Status       sessions.Status
+	StatusClass  string
+	UpdatedAt    string
+	CanResume    bool
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level) (*dashboard, error) {
@@ -118,6 +132,11 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 		subdirectories = nil
 	}
 	data := pageData(d.controller.Snapshot(), r.URL.Query(), subdirectories, subdirectoryErr)
+	savedSessions, sessionErr := d.savedSessions(r.Context())
+	data.SavedSessions = savedSessions
+	if sessionErr != nil {
+		data.SavedSessionsHint = "Saved sessions are unavailable right now; you can still start a fresh session."
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -125,6 +144,40 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 	if err := d.page.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
 	}
+}
+
+func (d *dashboard) savedSessions(ctx context.Context) ([]savedSessionChoice, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	records, err := d.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	choices := make([]savedSessionChoice, 0, len(records))
+	for _, record := range records {
+		statusClass := "text-bg-secondary"
+		switch record.Status {
+		case sessions.StatusActive:
+			statusClass = "text-bg-primary"
+		case sessions.StatusPaused:
+			statusClass = "text-bg-warning"
+		case sessions.StatusEnded:
+			statusClass = "text-bg-success"
+		case sessions.StatusFailed:
+			statusClass = "text-bg-danger"
+		}
+		choices = append(choices, savedSessionChoice{
+			ID:           record.ID,
+			AgentID:      record.AgentID,
+			Subdirectory: record.Subdirectory,
+			Status:       record.Status,
+			StatusClass:  statusClass,
+			UpdatedAt:    record.UpdatedAt.UTC().Format("2006-01-02 15:04 UTC"),
+			CanResume:    record.Status != sessions.StatusActive,
+		})
+	}
+	return choices, nil
 }
 
 // subdirectories reads the candidate subdirectories from the fileexplorer
@@ -218,9 +271,15 @@ func (d *dashboard) stylesheet(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (d *dashboard) start(w http.ResponseWriter, r *http.Request) {
-	subdirectory, err := d.selectedSubdirectory(r)
-	if err == nil {
-		err = d.controller.Start(subdirectory)
+	var err error
+	if sessionID := strings.TrimSpace(r.FormValue("session_id")); sessionID != "" {
+		err = d.controller.Resume(sessionID)
+	} else {
+		var subdirectory string
+		subdirectory, err = d.selectedSubdirectory(r)
+		if err == nil {
+			err = d.controller.Start(subdirectory)
+		}
 	}
 	redirectDashboard(w, r, err)
 }

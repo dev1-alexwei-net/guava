@@ -9,10 +9,10 @@ import (
 	"strings"
 )
 
-// WorkQueue is the append-only, in-memory work queue scoped to a single
-// executor run. It records every path discovered during the run and keeps
-// the paths not yet processed in FIFO order. The queue exists only for the
-// duration of one run: it is never shared between runs and never persisted,
+// WorkQueue is the in-memory work queue scoped to a single executor run.
+// It records every path discovered during the run and keeps unprocessed paths
+// in deterministic order, with newly discovered paths optionally prioritized.
+// It exists only for one run: it is never shared between runs and never persisted,
 // so no shared-database table is involved.
 type WorkQueue struct {
 	pending    []string
@@ -36,6 +36,18 @@ func NewWorkQueue() *WorkQueue {
 // filesystem root fails as a whole and leaves the queue unchanged. It
 // returns the number of paths appended.
 func (q *WorkQueue) Enqueue(snapshot []string) (int, error) {
+	return q.enqueue(snapshot, false)
+}
+
+// EnqueueNext accepts one file snapshot and puts newly discovered paths ahead
+// of existing pending work. The new batch is sorted in binary path order and
+// existing pending paths retain their relative FIFO order. This lets files
+// created by the current task be selected immediately after its completion.
+func (q *WorkQueue) EnqueueNext(snapshot []string) (int, error) {
+	return q.enqueue(snapshot, true)
+}
+
+func (q *WorkQueue) enqueue(snapshot []string, prioritize bool) (int, error) {
 	if q == nil {
 		return 0, errors.New("work queue is nil")
 	}
@@ -60,6 +72,12 @@ func (q *WorkQueue) Enqueue(snapshot []string) (int, error) {
 	sort.Slice(fresh, func(i, j int) bool { return fresh[i] < fresh[j] })
 	for _, path := range fresh {
 		q.discovered[path] = struct{}{}
+	}
+	if prioritize {
+		q.pending = append(fresh, q.pending...)
+		return len(fresh), nil
+	}
+	for _, path := range fresh {
 		q.pending = append(q.pending, path)
 	}
 	return len(fresh), nil

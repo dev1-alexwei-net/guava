@@ -53,7 +53,7 @@ var _ TaskProvider = (*FileProvider)(nil)
 
 // NewFileProvider opens the read-only manifest and rooted filesystem reader
 // used to produce file tasks. It refreshes fileexplorer and discovers new
-// paths between tasks, preserving the executor's FIFO work-queue behavior.
+// paths between tasks, selecting newly discovered paths before older pending work.
 func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvider, error) {
 	if ctx == nil {
 		return nil, errors.New("context is nil")
@@ -132,7 +132,7 @@ func (p *FileProvider) Tasks(fn func(Task) bool) error {
 		if err != nil {
 			return fmt.Errorf("list indexed files: %w", err)
 		}
-		if _, err := p.queue.Enqueue(paths); err != nil {
+		if _, err := p.queue.EnqueueNext(paths); err != nil {
 			return fmt.Errorf("enqueue discovered files: %w", err)
 		}
 

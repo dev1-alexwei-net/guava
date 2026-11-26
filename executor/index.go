@@ -94,6 +94,33 @@ func (i *fileIndex) regularFiles(ctx context.Context) ([]indexedFile, error) {
 	return files, nil
 }
 
+// directoryPaths returns the manifest's directory rows (is_dir = 1) in the
+// same deterministic binary path order as the file listing.
+func (i *fileIndex) directoryPaths(ctx context.Context) ([]string, error) {
+	if i == nil || i.db == nil {
+		return nil, fmt.Errorf("fileexplorer index is not open")
+	}
+	rows, err := i.db.QueryContext(ctx,
+		"SELECT path FROM files WHERE is_dir = 1 ORDER BY path COLLATE BINARY")
+	if err != nil {
+		return nil, fmt.Errorf("query fileexplorer index: %w", err)
+	}
+	defer rows.Close()
+
+	paths := make([]string, 0)
+	for rows.Next() {
+		var directory string
+		if err := rows.Scan(&directory); err != nil {
+			return nil, fmt.Errorf("read fileexplorer index row: %w", err)
+		}
+		paths = append(paths, directory)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate fileexplorer index: %w", err)
+	}
+	return paths, nil
+}
+
 func (i *fileIndex) close() error {
 	if i == nil || i.db == nil {
 		return nil

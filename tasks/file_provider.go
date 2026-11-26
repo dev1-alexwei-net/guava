@@ -51,6 +51,7 @@ type FileProvider struct {
 	refresher        *HTTPRefresher
 	queue            *WorkQueue
 	instructionsPath string
+	subdirectory     string
 	logger           *slog.Logger
 	completed        map[string]struct{}
 	firstSelection   bool
@@ -78,6 +79,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 	}{
 		{"database path", config.DatabasePath},
 		{"filesystem root", config.RootPath},
+		//{"subdirectory root", config.Subdirectory}, // not validate this yet
 		{"instructions path", config.InstructionsPath},
 		{"fileexplorer URL", config.FileExplorerURL},
 	} {
@@ -129,6 +131,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		refresher:        refresher,
 		queue:            NewWorkQueue(),
 		instructionsPath: config.InstructionsPath,
+		subdirectory:     config.Subdirectory,
 		logger:           config.Logger,
 		completed:        completed,
 		firstSelection:   true,
@@ -153,7 +156,7 @@ func (p *FileProvider) Tasks(fn func(Task) bool) error {
 		if err := p.refresher.Refresh(p.ctx); err != nil {
 			return fmt.Errorf("refresh file index: %w", err)
 		}
-		paths, err := p.index.FilePaths(p.ctx)
+		paths, err := p.index.FilePaths(p.ctx, p.subdirectory)
 		if err != nil {
 			return fmt.Errorf("list indexed files: %w", err)
 		}

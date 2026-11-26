@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -23,6 +24,7 @@ type fileIndex struct {
 	db *sql.DB
 }
 
+// create file index
 func openFileIndex(ctx context.Context, databasePath string) (*fileIndex, error) {
 	dsn, err := readOnlySQLiteDSN(databasePath)
 	if err != nil {
@@ -57,14 +59,18 @@ func readOnlySQLiteDSN(databasePath string) (string, error) {
 	return dsn.String(), nil
 }
 
-func (i *fileIndex) FilePaths(ctx context.Context) ([]string, error) {
+// filter to a subdirectory root
+func (i *fileIndex) FilePaths(ctx context.Context, root string) ([]string, error) {
 	files, err := i.regularFiles(ctx)
 	if err != nil {
 		return nil, err
 	}
-	paths := make([]string, len(files))
-	for n, file := range files {
-		paths[n] = file.path
+	var paths []string
+	for _, file := range files {
+		//paths[n] = file.path
+		if strings.HasPrefix(file.path, root) && file.path != "" && file.path != root {
+			paths = append(paths, file.path)
+		}
 	}
 	return paths, nil
 }

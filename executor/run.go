@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
 func (e *Executor) Run(ctx context.Context) (err error) {
@@ -44,151 +46,67 @@ func (e *Executor) Run(ctx context.Context) (err error) {
 		logAttrs(logger, ctx, slog.LevelInfo, "Executor run completed", attrs...)
 	}()
 
-	index, err := openFileIndex(ctx, e.config.DatabasePath)
+	provider, err := tasks.NewFileProvider(ctx, tasks.FileProviderConfig{
+		DatabasePath:     e.config.DatabasePath,
+		RootPath:         e.config.RootPath,
+		InstructionsPath: e.config.InstructionsPath,
+		FileExplorerURL:  e.config.FileExplorerURL,
+		Subdirectory:     e.config.Subdirectory,
+		HTTPClient:       e.config.HTTPClient,
+		Logger:           logger,
+	})
 	if err != nil {
 		return err
 	}
 	defer func() {
-		err = errors.Join(err, index.close())
+		err = errors.Join(err, provider.Close())
 	}()
 
-	reader, err := openRootedFileReader(e.config.RootPath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		err = errors.Join(err, reader.close())
-	}()
-
-	refresher, err := NewHTTPRefresher(e.config.FileExplorerURL, e.config.HTTPClient)
-	if err != nil {
-		return err
-	}
-	logAttrs(logger, ctx, slog.LevelDebug, "Starting dynamic file discovery")
-
-	fallbackInstructions := ""
-	fallbackLoaded := false
-	processFile := func(ctx context.Context, path string) error {
-		files, err := index.regularFiles(ctx)
-		if err != nil {
-			return fmt.Errorf("list indexed files: %w", err)
-		}
-		var file indexedFile
-		found := false
-		for _, candidate := range files {
-			if candidate.path == path {
-				file = candidate
-				found = true
-				break
-			}
-		}
-		if !found {
-			logAttrs(logger, ctx, slog.LevelDebug, "Skipping file no longer in index", slog.String("path", path))
-			return nil
-		}
-		// Instruction files are inputs to other files, not work items themselves.
-		if isInstructionsFile(file) {
-			logAttrs(logger, ctx, slog.LevelDebug, "Skipping indexed instructions file", slog.String("path", path))
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		fileStarted := time.Now()
-		fileReadStarted := time.Now()
-		content, err := reader.read(file)
-		if err != nil {
-			logAttrs(logger, ctx, slog.LevelError, "Failed to read indexed file",
-				slog.String("path", file.path),
-				slog.Duration("file_read_elapsed", time.Since(fileReadStarted)),
-				slog.Any("error", err),
-			)
-			return fmt.Errorf("read indexed file: %w", err)
-		}
-		logAttrs(logger, ctx, slog.LevelDebug, "Read indexed file",
-			slog.String("path", file.path),
-			slog.Int("bytes", len(content)),
-			slog.Duration("file_read_elapsed", time.Since(fileReadStarted)),
-		)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		instructions := ""
-		if instructionFile, ok := nearestInstructionsFile(file, indexedInstructions(files)); ok {
-			instructionsReadStarted := time.Now()
-			instructionContent, err := reader.read(instructionFile)
-			if err != nil {
-				logAttrs(logger, ctx, slog.LevelError, "Failed to read indexed instructions",
-					slog.String("path", instructionFile.path),
-					slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-					slog.Any("error", err),
-				)
-				return fmt.Errorf("read indexed instructions %q: %w", instructionFile.path, err)
-			}
-			instructions = string(instructionContent)
-			logAttrs(logger, ctx, slog.LevelDebug, "Read indexed instructions",
-				slog.String("path", instructionFile.path),
-				slog.Int("bytes", len(instructionContent)),
-				slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-			)
-		} else {
-			if !fallbackLoaded {
-				instructionsReadStarted := time.Now()
-				fallbackInstructions, err = loadInstructions(e.config.InstructionsPath)
-				if err != nil {
-					logAttrs(logger, ctx, slog.LevelError, "Failed to read fallback instructions",
-						slog.String("path", e.config.InstructionsPath),
-						slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-						slog.Any("error", err),
-					)
-					return err
-				}
-				fallbackLoaded = true
-				logAttrs(logger, ctx, slog.LevelDebug, "Read fallback instructions",
-					slog.String("path", e.config.InstructionsPath),
-					slog.Int("bytes", len(fallbackInstructions)),
-					slog.Duration("file_read_elapsed", time.Since(instructionsReadStarted)),
-				)
-			}
-			instructions = fallbackInstructions
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		input := composeInitialInput(instructions, file, content)
-		logAttrs(logger, ctx, slog.LevelInfo, "Processing indexed file",
-			slog.String("path", file.path),
-			slog.Int("content_bytes", len(content)),
-		)
-		if err := e.runFileConversationForFile(ctx, file.path, input); err != nil {
-			logAttrs(logger, ctx, slog.LevelError, "Indexed file processing failed",
-				slog.String("path", file.path),
-				slog.Duration("elapsed", time.Since(fileStarted)),
-				slog.Any("error", err),
-			)
-			return fmt.Errorf("run file conversation: %w", err)
-		}
-		logAttrs(logger, ctx, slog.LevelInfo, "Indexed file processing completed",
-			slog.String("path", file.path),
-			slog.Duration("elapsed", time.Since(fileStarted)),
-		)
-		return nil
-	}
-
-	lister := FileLister(index)
 	if e.config.Subdirectory != "" {
-		lister = newSubdirectoryLister(index, e.config.Subdirectory)
 		logAttrs(logger, ctx, slog.LevelInfo, "Scoping run to subdirectory",
 			slog.String("subdirectory", e.config.Subdirectory),
 		)
 	}
+	logAttrs(logger, ctx, slog.LevelDebug, "Starting dynamic file discovery")
 
-	coordinator, err := NewCoordinator(refresher, lister, processFile)
-	if err != nil {
-		return err
+	var processErr error
+	providerErr := provider.Tasks(func(task tasks.Task) bool {
+		if err := ctx.Err(); err != nil {
+			processErr = err
+			return false
+		}
+
+		fileStarted := time.Now()
+		input, err := task.Prompt()
+		if err != nil {
+			processErr = fmt.Errorf("process file %q: build initial prompt: %w", task.ID(), err)
+			logAttrs(logger, ctx, slog.LevelError, "Failed to build file prompt",
+				slog.String("path", task.ID()),
+				slog.Any("error", err),
+			)
+			return false
+		}
+		if err := e.runFileConversationForFile(ctx, task.ID(), input); err != nil {
+			logAttrs(logger, ctx, slog.LevelError, "Indexed file processing failed",
+				slog.String("path", task.ID()),
+				slog.Duration("elapsed", time.Since(fileStarted)),
+				slog.Any("error", err),
+			)
+			processErr = fmt.Errorf("process file %q: run file conversation: %w", task.ID(), err)
+			return false
+		}
+		if err := ctx.Err(); err != nil {
+			processErr = fmt.Errorf("process file %q canceled before completion: %w", task.ID(), err)
+			return false
+		}
+		logAttrs(logger, ctx, slog.LevelInfo, "Indexed file processing completed",
+			slog.String("path", task.ID()),
+			slog.Duration("elapsed", time.Since(fileStarted)),
+		)
+		return true
+	})
+	if processErr != nil {
+		return processErr
 	}
-	return coordinator.Run(ctx)
+	return providerErr
 }

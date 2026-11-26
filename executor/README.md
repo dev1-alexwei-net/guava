@@ -1,6 +1,6 @@
 # Executor
 
-The `executor` package runs an OpenClaw Responses conversation for each regular file in a fileexplorer SQLite index. The `cmd/executor` program provides a CLI for running the package.
+The `executor` package runs an OpenClaw Responses conversation for each regular file in a fileexplorer SQLite index, using the file-backed `tasks` provider for discovery and prompt construction. The `cmd/executor` program provides a CLI for running the package. See [tasks/README.md](../tasks/README.md) for the source-agnostic task API and file provider.
 
 ## Inputs
 
@@ -51,7 +51,7 @@ func main() {
 
 ## Listing subdirectories
 
-`ListSubdirectories` returns candidate subdirectories derived from the fileexplorer manifest without starting an executor session: the union of the manifest's directory rows and the folder prefixes implied by regular-file paths, restricted to folders that contain at least one file, in deterministic binary path order. Every result is a valid `Subdirectory` value. The database is opened read-only and never modified, so the method is safe to call against the same `-database` a caller such as `cmd/executor-dashboard` already received at startup.
+`tasks.ListSubdirectories` returns candidate subdirectories derived from the fileexplorer manifest without starting an executor session (`executor.ListSubdirectories` remains a compatibility wrapper): the union of the manifest's directory rows and the folder prefixes implied by regular-file paths, restricted to folders that contain at least one file, in deterministic binary path order. Every result is a valid `Subdirectory` value. The database is opened read-only and never modified, so the method is safe to call against the same `-database` a caller such as `cmd/executor-dashboard` already received at startup.
 
 ```go
 candidates, err := executor.ListSubdirectories(context.Background(), "/var/lib/fileexplorer.sqlite")
@@ -99,7 +99,7 @@ Open `http://127.0.0.1:8081/`. The dashboard listens on loopback at `127.0.0.1:8
 
 `HTTPRefresher` refreshes the fileexplorer index over HTTP. fileexplorer re-synchronizes its SQLite index whenever a directory page is rendered, so a single GET to the base URL is a complete refresh. `Refresh` issues a context-bound GET to the configured base URL, drains and closes the HTML response body without parsing or retaining it, and returns an error that includes the response status when the response is not 2xx. `Executor.Run` calls it before the initial index listing and between file routines, so files created during a conversation can enter the same run after fileexplorer synchronizes its index. Cancellation propagates through the context.
 
-The adapter depends only on the base URL and an HTTP client; it does not touch the queue or SQLite index implementations, and `Refresh(ctx)` satisfies the `Refresher` contract from [story #109](https://github.com/dev1-alexwei-net/guava/issues/109), so the queue coordinator can use it without depending on HTTP details.
+The adapter depends only on the base URL and an HTTP client; it does not touch the queue or SQLite index implementations. Its implementation and `Refresher` contract now live in the `tasks` package, while the `executor.NewHTTPRefresher` name remains as a compatibility alias.
 
 ```go
 refresher, err := executor.NewHTTPRefresher("http://127.0.0.1:8080", nil)
@@ -114,7 +114,7 @@ if err := refresher.Refresh(context.Background()); err != nil {
 
 ## Work queue
 
-`WorkQueue` is the append-only, in-memory work queue scoped to a single executor run. `NewWorkQueue` starts an empty queue; `Enqueue` accepts one ordered file snapshot and appends only the paths not already discovered during the run. Already queued items keep their FIFO position; each new batch is appended as a group, sorted by binary (byte-wise) path order, the same ordering the fileexplorer index uses. Path identity is the normalized relative path, so the same file discovered in different raw spellings is queued once. A snapshot containing an absolute path, an empty path, or a path that escapes the root fails as a whole and leaves the queue unchanged.
+`tasks.WorkQueue` is the append-only, in-memory work queue scoped to a single provider run. The `executor.WorkQueue` name remains as a compatibility alias. `NewWorkQueue` starts an empty queue; `Enqueue` accepts one ordered file snapshot and appends only the paths not already discovered during the run. Already queued items keep their FIFO position; each new batch is appended as a group, sorted by binary (byte-wise) path order, the same ordering the fileexplorer index uses. Path identity is the normalized relative path, so the same file discovered in different raw spellings is queued once. A snapshot containing an absolute path, an empty path, or a path that escapes the root fails as a whole and leaves the queue unchanged.
 
 `Pop` removes and returns the oldest queued path, `Len` and `Empty` report the queue state, and `Pending` returns a copy of the queued paths in FIFO order. The queue holds its state in memory only: it adds no shared-database table and is not shared between runs.
 
@@ -165,7 +165,7 @@ Per-file outcomes, discovered/processed/queued counts, current file, and turn co
 
 ## Dynamic discovery interfaces
 
-`Refresher`, `FileLister`, and `ProcessFile` isolate the dynamic discovery loop described in [story #109](https://github.com/dev1-alexwei-net/guava/issues/109). `Coordinator` refreshes the index before each selection, appends unseen paths through `WorkQueue`, and invokes the processor in FIFO order. The coordinator does not depend on HTTP or SQLite, so its ordering and failure behavior is tested with in-memory fakes in `coordinator_test.go`. `Executor.Run` composes the HTTP refresher, read-only SQLite index, and rooted file processor behind those interfaces.
+`Refresher` and `FileLister` live with the file source in the `tasks` package; `executor` retains aliases for compatibility. `Coordinator` remains available for callers that need the generic refresh/list/process loop and is tested with in-memory fakes in `coordinator_test.go`. `Executor.Run` now consumes `tasks.FileProvider`, which owns the read-only SQLite index, rooted file reader, instructions resolution, and per-run queue.
 
 ## OpenClaw Gateway
 

@@ -24,21 +24,6 @@ func NewWorkQueue() *WorkQueue {
 	return &WorkQueue{discovered: make(map[string]struct{})}
 }
 
-// Enqueue accepts one ordered file snapshot and appends only the snapshot
-// paths that have not already been discovered during this run. Already
-// queued items keep their FIFO position; the new batch is appended as a
-// group, sorted by binary (byte-wise) path order, the same ordering the
-// fileexplorer index uses. Path identity is the normalized relative path, so
-// the same file discovered in different raw spellings is queued once.
-//
-// All snapshot paths are validated before the queue is modified: a snapshot
-// containing an absolute path, an empty path, or a path that escapes the
-// filesystem root fails as a whole and leaves the queue unchanged. It
-// returns the number of paths appended.
-func (q *WorkQueue) Enqueue(snapshot []string) (int, error) {
-	return q.enqueue(snapshot, false)
-}
-
 // EnqueueNext accepts one file snapshot and puts newly discovered paths ahead
 // of existing pending work. The new batch is sorted in binary path order and
 // existing pending paths retain their relative FIFO order. This lets files

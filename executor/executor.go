@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/dev1-alexwei-net/guava/conversations"
 	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
@@ -18,9 +19,8 @@ func (p closingTaskProvider) Tasks(fn func(tasks.Task) bool) (err error) {
 	return p.provider.Tasks(fn)
 }
 
-// Run preserves the existing executor entry point while delegating task
-// processing, conversation lifecycle, and summaries to the conversations
-// service.
+// Run opens the configured file task source and delegates task processing,
+// conversation lifecycle, and summaries to the conversations service.
 func (e *Executor) Run(ctx context.Context) error {
 	if e == nil {
 		return errors.New("executor is nil")
@@ -47,4 +47,12 @@ func (e *Executor) Run(ctx context.Context) error {
 		return e.conversationService.Run(ctx, failedTaskProvider{err: err})
 	}
 	return e.conversationService.Run(ctx, closingTaskProvider{provider: provider})
+}
+
+// SessionSummary returns the conversation service's session snapshot.
+func (e *Executor) SessionSummary() conversations.Summary {
+	if e == nil || e.conversationService == nil {
+		return conversations.Summary{Status: conversations.StatusIdle}
+	}
+	return e.conversationService.SessionSummary()
 }

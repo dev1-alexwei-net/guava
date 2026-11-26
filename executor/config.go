@@ -5,14 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
 	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/dev1-alexwei-net/guava/conversations"
 )
@@ -74,10 +73,6 @@ type Config struct {
 type Executor struct {
 	config Config
 
-	conversationTokens *tokenBucket
-	retryWait          func(context.Context, time.Duration) error
-
-	mu                  sync.Mutex
 	conversationService *conversations.Service
 }
 
@@ -136,7 +131,7 @@ func newExecutor(config Config) (*Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Executor{config: config, conversationTokens: newConversationTokenBucket(), conversationService: service}, nil
+	return &Executor{config: config, conversationService: service}, nil
 }
 
 // Validate reports missing required values or an invalid Gateway or
@@ -228,4 +223,47 @@ func validateBaseURL(field, value string) error {
 
 func conversationConfig(config Config) conversations.Config {
 	return conversations.Config{GatewayURL: config.GatewayURL, AgentID: config.AgentID, AuthToken: config.AuthToken, HTTPClient: config.HTTPClient, Logger: config.Logger, CLIArgs: config.CLIArgs, Subdirectory: config.Subdirectory}
+}
+
+// LevelTrace is the level used for full raw Gateway response bodies.
+const LevelTrace = slog.LevelDebug - 4
+
+// ParseLogLevel parses the executor's supported text log level.
+func ParseLogLevel(value string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "trace":
+		return LevelTrace, nil
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid log level %q (want trace, debug, info, warn, or error)", value)
+	}
+}
+
+// NewTextLogger returns a structured text logger that labels LevelTrace as TRACE.
+func NewTextLogger(output io.Writer, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.LevelKey && attr.Value.Kind() == slog.KindAny {
+				if actualLevel, ok := attr.Value.Any().(slog.Level); ok && actualLevel == LevelTrace {
+					return slog.String(slog.LevelKey, "TRACE")
+				}
+			}
+			return attr
+		},
+	}))
+}
+
+func logAttrs(logger *slog.Logger, ctx context.Context, level slog.Level, message string, attrs ...slog.Attr) {
+	if logger == nil {
+		return
+	}
+	logger.LogAttrs(ctx, level, message, attrs...)
 }

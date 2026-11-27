@@ -23,6 +23,16 @@ func TestLookupConstant(t *testing.T) {
 			key:  ProviderSessionKeyFormatKey,
 			want: "session key:agentid:file_name:openclaw",
 		},
+		{
+			name: "provider model",
+			key:  ProviderModelKey,
+			want: "openclaw",
+		},
+		{
+			name: "conversation session key template",
+			key:  ConversationSessionKeyTemplateKey,
+			want: "agent:%s:guava:%s",
+		},
 	}
 
 	for _, test := range tests {

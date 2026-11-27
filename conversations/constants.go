@@ -10,20 +10,28 @@ const (
 	ContinuationPromptTextKey ConstantKey = "continuation_prompt_text"
 	// ProviderSessionKeyFormatKey identifies the documented provider session-key format.
 	ProviderSessionKeyFormatKey ConstantKey = "provider_session_key_format"
+	// ProviderModelKey identifies the model name used for OpenResponses requests.
+	ProviderModelKey ConstantKey = "provider_model"
+	// ConversationSessionKeyTemplateKey identifies the runtime session-key template.
+	ConversationSessionKeyTemplateKey ConstantKey = "conversation_session_key_template"
 )
 
 const (
-	retryPromptText          = "Continue with your prompt"
-	continuationPromptText   = "Continue. Remember to output the completion marker <complete /> only if you have finished."
-	providerSessionKeyFormat = "session key:agentid:file_name:openclaw"
+	retryPromptText                = "Continue with your prompt"
+	continuationPromptText         = "Continue. Remember to output the completion marker <complete /> only if you have finished."
+	providerSessionKeyFormat       = "session key:agentid:file_name:openclaw"
+	providerModel                  = "openclaw"
+	conversationSessionKeyTemplate = "agent:%s:guava:%s"
 )
 
 // constantsTable is initialized with the conversations package and remains
 // available through LookupConstant for the lifetime of the process.
 var constantsTable = map[ConstantKey]string{
-	RetryPromptTextKey:          retryPromptText,
-	ContinuationPromptTextKey:   continuationPromptText,
-	ProviderSessionKeyFormatKey: providerSessionKeyFormat,
+	RetryPromptTextKey:                retryPromptText,
+	ContinuationPromptTextKey:         continuationPromptText,
+	ProviderSessionKeyFormatKey:       providerSessionKeyFormat,
+	ProviderModelKey:                  providerModel,
+	ConversationSessionKeyTemplateKey: conversationSessionKeyTemplate,
 }
 
 // LookupConstant returns a stable configured value and whether key is present.

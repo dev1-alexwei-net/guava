@@ -52,6 +52,7 @@ type dashboardPageData struct {
 	Subdirectories    []string
 	SubdirectoryHint  string
 	SavedSessions     []savedSessionChoice
+	ArmedDeleteID     string
 	SavedSessionsHint string
 	Notice            string
 	PendingFiles      []pendingFileRow
@@ -143,13 +144,17 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 		subdirectories = nil
 	}
 	snapshot := d.controller.Snapshot()
-	data := pageData(snapshot, r.URL.Query(), subdirectories, subdirectoryErr)
+	query := r.URL.Query()
+	data := pageData(snapshot, query, subdirectories, subdirectoryErr)
 	savedSessions, sessionErr := d.savedSessions(r.Context())
 	data.SavedSessions = savedSessions
 	if sessionErr != nil {
 		data.SavedSessionsHint = "Saved sessions are unavailable right now; you can still start a fresh session."
 	}
 	data.PendingFiles = d.pendingFiles(r.Context(), snapshot.SessionID)
+	// Deletion is two-step: a GET arms the target session's "Confirm
+	// permanent deletion" action, and a second click performs the POST.
+	data.ArmedDeleteID = strings.TrimSpace(query.Get("arming"))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

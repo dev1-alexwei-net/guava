@@ -778,14 +778,88 @@ func TestShowRendersSubdirectoryControlOnlyForFreshSession(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(body, `name="confirm" value="yes" form="delete-session-paused-session" required`) {
-		t.Error("rendered page missing explicit saved-history deletion confirmation")
-	}
-	if strings.Contains(body, `id="confirm-delete-active-session"`) {
-		t.Error("active session must not offer a delete confirmation")
-	}
 	if strings.Contains(strings.ToLower(body), "<script") {
 		t.Error("rendered selector must not include client-side JavaScript")
+	}
+}
+
+// TestShowArmsTwoStepDeleteForSavedSession covers the two-step delete for a
+// saved session: a first click (GET with arming=<id>) arms a clearly labeled
+// "Confirm permanent deletion" action, and only that armed action performs the
+// POST. Active sessions stay undeletable, and nothing is deleted in a single
+// click.
+func TestShowArmsTwoStepDeleteForSavedSession(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath, nil, nil)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	for _, record := range []sessions.Record{
+		{ID: "paused-session", AgentID: "agent-paused", RootDirectory: "/saved/files", DatabaseFile: "/saved/index.sqlite", Status: sessions.StatusPaused},
+		{ID: "active-session", AgentID: "agent-active", RootDirectory: "/active/files", DatabaseFile: "/active/index.sqlite", Status: sessions.StatusActive},
+	} {
+		if _, err := app.store.Create(context.Background(), record); err != nil {
+			t.Fatalf("Create saved session %q: %v", record.ID, err)
+		}
+	}
+
+	// Unarmed: the saved session offers a first-click delete control, but no
+	// confirm button, no hidden confirmation form, and no checkbox/`form=`
+	// association. The active session offers no delete control at all.
+	rec := httptest.NewRecorder()
+	app.show(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `arming=paused-session`) {
+		t.Error("unarmed page missing the first-click delete control for the saved session")
+	}
+	for _, gone := range []string{
+		`>Confirm permanent deletion<`,
+		`form="delete-session-`,
+		`name="confirm" value="yes"`,
+		`confirm-delete-`,
+		`arming=active-session`,
+		"I confirm permanent deletion",
+	} {
+		if strings.Contains(body, gone) {
+			t.Errorf("unarmed page must not contain %q", gone)
+		}
+	}
+	if !strings.Contains(body, "Active sessions cannot be deleted.") {
+		t.Error("active session must remain undeletable")
+	}
+	if strings.Contains(strings.ToLower(body), "<script") {
+		t.Error("two-step delete must not use client-side JavaScript")
+	}
+
+	// Armed: the saved session's card now offers the clearly labeled confirm
+	// action that POSTs to /sessions/delete with the server-side confirmation,
+	// while the active session offers none. Exactly one confirm action renders.
+	rec = httptest.NewRecorder()
+	app.show(rec, httptest.NewRequest("GET", "/?arming=paused-session&refresh=5&theme=dark", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("armed show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	armed := rec.Body.String()
+	if got := strings.Count(armed, `>Confirm permanent deletion<`); got != 1 {
+		t.Errorf("armed page has %d confirm actions, want exactly one (the saved session)", got)
+	}
+	if !strings.Contains(armed, `/sessions/delete?refresh=5&amp;theme=dark`) {
+		t.Error("armed confirm form must POST to /sessions/delete, carrying refresh and theme")
+	}
+	if !strings.Contains(armed, `name="confirm" value="yes"`) {
+		t.Error("armed confirm form must carry the server-side confirmation")
+	}
+	if !strings.Contains(armed, `name="session_id" value="paused-session"`) {
+		t.Error("armed confirm form must target the saved session")
+	}
+	if !strings.Contains(armed, "Active sessions cannot be deleted.") {
+		t.Error("active session must remain undeletable in the armed state")
 	}
 }
 
@@ -1044,7 +1118,7 @@ func TestShowRendersOneClickRefreshIntervals(t *testing.T) {
 				t.Error("the Apply button is still rendered; every interval must apply on a single click")
 			}
 			if active == 5 {
-				for _, want := range []string{`/start?refresh=5&amp;theme=dark`, `/stop?refresh=5&amp;theme=dark`, `/sessions/delete?refresh=5&amp;theme=dark`} {
+				for _, want := range []string{`/start?refresh=5&amp;theme=dark`, `/stop?refresh=5&amp;theme=dark`, `arming=paused-session&amp;refresh=5&amp;theme=dark`} {
 					if !strings.Contains(body, want) {
 						t.Errorf("rendered action URL missing %q", want)
 					}

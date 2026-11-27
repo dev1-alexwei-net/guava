@@ -67,11 +67,17 @@
               </div>
               {{if .CanDelete}}
               <div class="card-body pt-0">
-                <div class="form-check mb-2">
-                  <input class="form-check-input" id="confirm-delete-{{.ID}}" type="checkbox" name="confirm" value="yes" form="delete-session-{{.ID}}" required>
-                  <label class="form-check-label small" for="confirm-delete-{{.ID}}">I confirm permanent deletion of this saved history.</label>
-                </div>
-                <button class="btn btn-outline-danger btn-sm" type="submit" form="delete-session-{{.ID}}">Delete saved session</button>
+                {{if eq .ID $.ArmedDeleteID}}
+                <p class="small text-body-secondary mb-2">This permanently deletes the saved history for this session.</p>
+                <form class="d-flex flex-wrap align-items-center gap-2" action="/sessions/delete?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post">
+                  <input type="hidden" name="session_id" value="{{.ID}}">
+                  <input type="hidden" name="confirm" value="yes">
+                  <button class="btn btn-danger btn-sm" type="submit">Confirm permanent deletion</button>
+                  <a class="btn btn-outline-secondary btn-sm" href="/?refresh={{$.Refresh}}&amp;theme={{$.Theme}}">Cancel</a>
+                </form>
+                {{else}}
+                <a class="btn btn-outline-danger btn-sm" href="/?arming={{.ID}}&amp;refresh={{$.Refresh}}&amp;theme={{$.Theme}}">Delete saved session</a>
+                {{end}}
               </div>
               {{else}}
               <p class="card-body pt-0 small text-body-secondary mb-0">Active sessions cannot be deleted.</p>
@@ -80,9 +86,6 @@
           </div>
           {{end}}
         </div>
-        {{range .SavedSessions}}
-        {{if .CanDelete}}<form id="delete-session-{{.ID}}" action="/sessions/delete?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post"><input type="hidden" name="session_id" value="{{.ID}}"></form>{{end}}
-        {{end}}
         <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="mb-3">
           <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
         </form>

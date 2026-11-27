@@ -738,6 +738,45 @@ func TestEnsureAccountInitializesOnceAndPreservesExistingRows(t *testing.T) {
 	}
 }
 
+func TestDeleteAccountRemovesOwnedSessionAndProgress(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	legacy, err := store.Create(context.Background(), Record{AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := store.EnsureAccount(context.Background(), AccountSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = store.Get(context.Background(), legacy.ID)
+	if err != nil || legacy.AccountID != account.ID {
+		t.Fatalf("legacy session after account initialization = %+v, error %v", legacy, err)
+	}
+	record, err := store.Create(context.Background(), Record{AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused})
+	if err != nil || record.AccountID != account.ID {
+		t.Fatalf("Create account-scoped session = %+v, error %v", record, err)
+	}
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{SessionID: record.ID, Path: "task.md", Status: ProgressCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAccount(context.Background(), account.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{legacy.ID, record.ID} {
+		if _, err := store.Get(context.Background(), id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Get session %q after account deletion = %v, want ErrNotFound", id, err)
+		}
+	}
+	var progress int
+	if err := store.db.QueryRow(`SELECT count(*) FROM session_file_progress`).Scan(&progress); err != nil || progress != 0 {
+		t.Errorf("session progress after account deletion = %d, error %v; want none", progress, err)
+	}
+}
+
 func TestDefaultAccountSettingsUseLoopbackAndLocalPaths(t *testing.T) {
 	settings := DefaultAccountSettings()
 	if settings.Host != "127.0.0.1" || settings.Port != "8081" || settings.DatabasePath != "fileexplorer.sqlite" || settings.RootPath != "." || settings.FileExplorerURL != "http://127.0.0.1:8080" || settings.GatewayURL != "http://127.0.0.1:18789" || settings.AgentID != "main" || settings.Subdirectory != "" {

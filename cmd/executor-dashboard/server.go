@@ -129,7 +129,7 @@ func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level
 		_ = store.Close()
 		return nil, err
 	}
-	controller, err := newExecutorController(config, logLevel, store)
+	controller, err := newExecutorController(config, logLevel, store, account.ID)
 	if err != nil {
 		_ = store.Close()
 		return nil, err

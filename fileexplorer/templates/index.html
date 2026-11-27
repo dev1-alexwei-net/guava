@@ -182,11 +182,13 @@
         {{else if .MoveForm}}
         <section class="card shadow-sm border-0 mb-4" aria-labelledby="move-heading">
           <div class="card-body">
-            <h2 class="h4" id="move-heading">Move {{.MoveName}}</h2>
+            <h2 class="h4" id="move-heading">{{if eq .MoveMode "copy"}}Copy{{else}}Move{{end}} {{.MoveName}}</h2>
             <p class="text-body-secondary">Choose the folder where this file should go.</p>
             <p class="small text-body-secondary text-break">Current location: {{.MovePath}}</p>
             <form action="{{.MoveAction}}" method="post" class="d-flex flex-column gap-3">
               <input type="hidden" name="source" value="{{.MovePath}}">
+              <input type="hidden" name="mode" value="{{.MoveMode}}">
+              <input type="hidden" name="return" value="{{.MoveReturnPath}}">
               <div>
                 <label class="form-label" for="move-destination">Destination folder</label>
                 <select class="form-select" id="move-destination" name="destination" required>
@@ -195,7 +197,7 @@
                 <div class="form-text">The file will keep its current name. Existing files will not be overwritten.</div>
               </div>
               <div class="d-flex flex-column flex-sm-row gap-2">
-                <button class="btn btn-primary" type="submit">Move file</button>
+                <button class="btn btn-primary" type="submit">{{if eq .MoveMode "copy"}}Copy file{{else}}Move file{{end}}</button>
                 <a class="btn btn-outline-secondary" href="{{.ReturnURL}}">Cancel</a>
               </div>
             </form>
@@ -209,12 +211,7 @@
               <h2 class="h6 mb-1" id="clipboard-heading">{{if eq .ClipboardMode "cut"}}Ready to move{{else}}Ready to copy{{end}} · {{.ClipboardName}}</h2>
               <p class="text-body-secondary mb-0">Paste this file into the current directory.</p>
             </div>
-            <form action="{{.PasteAction}}" method="post" class="d-flex flex-column flex-sm-row gap-2">
-              <input type="hidden" name="destination" value="{{.Current}}">
-              <input type="hidden" name="clipboard_mode" value="{{.ClipboardMode}}">
-              <input type="hidden" name="clipboard_path" value="{{.ClipboardPath}}">
-              <button class="btn btn-primary" type="submit">Paste here</button>
-            </form>
+            <a class="btn btn-primary" href="{{.PasteAction}}">Paste here</a>
           </div>
         </section>
         {{end}}

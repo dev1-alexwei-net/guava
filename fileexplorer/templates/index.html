@@ -123,11 +123,12 @@
 
         <header class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-end gap-3 mb-4">
           <div>
-            {{if .Editor}}<h1 class="h3 mb-1">Edit file</h1>
+            {{if .MoveForm}}<h1 class="h3 mb-1">Choose a destination</h1>
+            {{else if .Editor}}<h1 class="h3 mb-1">Edit file</h1>
             {{else if .ConfirmDelete}}<h1 class="h3 mb-1">Confirm deletion</h1>
             {{else if .ConfirmRename}}<h1 class="h3 mb-1">Rename entry</h1>
             {{else}}<h1 class="h3 mb-1">Files</h1>{{end}}
-            <p class="text-body-secondary mb-0">Browse and manage this directory.</p>
+            {{if .MoveForm}}<p class="text-body-secondary mb-0">Select a destination directory for this file.</p>{{else}}<p class="text-body-secondary mb-0">Browse and manage this directory.</p>{{end}}
           </div>
           {{if .ParentURL}}<a class="btn btn-outline-secondary" href="{{.ParentURL}}">Back to directory</a>{{end}}
         </header>
@@ -175,6 +176,28 @@
               <input class="form-control form-control-sm" name="new" value="{{.RenameName}}" aria-label="New name for {{.RenameName}}" required>
               <button class="btn btn-primary" type="submit">Confirm rename</button>
               <a class="btn btn-outline-secondary" href="{{.ReturnURL}}">Cancel</a>
+            </form>
+          </div>
+        </section>
+        {{else if .MoveForm}}
+        <section class="card shadow-sm border-0 mb-4" aria-labelledby="move-heading">
+          <div class="card-body">
+            <h2 class="h4" id="move-heading">Move {{.MoveName}}</h2>
+            <p class="text-body-secondary">Choose the folder where this file should go.</p>
+            <p class="small text-body-secondary text-break">Current location: {{.MovePath}}</p>
+            <form action="{{.MoveAction}}" method="post" class="d-flex flex-column gap-3">
+              <input type="hidden" name="source" value="{{.MovePath}}">
+              <div>
+                <label class="form-label" for="move-destination">Destination folder</label>
+                <select class="form-select" id="move-destination" name="destination" required>
+                  {{range .MoveDirectories}}<option value="{{.Path}}"{{if eq .Path $.MoveDestination}} selected{{end}}>{{.Label}}</option>{{end}}
+                </select>
+                <div class="form-text">The file will keep its current name. Existing files will not be overwritten.</div>
+              </div>
+              <div class="d-flex flex-column flex-sm-row gap-2">
+                <button class="btn btn-primary" type="submit">Move file</button>
+                <a class="btn btn-outline-secondary" href="{{.ReturnURL}}">Cancel</a>
+              </div>
             </form>
           </div>
         </section>

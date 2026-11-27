@@ -179,7 +179,6 @@ func (c Config) Validate() error {
 	}{
 		{name: "database path", value: c.DatabasePath},
 		{name: "filesystem root", value: c.RootPath},
-		{name: "instructions path", value: c.InstructionsPath},
 		{name: "Gateway URL", value: c.GatewayURL},
 		{name: "fileexplorer URL", value: c.FileExplorerURL},
 		{name: "agent ID", value: c.AgentID},

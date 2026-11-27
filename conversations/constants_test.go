@@ -14,6 +14,11 @@ func TestLookupConstant(t *testing.T) {
 			want: "Continue with your prompt",
 		},
 		{
+			name: "continuation prompt text",
+			key:  ContinuationPromptTextKey,
+			want: "Continue. Remember to output the completion marker <complete /> only if you have finished.",
+		},
+		{
 			name: "provider session key format",
 			key:  ProviderSessionKeyFormatKey,
 			want: "session key:agentid:file_name:openclaw",

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -42,6 +43,7 @@ func run() error {
 	agentID := flags.String("agent-id", defaults.AgentID, "OpenClaw agent ID")
 	subdirectory := flags.String("subdirectory", defaults.Subdirectory, "optional folder under -root to scope runs to")
 	verifyTLS := flags.Bool("verify-tls", false, "verify the Gateway TLS certificate and hostname (default: skipped)")
+	accountFlow := flags.Bool("account-flow", false, "open account settings on the first dashboard request")
 	logLevel := flags.String("log-level", "info", "logging verbosity: trace, debug, info, warn, or error")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -88,7 +90,7 @@ func run() error {
 	if *addr != "" {
 		listen = normalizeAddress(*addr)
 	}
-	server := &http.Server{Addr: listen, Handler: app}
+	server := &http.Server{Addr: listen, Handler: startupLandingHandler(app, *accountFlow)}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -111,6 +113,28 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+func startupLandingHandler(next http.Handler, accountFlow bool) http.Handler {
+	if !accountFlow {
+		return next
+	}
+	var firstDashboardRequest sync.Once
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/" {
+			first := false
+			firstDashboardRequest.Do(func() { first = true })
+			if first {
+				location := "/settings"
+				if r.URL.RawQuery != "" {
+					location += "?" + r.URL.RawQuery
+				}
+				http.Redirect(w, r, location, http.StatusFound)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func envOrDefault(name, fallback string) string {

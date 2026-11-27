@@ -58,7 +58,7 @@ func (m *taskSessionManager) Create(runner *executor.Executor) (*executor.Execut
 	if err != nil {
 		return nil, nil, err
 	}
-	bound, err := m.bindRunner(runner, record.ID, nil, nil)
+	bound, err := m.bindRunner(runner, record.ID, nil, nil, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -70,8 +70,8 @@ func (m *taskSessionManager) Create(runner *executor.Executor) (*executor.Execut
 // the files the session left unfinished with the files the manifest currently
 // reports — dropping any that no longer exist — persisting the merged set
 // before marking the record active. The returned runner skips files the
-// session already completed, keeps the surviving unfinished files ahead of
-// the newly reported files, and processes nothing that no longer exists.
+// session already completed, merges surviving unfinished paths with current
+// discoveries in the work queue, and processes nothing that no longer exists.
 func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Record, error) {
 	ctx := context.Background()
 	record, err := m.store.Get(ctx, strings.TrimSpace(id))
@@ -90,7 +90,7 @@ func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Re
 	if err != nil {
 		return nil, nil, fmt.Errorf("load pending task session files: %w", err)
 	}
-	merged, err := m.mergePendingSet(ctx, record, completed, pending)
+	merged, carried, err := m.mergePendingSet(ctx, record, completed, pending)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,7 +117,7 @@ func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Re
 	if err != nil {
 		return nil, nil, err
 	}
-	bound, err := m.bindRunner(runner, updated.ID, completed, merged)
+	bound, err := m.bindRunner(runner, updated.ID, completed, merged, carried)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,13 +134,13 @@ func (m *taskSessionManager) Resume(id string) (*executor.Executor, *sessions.Re
 // over, newly reported files are newly discovered. The merged set replaces
 // the session's persisted unfinished set, including its origins, before the
 // run starts.
-func (m *taskSessionManager) mergePendingSet(ctx context.Context, record sessions.Record, completed, pending []string) ([]string, error) {
+func (m *taskSessionManager) mergePendingSet(ctx context.Context, record sessions.Record, completed, pending []string) ([]string, []string, error) {
 	if err := m.refreshFileExplorer(ctx); err != nil {
-		return nil, fmt.Errorf("refresh fileexplorer for resume: %w", err)
+		return nil, nil, fmt.Errorf("refresh fileexplorer for resume: %w", err)
 	}
 	manifest, err := tasks.ListFilePaths(ctx, record.DatabaseFile, record.Subdirectory)
 	if err != nil {
-		return nil, fmt.Errorf("list files for resume: %w", err)
+		return nil, nil, fmt.Errorf("list files for resume: %w", err)
 	}
 
 	completedSet := make(map[string]struct{}, len(completed))
@@ -157,6 +157,7 @@ func (m *taskSessionManager) mergePendingSet(ctx context.Context, record session
 	}
 
 	merged := make([]string, 0, len(manifest))
+	carried := make([]string, 0, len(pending))
 	entries := make([]sessions.PendingEntry, 0, len(manifest))
 	for _, path := range pending {
 		if _, gone := manifestSet[path]; !gone {
@@ -166,6 +167,7 @@ func (m *taskSessionManager) mergePendingSet(ctx context.Context, record session
 			continue
 		}
 		merged = append(merged, path)
+		carried = append(carried, path)
 		entries = append(entries, sessions.PendingEntry{Path: path, Carried: true})
 	}
 	for _, path := range manifest {
@@ -180,9 +182,9 @@ func (m *taskSessionManager) mergePendingSet(ctx context.Context, record session
 	}
 
 	if err := m.store.SetPendingSet(ctx, record.ID, entries); err != nil {
-		return nil, fmt.Errorf("persist merged pending set: %w", err)
+		return nil, nil, fmt.Errorf("persist merged pending set: %w", err)
 	}
-	return merged, nil
+	return merged, carried, nil
 }
 
 // refreshFileExplorer asks fileexplorer to rescan the session's root before
@@ -233,14 +235,15 @@ func (m *taskSessionManager) Delete(id string) error {
 // bindRunner returns an executor derived from runner that reports each
 // file's progress for sessionID into the session store, skips the files an
 // earlier run of this session already finished when completedPaths is
-// non-empty, and — when initialPending is non-empty — keeps the session's
-// unfinished files ahead of files discovered from the manifest. runner
+// non-empty, and — when initialPending is non-empty — seeds the session's
+// unfinished files into the provider queue alongside manifest discoveries. runner
 // itself is left untouched, so the original stays usable for other sessions.
-func (m *taskSessionManager) bindRunner(runner *executor.Executor, sessionID string, completedPaths, initialPending []string) (*executor.Executor, error) {
+func (m *taskSessionManager) bindRunner(runner *executor.Executor, sessionID string, completedPaths, initialPending, carriedPaths []string) (*executor.Executor, error) {
 	config := runner.Config()
 	config.CompletedPaths = completedPaths
 	config.InitialPending = initialPending
 	config.OnFileProgress = m.fileReporter(sessionID)
+	config.OnPendingFiles = m.pendingReporter(sessionID, carriedPaths)
 	bound, err := executor.New(config)
 	if err != nil {
 		return nil, fmt.Errorf("bind task session progress tracking: %w", err)
@@ -274,6 +277,24 @@ func (m *taskSessionManager) fileReporter(sessionID string) func(taskID string, 
 				)
 			}
 		}
+	}
+}
+
+// pendingReporter persists the queue snapshot from each file-index refresh,
+// preserving the origin assigned when the run began. The task provider invokes
+// it before selecting work, so the dashboard never gets behind the executor.
+func (m *taskSessionManager) pendingReporter(sessionID string, carriedPaths []string) func([]string) error {
+	carried := make(map[string]struct{}, len(carriedPaths))
+	for _, path := range carriedPaths {
+		carried[path] = struct{}{}
+	}
+	return func(paths []string) error {
+		entries := make([]sessions.PendingEntry, 0, len(paths))
+		for _, path := range paths {
+			_, isCarried := carried[path]
+			entries = append(entries, sessions.PendingEntry{Path: path, Carried: isCarried})
+		}
+		return m.store.SetPendingSet(context.Background(), sessionID, entries)
 	}
 }
 

@@ -88,6 +88,12 @@ type Config struct {
 	// the run continues and an unrecorded file is simply retried on the next
 	// resume. A nil callback disables progress reporting.
 	OnFileProgress func(taskID string, completed bool)
+
+	// OnPendingFiles is called after every file-index refresh with the ordered
+	// paths that remain eligible for processing. Returning an error stops the
+	// run before selecting the next file; a nil callback disables queue
+	// persistence.
+	OnPendingFiles func(paths []string) error
 }
 
 // Executor joins the file-backed task source to a conversations service for

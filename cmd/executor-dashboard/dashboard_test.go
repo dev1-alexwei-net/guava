@@ -1169,3 +1169,37 @@ func refreshButton(body string, interval int) string {
 		rest = rest[start+1:]
 	}
 }
+
+func TestPendingReporterRefreshesDashboardQueueAndOrigins(t *testing.T) {
+	store, err := sessions.OpenStore(filepath.Join(t.TempDir(), "task-sessions.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	record, err := store.Create(context.Background(), sessions.Record{
+		AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: sessions.StatusActive,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	manager := newTaskSessionManager(executor.Config{}, store, nil)
+	report := manager.pendingReporter(record.ID, []string{"b.txt"})
+	if err := report([]string{"b.txt", "c.txt"}); err != nil {
+		t.Fatalf("persist initial refresh: %v", err)
+	}
+	if err := report([]string{"aa.txt", "b.txt", "c.txt"}); err != nil {
+		t.Fatalf("persist next refresh: %v", err)
+	}
+
+	got, err := store.PendingProgress(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("PendingProgress: %v", err)
+	}
+	if len(got) != 3 || got[0].Path != "aa.txt" || got[1].Path != "b.txt" || got[2].Path != "c.txt" {
+		t.Fatalf("PendingProgress = %+v, want refreshed aa.txt, b.txt, c.txt queue", got)
+	}
+	if got[0].Origin != sessions.OriginNew || got[1].Origin != sessions.OriginCarried || got[2].Origin != sessions.OriginNew {
+		t.Errorf("refreshed origins = %s, %s, %s, want new, carried, new", got[0].Origin, got[1].Origin, got[2].Origin)
+	}
+}

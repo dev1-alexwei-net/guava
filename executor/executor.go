@@ -67,6 +67,7 @@ func (e *Executor) Run(ctx context.Context) error {
 		InitialPending:   e.config.InitialPending,
 		HTTPClient:       e.config.HTTPClient,
 		Logger:           e.config.Logger,
+		OnPendingFiles:   e.config.OnPendingFiles,
 	})
 	if err != nil {
 		return e.conversationService.Run(ctx, failedTaskProvider{err: err})

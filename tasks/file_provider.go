@@ -43,6 +43,10 @@ type FileProviderConfig struct {
 	HTTPClient *http.Client
 	// Logger receives structured task-source progress details. A nil logger disables them.
 	Logger *slog.Logger
+	// OnPendingFiles persists the ordered work queue after each index refresh
+	// and before the next file is selected. Returning an error stops the run
+	// before it can process work with a stale dashboard queue.
+	OnPendingFiles func(paths []string) error
 }
 
 // FileProvider implements TaskProvider for files indexed by fileexplorer.
@@ -57,6 +61,7 @@ type FileProvider struct {
 	subdirectory     string
 	logger           *slog.Logger
 	completed        map[string]struct{}
+	onPendingFiles   func([]string) error
 
 	fallbackMu           sync.Mutex
 	fallbackLoaded       bool
@@ -131,6 +136,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		subdirectory:     config.Subdirectory,
 		logger:           config.Logger,
 		completed:        completed,
+		onPendingFiles:   config.OnPendingFiles,
 	}, nil
 }
 
@@ -161,6 +167,29 @@ func (p *FileProvider) Tasks(fn func(conversations.Task) error) error {
 		}
 
 		pending := p.queue.Pending()
+		if p.onPendingFiles != nil {
+			available := make(map[string]struct{}, len(paths))
+			for _, rawPath := range paths {
+				filePath, err := normalizeQueuePath(rawPath)
+				if err != nil {
+					return fmt.Errorf("normalize refreshed file path %q: %w", rawPath, err)
+				}
+				available[filePath] = struct{}{}
+			}
+			visible := make([]string, 0, len(pending))
+			for _, filePath := range pending {
+				if _, exists := available[filePath]; !exists {
+					continue
+				}
+				if _, done := p.completed[filePath]; done || isInstructionsFile(indexedFile{path: filePath}) {
+					continue
+				}
+				visible = append(visible, filePath)
+			}
+			if err := p.onPendingFiles(visible); err != nil {
+				return fmt.Errorf("persist pending file queue: %w", err)
+			}
+		}
 		if len(pending) == 0 {
 			return nil
 		}

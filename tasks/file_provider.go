@@ -83,7 +83,6 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		{"database path", config.DatabasePath},
 		{"filesystem root", config.RootPath},
 		//{"subdirectory root", config.Subdirectory}, // not validate this yet
-		{"instructions path", config.InstructionsPath},
 		{"fileexplorer URL", config.FileExplorerURL},
 	} {
 		if strings.TrimSpace(field.value) == "" {

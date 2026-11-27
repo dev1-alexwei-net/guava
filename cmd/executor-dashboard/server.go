@@ -25,6 +25,7 @@ var dashboardFiles embed.FS
 type dashboard struct {
 	controller   *executorController
 	store        *sessions.Store
+	account      sessions.AccountSettings
 	page         *template.Template
 	databasePath string
 	routes       http.Handler
@@ -84,8 +85,23 @@ func defaultSessionStorePath(databasePath string) string {
 }
 
 func newDashboard(config executor.Config, logLevel slog.Level, sessionStorePath string) (*dashboard, error) {
+	settings := sessions.DefaultAccountSettings()
+	settings.DatabasePath = config.DatabasePath
+	settings.RootPath = config.RootPath
+	settings.FileExplorerURL = config.FileExplorerURL
+	settings.GatewayURL = config.GatewayURL
+	settings.AgentID = config.AgentID
+	settings.Subdirectory = config.Subdirectory
+	return newDashboardWithAccountSettings(config, logLevel, sessionStorePath, settings)
+}
+
+func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level, sessionStorePath string, initial sessions.AccountSettings) (*dashboard, error) {
 	if sessionStorePath == "" {
-		sessionStorePath = defaultSessionStorePath(config.DatabasePath)
+		storeDatabasePath := config.DatabasePath
+		if storeDatabasePath == "" {
+			storeDatabasePath = sessions.DefaultAccountSettings().DatabasePath
+		}
+		sessionStorePath = defaultSessionStorePath(storeDatabasePath)
 	}
 	if filepath.Clean(sessionStorePath) == filepath.Clean(config.DatabasePath) {
 		return nil, fmt.Errorf("task session metadata database must be separate from the fileexplorer database")
@@ -94,6 +110,21 @@ func newDashboard(config executor.Config, logLevel slog.Level, sessionStorePath 
 	if err != nil {
 		return nil, err
 	}
+	account, err := store.EnsureAccount(context.Background(), initial)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	if filepath.Clean(sessionStorePath) == filepath.Clean(account.DatabasePath) {
+		_ = store.Close()
+		return nil, fmt.Errorf("task session metadata database must be separate from the fileexplorer database")
+	}
+	config.DatabasePath = account.DatabasePath
+	config.RootPath = account.RootPath
+	config.Subdirectory = account.Subdirectory
+	config.FileExplorerURL = account.FileExplorerURL
+	config.GatewayURL = account.GatewayURL
+	config.AgentID = account.AgentID
 	if err := store.RecoverInterrupted(context.Background()); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -113,6 +144,7 @@ func newDashboard(config executor.Config, logLevel slog.Level, sessionStorePath 
 	app := &dashboard{
 		controller:   controller,
 		store:        store,
+		account:      account,
 		page:         page,
 		databasePath: config.DatabasePath,
 	}

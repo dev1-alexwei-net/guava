@@ -139,6 +139,19 @@ func OpenStore(path string) (*Store, error) {
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY (session_id, file_path)
 		);
+		CREATE TABLE IF NOT EXISTS executor_accounts (
+			id TEXT PRIMARY KEY,
+			singleton INTEGER NOT NULL UNIQUE CHECK (singleton = 1),
+			host TEXT NOT NULL,
+			port TEXT NOT NULL,
+			database_path TEXT NOT NULL,
+			root_path TEXT NOT NULL,
+			fileexplorer_url TEXT NOT NULL,
+			gateway_url TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			subdirectory TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
 	`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize task session store: %w", err)

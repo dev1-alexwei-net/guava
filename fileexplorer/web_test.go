@@ -218,11 +218,23 @@ func TestRowActionsRevealOnHoverAndFocusForDesktop(t *testing.T) {
 	if !strings.Contains(body, "li.list-group-item:focus-within .row-actions { opacity: 1; visibility: visible; transition: none; }") {
 		t.Error(":focus-within reveal must be immediate, with no transition")
 	}
-	// Every action stays present, labeled, and reachable in both entry kinds.
-	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</a>`, `>Delete</a>`} {
+	// Primary actions remain available, and secondary actions are reachable
+	// through a keyboard-native disclosure with an entry-specific label.
+	for _, want := range []string{`>Edit</a>`, `>More</summary>`, `>Rename</a>`, `>Delete</a>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("row action %q missing from the listing", want)
 		}
+	}
+	detailsStart := strings.Index(body, `<details class="more-actions">`)
+	if detailsStart < 0 {
+		t.Fatal("More actions disclosure is missing")
+	}
+	detailsEnd := strings.Index(body[detailsStart:], `</details>`)
+	if detailsEnd < 0 || !strings.Contains(body[detailsStart:detailsStart+detailsEnd], `>Download</a>`) {
+		t.Fatal("Download is not available inside the secondary actions disclosure")
+	}
+	if !strings.Contains(body[detailsStart:detailsStart+detailsEnd], `aria-label="More actions for notes.txt"`) {
+		t.Error("More actions disclosure is not labeled for its file")
 	}
 	assertNoClientSideJavaScript(t, body)
 }
@@ -273,8 +285,8 @@ func TestRowActionsTouchContract(t *testing.T) {
 	if hoverGate < 0 || strings.Index(body, ".row-actions { opacity: 0") < hoverGate {
 		t.Error("the only hidden rest state must stay inside the @media (hover: hover) gate")
 	}
-	// Touch targets keep their visible text labels — no icon-only fallback.
-	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>Rename</a>`, `>Delete</a>`} {
+	// Touch targets keep visible labels, including the More disclosure.
+	for _, want := range []string{`>Edit</a>`, `>Download</a>`, `>More</summary>`, `>Rename</a>`, `>Delete</a>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("row action %q missing from the listing", want)
 		}

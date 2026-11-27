@@ -82,12 +82,12 @@ type pageItem struct {
 	Path       string
 	URL        string
 	PreviewURL string
-	// Actions are the per-entry actions rendered in order. The template
-	// renders whatever the data describes, so a new action is a change
-	// here, not a template change.
-	Actions []rowAction
-	IsDir   bool
-	Size    int64
+	// Actions are the primary per-entry actions rendered in order. Secondary
+	// actions stay available in the More actions disclosure.
+	Actions          []rowAction
+	SecondaryActions []rowAction
+	IsDir            bool
+	Size             int64
 }
 
 // rowAction describes one link action rendered on a row. Multi-step
@@ -167,6 +167,9 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap, pane, column)
 		for a := range item.Actions {
 			item.Actions[a].Href = r.withState(item.Actions[a].Href, theme, wrap, pane, column)
+		}
+		for a := range item.SecondaryActions {
+			item.SecondaryActions[a].Href = r.withState(item.SecondaryActions[a].Href, theme, wrap, pane, column)
 		}
 	}
 	return data
@@ -375,12 +378,13 @@ func (r *renderer) Directory(current string, entries []Entry, pageError string) 
 	}
 	for _, entry := range entries {
 		item := pageItem{
-			Name:    entry.Name,
-			Path:    entry.Path,
-			URL:     r.ItemURL(entry.Path, entry.IsDir),
-			Actions: r.entryActions(entry),
-			IsDir:   entry.IsDir,
-			Size:    entry.Size,
+			Name:             entry.Name,
+			Path:             entry.Path,
+			URL:              r.ItemURL(entry.Path, entry.IsDir),
+			Actions:          r.entryActions(entry),
+			SecondaryActions: r.entrySecondaryActions(entry),
+			IsDir:            entry.IsDir,
+			Size:             entry.Size,
 		}
 		if !entry.IsDir {
 			item.PreviewURL = "/preview/" + r.EscapedPath(entry.Path)
@@ -390,26 +394,33 @@ func (r *renderer) Directory(current string, entries []Entry, pageError string) 
 	return data
 }
 
-// entryActions returns the actions for an entry, in display order. Files
-// offer Edit and Download in addition to the shared Rename and Delete. Each
-// action is a link; Rename and Delete open their dedicated form pages. Each
-// carries an aria-label of the form "<verb> <entry>" so the four actions
-// label consistently across rows.
-// Adding a new action is a data change in this method, not a template
-// change.
+// entryActions returns the primary actions for an entry, in display order.
+// Files offer Edit in addition to the shared Rename and Delete. Each action
+// is a link; Rename and Delete open their dedicated form pages. Each carries
+// an aria-label of the form "<verb> <entry>" so actions label consistently
+// across rows.
 func (r *renderer) entryActions(entry Entry) []rowAction {
 	var actions []rowAction
 	if !entry.IsDir {
-		actions = append(actions,
-			rowAction{Label: "Edit", Class: "btn btn-outline-primary btn-sm", AriaLabel: "Edit " + entry.Name, Href: r.EditorURL(entry.Path)},
-			rowAction{Label: "Download", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Download " + entry.Name, Href: r.ItemURL(entry.Path, false) + "?download=1"},
-		)
+		actions = append(actions, rowAction{Label: "Edit", Class: "btn btn-outline-primary btn-sm", AriaLabel: "Edit " + entry.Name, Href: r.EditorURL(entry.Path)})
 	}
 	actions = append(actions,
 		rowAction{Label: "Rename", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Rename " + entry.Name, Href: "/rename/" + r.EscapedPath(entry.Path)},
 		rowAction{Label: "Delete", Class: "btn btn-outline-danger btn-sm", AriaLabel: "Delete " + entry.Name, Href: "/confirm-delete/" + r.EscapedPath(entry.Path)},
 	)
 	return actions
+}
+
+// entrySecondaryActions returns actions that remain available without taking
+// space in the primary row controls. Keep this separate from entryActions so
+// future file operations can extend the More actions disclosure independently.
+func (r *renderer) entrySecondaryActions(entry Entry) []rowAction {
+	if entry.IsDir {
+		return nil
+	}
+	return []rowAction{
+		{Label: "Download", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Download " + entry.Name, Href: r.ItemURL(entry.Path, false) + "?download=1"},
+	}
 }
 
 func (r *renderer) Editor(rel, content string, saved bool) pageData {

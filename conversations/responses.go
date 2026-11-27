@@ -99,9 +99,13 @@ func (c responsesClient) createObserved(ctx context.Context, input, sessionKey, 
 	if err != nil {
 		return agentResponse{}, err
 	}
+	model, ok := LookupConstant(ProviderModelKey)
+	if !ok {
+		return agentResponse{}, fmt.Errorf("provider model constant %q is not configured", ProviderModelKey)
+	}
 
 	payload := responsesRequest{
-		Model:              "openclaw",
+		Model:              model,
 		Input:              input,
 		Stream:             false,
 		PreviousResponseID: previousResponseID,

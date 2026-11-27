@@ -1,5 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "env": {
+    "HOST": "0.0.0.0"
+  },
   "services": {
     "fileexplorer": {
       "root": ".",

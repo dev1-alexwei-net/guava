@@ -34,10 +34,10 @@ type FileProviderConfig struct {
 	// keeps the fresh-run behavior of processing every discovered file.
 	CompletedPaths []string
 	// InitialPending lists files an earlier attempt of this session left
-	// unfinished, in the order a resumed run must keep them ahead of files
-	// discovered from the manifest. Paths use the same cleaned, slash-
-	// separated relative form as task IDs; an empty value keeps the fresh-run
-	// behavior of processing every discovered file in manifest order.
+	// unfinished. These paths are merged with manifest discoveries and sorted
+	// together in binary path order. Paths use the same cleaned, slash-separated
+	// relative form as task IDs; an empty value keeps the fresh-run behavior of
+	// processing every discovered file.
 	InitialPending []string
 	// HTTPClient overrides the client used to refresh fileexplorer. A nil client uses http.DefaultClient.
 	HTTPClient *http.Client
@@ -57,7 +57,6 @@ type FileProvider struct {
 	subdirectory     string
 	logger           *slog.Logger
 	completed        map[string]struct{}
-	firstSelection   bool
 
 	fallbackMu           sync.Mutex
 	fallbackLoaded       bool
@@ -69,7 +68,7 @@ var _ conversations.TaskProvider = (*FileProvider)(nil)
 
 // NewFileProvider opens the read-only manifest and rooted filesystem reader
 // used to produce file tasks. It refreshes fileexplorer and discovers new
-// paths between tasks, selecting newly discovered paths before older pending work.
+// paths between tasks, keeping the complete pending set in binary path order.
 func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvider, error) {
 	if ctx == nil {
 		return nil, errors.New("context is nil")
@@ -132,7 +131,6 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		subdirectory:     config.Subdirectory,
 		logger:           config.Logger,
 		completed:        completed,
-		firstSelection:   true,
 	}, nil
 }
 
@@ -158,16 +156,7 @@ func (p *FileProvider) Tasks(fn func(conversations.Task) error) error {
 		if err != nil {
 			return fmt.Errorf("list indexed files: %w", err)
 		}
-		if p.firstSelection {
-			// The first pass of a resumed run appends the manifest behind the
-			// seeded unfinished files, keeping them ahead of newly reported
-			// files; later passes prioritize files created by the current
-			// task exactly as on a fresh run.
-			if _, err := p.queue.EnqueueNext(paths); err != nil {
-				return fmt.Errorf("enqueue discovered files: %w", err)
-			}
-			p.firstSelection = false
-		} else if _, err := p.queue.EnqueueNext(paths); err != nil {
+		if _, err := p.queue.EnqueueNext(paths); err != nil {
 			return fmt.Errorf("enqueue discovered files: %w", err)
 		}
 

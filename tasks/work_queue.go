@@ -10,8 +10,8 @@ import (
 )
 
 // WorkQueue is the in-memory work queue scoped to a single executor run.
-// It records every path discovered during the run and keeps unprocessed paths
-// in deterministic order, with newly discovered paths optionally prioritized.
+// It records every path discovered during the run and keeps all unprocessed
+// paths in binary path order, including when new paths are discovered.
 // It exists only for one run: it is never shared between runs and never persisted,
 // so no shared-database table is involved.
 type WorkQueue struct {
@@ -24,15 +24,14 @@ func NewWorkQueue() *WorkQueue {
 	return &WorkQueue{discovered: make(map[string]struct{})}
 }
 
-// EnqueueNext accepts one file snapshot and puts newly discovered paths ahead
-// of existing pending work. The new batch is sorted in binary path order and
-// existing pending paths retain their relative FIFO order. This lets files
-// created by the current task be selected immediately after its completion.
+// EnqueueNext accepts one file snapshot and adds newly discovered paths to
+// pending work. The complete pending set is kept in binary path order so
+// resumed and newly discovered files have consistent ordering.
 func (q *WorkQueue) EnqueueNext(snapshot []string) (int, error) {
-	return q.enqueue(snapshot, true)
+	return q.enqueue(snapshot)
 }
 
-func (q *WorkQueue) enqueue(snapshot []string, prioritize bool) (int, error) {
+func (q *WorkQueue) enqueue(snapshot []string) (int, error) {
 	if q == nil {
 		return 0, errors.New("work queue is nil")
 	}
@@ -54,26 +53,17 @@ func (q *WorkQueue) enqueue(snapshot []string, prioritize bool) (int, error) {
 		fresh = append(fresh, path)
 	}
 
-	sort.Slice(fresh, func(i, j int) bool { return fresh[i] < fresh[j] })
 	for _, path := range fresh {
 		q.discovered[path] = struct{}{}
-	}
-	if prioritize {
-		q.pending = append(fresh, q.pending...)
-		return len(fresh), nil
-	}
-	for _, path := range fresh {
 		q.pending = append(q.pending, path)
 	}
+	sort.Slice(q.pending, func(i, j int) bool { return q.pending[i] < q.pending[j] })
 	return len(fresh), nil
 }
 
-// Seed sets the queue's initial pending work before any discovery pass: the
-// paths in exactly the order the caller provides them, each normalized to
-// the queue's path identity. A resumed run uses this to keep the files an
-// earlier attempt left unfinished ahead of the files the manifest currently
-// reports; the first Enqueue pass appends behind them, and later passes
-// behave exactly as on a fresh run.
+// Seed sets the queue's initial pending work before any discovery pass. Paths
+// are normalized, deduplicated, and sorted in binary path order, like paths
+// later merged from manifest snapshots.
 //
 // All seed paths are validated before the queue is modified: a snapshot
 // containing an invalid path fails as a whole and leaves the queue
@@ -105,10 +95,11 @@ func (q *WorkQueue) Seed(paths []string) (int, error) {
 		q.pending = append(q.pending, path)
 		queued++
 	}
+	sort.Slice(q.pending, func(i, j int) bool { return q.pending[i] < q.pending[j] })
 	return queued, nil
 }
 
-// Pop removes and returns the oldest queued path, preserving FIFO order.
+// Pop removes and returns the first queued path in binary path order.
 // The second return value is false when the queue is empty.
 func (q *WorkQueue) Pop() (string, bool) {
 	if q == nil || len(q.pending) == 0 {
@@ -132,7 +123,7 @@ func (q *WorkQueue) Empty() bool {
 	return q.Len() == 0
 }
 
-// Pending returns a copy of the queued paths in FIFO order.
+// Pending returns a copy of the queued paths in binary path order.
 func (q *WorkQueue) Pending() []string {
 	if q == nil {
 		return nil

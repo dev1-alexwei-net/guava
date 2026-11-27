@@ -73,10 +73,9 @@ type Config struct {
 	CompletedPaths []string
 
 	// InitialPending lists files an earlier attempt of this session left
-	// unfinished, in the order a resumed run must keep them ahead of files
-	// discovered from the manifest. Paths use the cleaned, slash-separated
-	// relative form of task IDs; leave it empty for a fresh run, which
-	// processes every discovered file in manifest order.
+	// unfinished. These paths are merged with manifest discoveries and sorted
+	// together in binary path order. Paths use the cleaned, slash-separated
+	// relative form of task IDs; leave it empty for a fresh run.
 	InitialPending []string
 
 	// OnFileProgress is called once per file after its processing attempt

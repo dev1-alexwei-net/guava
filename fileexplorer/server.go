@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"unicode/utf16"
@@ -107,6 +108,8 @@ func (a *application) buildRoutes() http.Handler {
 	mux.Handle("POST /edit/{path...}", a.serialized(a.saveFile))
 	mux.Handle("GET /confirm-delete/{path...}", a.serialized(a.confirmDeletePage))
 	mux.Handle("GET /rename/{path...}", a.serialized(a.renamePage))
+	mux.Handle("GET /move/{path...}", a.serialized(a.movePage))
+	mux.Handle("POST /move", a.serialized(a.submitMove))
 	mux.Handle("GET /preview/{path...}", a.serialized(a.previewPage))
 	mux.Handle("GET /clipboard/{mode}/{path...}", a.serialized(a.selectClipboard))
 	mux.Handle("POST /paste", a.serialized(a.pasteFile))
@@ -693,4 +696,101 @@ func (e *application) renamePage(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		e.writePage(w, r, http.StatusOK, e.renderer.RenameConfirmation(rel))
 	}
+}
+
+func (e *application) moveSource(w http.ResponseWriter, r *http.Request, requested string) (string, bool) {
+	target, err := e.filesystem.Resolve(requested)
+	if err != nil {
+		e.pathError(w, r, err)
+		return "", false
+	}
+	rel := e.filesystem.Relative(target)
+	if rel == "" {
+		e.renderError(w, r, http.StatusBadRequest, "The root directory cannot be moved")
+		return "", false
+	}
+	info, err := e.filesystem.Stat(rel)
+	if err != nil {
+		e.pathError(w, r, err)
+		return "", false
+	}
+	if !info.Mode().IsRegular() {
+		e.renderError(w, r, http.StatusBadRequest, "Choose a regular file to move")
+		return "", false
+	}
+	return rel, true
+}
+
+func (e *application) moveDirectoryChoices() ([]directoryChoice, error) {
+	entries, err := e.syncer.scanner.Scan()
+	if err != nil {
+		return nil, err
+	}
+	choices := []directoryChoice{{Path: ".", Label: "Root directory (/)"}}
+	for _, entry := range entries {
+		if entry.IsDir {
+			choices = append(choices, directoryChoice{Path: entry.Path, Label: entry.Path + "/"})
+		}
+	}
+	sort.Slice(choices[1:], func(i, j int) bool { return choices[i+1].Label < choices[j+1].Label })
+	return choices, nil
+}
+
+func (e *application) renderMoveForm(w http.ResponseWriter, r *http.Request, rel, destination, message string, status int) {
+	directories, err := e.moveDirectoryChoices()
+	if err != nil {
+		e.renderError(w, r, http.StatusInternalServerError, "Unable to list destination folders")
+		return
+	}
+	e.writePage(w, r, status, e.renderer.MoveForm(rel, destination, directories, message))
+}
+
+func (e *application) movePage(w http.ResponseWriter, r *http.Request) {
+	rel, ok := e.moveSource(w, r, r.PathValue("path"))
+	if !ok {
+		return
+	}
+	destination := filepath.ToSlash(filepath.Dir(rel))
+	if destination == "." {
+		destination = "."
+	}
+	e.renderMoveForm(w, r, rel, destination, "", http.StatusOK)
+}
+
+func (e *application) submitMove(w http.ResponseWriter, r *http.Request) {
+	if err := parseForm(w, r); err != nil {
+		if rel, ok := e.moveSource(w, r, r.FormValue("source")); ok {
+			e.renderMoveForm(w, r, rel, r.FormValue("destination"), "Please choose a valid destination folder.", http.StatusBadRequest)
+		}
+		return
+	}
+	rel, ok := e.moveSource(w, r, r.FormValue("source"))
+	if !ok {
+		return
+	}
+	destination := r.FormValue("destination")
+	if _, _, err := e.filesystem.ResolveParent(destination); err != nil {
+		interaction := pathInteraction(err)
+		e.renderMoveForm(w, r, rel, destination, "Choose an available destination folder: "+interaction.message, interaction.status)
+		return
+	}
+	current, err := e.mutations.Paste("cut", rel, destination)
+	if err != nil {
+		var interaction *interactionError
+		if errors.As(err, &interaction) {
+			e.renderMoveForm(w, r, rel, destination, interaction.message, interaction.status)
+			return
+		}
+		pathIssue := pathInteraction(err)
+		e.renderMoveForm(w, r, rel, destination, pathIssue.message, pathIssue.status)
+		return
+	}
+	message := "Moved " + path.Base(rel) + "."
+	target := e.renderer.ItemURL(current, true)
+	if current == "" {
+		target = "/"
+	}
+	query := url.Values{"notice": {message}}
+	target = e.renderer.withState(target+"?"+query.Encode(), requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r))
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }

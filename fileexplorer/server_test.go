@@ -564,6 +564,52 @@ func followMutationError(t *testing.T, h http.Handler, response *httptest.Respon
 	return response
 }
 
+func TestMoveDestinationForm(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "archive"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "source.txt"), []byte("move me"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "already-there.txt"), []byte("stay"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "archive", "already-there.txt"), []byte("keep"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	listing := get(t, h, "/")
+	if !strings.Contains(listing.Body.String(), `href="/move/source.txt"`) {
+		t.Fatal("file row does not offer the dedicated Move form")
+	}
+	form := get(t, h, "/move/source.txt")
+	body := form.Body.String()
+	if form.Code != http.StatusOK || !strings.Contains(body, "Choose a destination") || !strings.Contains(body, `name="destination" required`) || !strings.Contains(body, `value="archive"`) {
+		t.Fatalf("move form: status=%d body=%s", form.Code, body)
+	}
+
+	moved := formRequest(t, h, http.MethodPost, "/move", url.Values{"source": {"source.txt"}, "destination": {"archive"}})
+	if moved.Code != http.StatusSeeOther || !strings.Contains(moved.Header().Get("Location"), "notice=") {
+		t.Fatalf("move submission: status=%d location=%q body=%s", moved.Code, moved.Header().Get("Location"), moved.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "source.txt")); !os.IsNotExist(err) {
+		t.Fatalf("source still exists after move: %v", err)
+	}
+	if contents, err := os.ReadFile(filepath.Join(root, "archive", "source.txt")); err != nil || string(contents) != "move me" {
+		t.Fatalf("destination contents=%q err=%v", contents, err)
+	}
+
+	conflict := formRequest(t, h, http.MethodPost, "/move", url.Values{"source": {"already-there.txt"}, "destination": {"archive"}})
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "already exists") {
+		t.Fatalf("move conflict feedback: status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+	if contents, err := os.ReadFile(filepath.Join(root, "already-there.txt")); err != nil || string(contents) != "stay" {
+		t.Fatalf("source changed after rejected move: contents=%q err=%v", contents, err)
+	}
+}
+
 func TestCutCopyPasteFileActions(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "destination"), 0o755); err != nil {

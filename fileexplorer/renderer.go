@@ -57,6 +57,12 @@ type pageData struct {
 	ClipboardMode        string
 	ClipboardPath        string
 	ClipboardName        string
+	MoveForm             bool
+	MovePath             string
+	MoveName             string
+	MoveDestination      string
+	MoveAction           string
+	MoveDirectories      []directoryChoice
 	Editor               bool
 	EditorPath           string
 	EditorURL            string
@@ -80,6 +86,11 @@ type pageData struct {
 type breadcrumb struct {
 	Name string
 	URL  string
+}
+
+type directoryChoice struct {
+	Path  string
+	Label string
 }
 
 type pageItem struct {
@@ -159,6 +170,7 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	data.DeleteAction = r.withState("/delete", theme, wrap, pane, column)
 	data.RenameAction = r.withState("/rename", theme, wrap, pane, column)
 	data.PasteAction = r.withState("/paste", theme, wrap, pane, column)
+	data.MoveAction = r.withState("/move", theme, wrap, pane, column)
 	data.Notice = request.URL.Query().Get("notice")
 	data.ClipboardMode = request.URL.Query().Get("clipboard_mode")
 	data.ClipboardPath = request.URL.Query().Get("clipboard_path")
@@ -461,6 +473,7 @@ func (r *renderer) entrySecondaryActions(entry Entry) []rowAction {
 		{Label: "Download", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Download " + entry.Name, Href: r.ItemURL(entry.Path, false) + "?download=1"},
 		{Label: "Copy", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Copy " + entry.Name, Href: "/clipboard/copy/" + r.EscapedPath(entry.Path)},
 		{Label: "Cut", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Cut " + entry.Name, Href: "/clipboard/cut/" + r.EscapedPath(entry.Path)},
+		{Label: "Move…", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Choose a destination for " + entry.Name, Href: "/move/" + r.EscapedPath(entry.Path)},
 	}
 }
 
@@ -508,6 +521,25 @@ func (r *renderer) RenameConfirmation(rel string) pageData {
 		RenamePath:    rel,
 		RenameName:    path.Base(rel),
 		ReturnURL:     r.ParentURL(rel),
+	}
+}
+
+// MoveForm builds the dedicated destination-selection page for moving a file.
+func (r *renderer) MoveForm(rel, destination string, directories []directoryChoice, pageError string) pageData {
+	parent := path.Dir(rel)
+	if parent == "." {
+		parent = ""
+	}
+	return pageData{
+		MoveForm:        true,
+		Version:         version.SemVer,
+		MovePath:        rel,
+		MoveName:        path.Base(rel),
+		MoveDestination: destination,
+		MoveDirectories: directories,
+		Error:           pageError,
+		ReturnURL:       r.ParentURL(rel),
+		Breadcrumbs:     r.Breadcrumbs(parent),
 	}
 }
 

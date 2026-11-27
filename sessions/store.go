@@ -156,6 +156,8 @@ func OpenStore(path string) (*Store, error) {
 			gateway_url TEXT NOT NULL,
 			agent_id TEXT NOT NULL,
 			subdirectory TEXT NOT NULL,
+			instructions TEXT NOT NULL,
+			append_nearest_instructions INTEGER NOT NULL DEFAULT 1,
 			created_at INTEGER NOT NULL
 		);
 	`); err != nil {
@@ -167,6 +169,10 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("migrate task session store: %w", err)
 	}
 	if err := (&Store{db: db}).migrateSessionAccount(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate task session store: %w", err)
+	}
+	if err := (&Store{db: db}).migrateAccountInstructions(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate task session store: %w", err)
 	}

@@ -712,7 +712,7 @@ func TestEnsureAccountInitializesOnceAndPreservesExistingRows(t *testing.T) {
 	if len(first.ID) != 36 || first.ID[8] != '-' || first.ID[13] != '-' || first.ID[18] != '-' || first.ID[23] != '-' {
 		t.Errorf("account ID %q is not a UUID", first.ID)
 	}
-	if first.Host != initial.Host || first.Port != initial.Port || first.DatabasePath != initial.DatabasePath || first.RootPath != initial.RootPath || first.GatewayURL != initial.GatewayURL || first.AgentID != initial.AgentID || first.FileExplorerURL != DefaultAccountSettings().FileExplorerURL {
+	if first.Host != initial.Host || first.Port != initial.Port || first.DatabasePath != initial.DatabasePath || first.RootPath != initial.RootPath || first.GatewayURL != initial.GatewayURL || first.AgentID != initial.AgentID || first.FileExplorerURL != DefaultAccountSettings().FileExplorerURL || first.Instructions != DefaultAccountSettings().Instructions || !first.AppendNearestInstructions {
 		t.Errorf("initialized settings = %+v, want supplied values and missing-field defaults", first)
 	}
 	if err := store.Close(); err != nil {
@@ -735,6 +735,42 @@ func TestEnsureAccountInitializesOnceAndPreservesExistingRows(t *testing.T) {
 	var value string
 	if err := store.db.QueryRow(`SELECT value FROM legacy_data`).Scan(&value); err != nil || value != "keep" {
 		t.Errorf("existing data = %q, error %v; want preserved row", value, err)
+	}
+}
+
+func TestOpenStoreMigratesAccountInstructionPreferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-account.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE executor_accounts (
+		id TEXT PRIMARY KEY, singleton INTEGER NOT NULL UNIQUE CHECK (singleton = 1),
+		host TEXT NOT NULL, port TEXT NOT NULL, database_path TEXT NOT NULL, root_path TEXT NOT NULL,
+		fileexplorer_url TEXT NOT NULL, gateway_url TEXT NOT NULL, agent_id TEXT NOT NULL,
+		subdirectory TEXT NOT NULL, created_at INTEGER NOT NULL
+	);
+	INSERT INTO executor_accounts VALUES ('legacy', 1, '127.0.0.1', '8081', 'index.sqlite', '.',
+		'http://127.0.0.1:8080', 'http://127.0.0.1:18789', 'main', '', 1);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	account, err := store.EnsureAccount(context.Background(), AccountSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := DefaultAccountSettings()
+	if account.Instructions != defaults.Instructions || !account.AppendNearestInstructions {
+		t.Errorf("migrated instruction settings = %q/%t, want %q/true", account.Instructions, account.AppendNearestInstructions, defaults.Instructions)
 	}
 }
 
@@ -779,7 +815,7 @@ func TestDeleteAccountRemovesOwnedSessionAndProgress(t *testing.T) {
 
 func TestDefaultAccountSettingsUseLoopbackAndLocalPaths(t *testing.T) {
 	settings := DefaultAccountSettings()
-	if settings.Host != "127.0.0.1" || settings.Port != "8081" || settings.DatabasePath != "fileexplorer.sqlite" || settings.RootPath != "." || settings.FileExplorerURL != "http://127.0.0.1:8080" || settings.GatewayURL != "http://127.0.0.1:18789" || settings.AgentID != "main" || settings.Subdirectory != "" {
+	if settings.Host != "127.0.0.1" || settings.Port != "8081" || settings.DatabasePath != "fileexplorer.sqlite" || settings.RootPath != "." || settings.FileExplorerURL != "http://127.0.0.1:8080" || settings.GatewayURL != "http://127.0.0.1:18789" || settings.AgentID != "main" || settings.Subdirectory != "" || settings.Instructions != "Output <complete /> only when finished." || !settings.AppendNearestInstructions {
 		t.Errorf("DefaultAccountSettings() = %+v", settings)
 	}
 }
@@ -799,11 +835,11 @@ func TestReplaceAccountChangesIdentityAndRemovesSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := store.ReplaceAccount(ctx, old.ID, AccountSettings{Host: "0.0.0.0", Port: "8082", AgentID: "writer"})
+	updated, err := store.ReplaceAccount(ctx, old.ID, AccountSettings{Host: "0.0.0.0", Port: "8082", AgentID: "writer", Instructions: "Review each file carefully.", AppendNearestInstructions: false})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.ID == old.ID || updated.Host != "0.0.0.0" || updated.Port != "8082" || updated.AgentID != "writer" {
+	if updated.ID == old.ID || updated.Host != "0.0.0.0" || updated.Port != "8082" || updated.AgentID != "writer" || updated.Instructions != "Review each file carefully." || updated.AppendNearestInstructions {
 		t.Errorf("replacement account = %+v, want new identity and submitted settings", updated)
 	}
 	if _, err := store.Get(ctx, session.ID); !errors.Is(err, ErrNotFound) {

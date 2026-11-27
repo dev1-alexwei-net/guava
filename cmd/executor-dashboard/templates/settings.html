@@ -57,6 +57,16 @@
             <input class="form-control" id="subdirectory" name="subdirectory" type="text" autocomplete="off" value="{{.Account.Subdirectory}}">
             <div class="form-text">Leave blank to use the full filesystem root.</div>
           </div>
+          <div class="col-12">
+            <label class="form-label" for="instructions">Instructions</label>
+            <textarea class="form-control" id="instructions" name="instructions" rows="6">{{.Account.Instructions}}</textarea>
+          </div>
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" id="append_nearest_instructions" name="append_nearest_instructions" type="checkbox" {{if .Account.AppendNearestInstructions}}checked{{end}}>
+              <label class="form-check-label" for="append_nearest_instructions">Append nearest-parent instructions.md</label>
+            </div>
+          </div>
         </div>
       </div>
       <div class="card-footer bg-body d-flex flex-column flex-sm-row gap-2 justify-content-end">

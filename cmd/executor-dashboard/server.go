@@ -248,6 +248,7 @@ func accountSettingsFromForm(r *http.Request) (sessions.AccountSettings, error) 
 		DatabasePath: strings.TrimSpace(r.FormValue("database_path")), RootPath: strings.TrimSpace(r.FormValue("root_path")),
 		FileExplorerURL: strings.TrimSpace(r.FormValue("fileexplorer_url")), GatewayURL: strings.TrimSpace(r.FormValue("gateway_url")),
 		AgentID: strings.TrimSpace(r.FormValue("agent_id")), Subdirectory: strings.TrimSpace(r.FormValue("subdirectory")),
+		Instructions: r.FormValue("instructions"), AppendNearestInstructions: r.FormValue("append_nearest_instructions") == "on",
 	}
 	if settings.Host == "" || settings.DatabasePath == "" || settings.RootPath == "" || settings.AgentID == "" {
 		return settings, fmt.Errorf("host, database path, root path, and agent ID are required")
@@ -267,7 +268,8 @@ func accountSettingsFromForm(r *http.Request) (sessions.AccountSettings, error) 
 
 func accountSettingsEqual(a, b sessions.AccountSettings) bool {
 	return a.Host == b.Host && a.Port == b.Port && a.DatabasePath == b.DatabasePath && a.RootPath == b.RootPath &&
-		a.FileExplorerURL == b.FileExplorerURL && a.GatewayURL == b.GatewayURL && a.AgentID == b.AgentID && a.Subdirectory == b.Subdirectory
+		a.FileExplorerURL == b.FileExplorerURL && a.GatewayURL == b.GatewayURL && a.AgentID == b.AgentID && a.Subdirectory == b.Subdirectory &&
+		a.Instructions == b.Instructions && a.AppendNearestInstructions == b.AppendNearestInstructions
 }
 
 func redirectSettings(w http.ResponseWriter, r *http.Request, err error) {

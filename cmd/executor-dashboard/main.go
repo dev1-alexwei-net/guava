@@ -55,6 +55,9 @@ func run() error {
 	if strings.TrimSpace(*rootPath) == "" {
 		return errors.New("-root is required")
 	}
+	if *instructionsPath != "" {
+		return errors.New("-instructions is deprecated")
+	}
 
 	parsedLogLevel, err := executor.ParseLogLevel(*logLevel)
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dev1-alexwei-net/guava/conversations"
 	"github.com/dev1-alexwei-net/guava/executor"
 	"github.com/dev1-alexwei-net/guava/internal/version"
 	"github.com/dev1-alexwei-net/guava/sessions"
@@ -65,9 +66,10 @@ type dashboardPageData struct {
 }
 
 type settingsPageData struct {
-	Account sessions.AccountSettings
-	Theme   string
-	Error   string
+	Account               sessions.AccountSettings
+	SuggestedInstructions string
+	Theme                 string
+	Error                 string
 }
 
 // pendingFileRow is one row of the dashboard's pending-files view: the
@@ -193,6 +195,12 @@ func (d *dashboard) showSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	data := settingsPageData{Account: d.account, Theme: parseTheme(r.URL.Query().Get("theme")), Error: r.URL.Query().Get("error")}
+	suggested, err := tasks.LookupConstant(r.Context(), d.account.DatabasePath, conversations.InstructionsKey)
+	if err != nil {
+		data.Error = "Suggested instructions are unavailable: " + err.Error()
+	} else {
+		data.SuggestedInstructions = suggested
+	}
 	if err := d.page.ExecuteTemplate(w, "settings.html", data); err != nil {
 		http.Error(w, "settings unavailable", http.StatusInternalServerError)
 	}
@@ -200,6 +208,9 @@ func (d *dashboard) showSettings(w http.ResponseWriter, r *http.Request) {
 
 func (d *dashboard) saveSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := accountSettingsFromForm(r)
+	if err == nil && r.FormValue("reset_instructions") == "1" {
+		settings.Instructions, err = tasks.LookupConstant(r.Context(), d.account.DatabasePath, conversations.InstructionsKey)
+	}
 	if err == nil && filepath.Clean(settings.DatabasePath) == filepath.Clean(d.sessionStorePath) {
 		err = fmt.Errorf("the fileexplorer database must be separate from the task session metadata database")
 	}

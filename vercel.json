@@ -7,12 +7,14 @@
     "fileexplorer": {
       "root": ".",
       "framework": "go",
+      "entrypoint": "fileexplorer/main.go",
       "buildCommand": "go build -o server ./fileexplorer",
       "devCommand": "go run ./fileexplorer"
     },
     "executor": {
       "root": ".",
       "framework": "go",
+      "entrypoint": "cmd/executor-dashboard/main.go",
       "buildCommand": "go build -o server ./cmd/executor-dashboard",
       "devCommand": "go run ./cmd/executor-dashboard"
     }

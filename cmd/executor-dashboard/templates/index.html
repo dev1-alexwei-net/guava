@@ -10,12 +10,15 @@
 </head>
 <body class="bg-body-tertiary">
   <nav class="navbar border-bottom bg-body">
-    <div class="container py-2">
+    <div class="container py-2 d-flex justify-content-between gap-3">
       <span class="navbar-brand fw-semibold">Executor dashboard</span>
-      <form action="/" method="get">
-        <input type="hidden" name="refresh" value="{{.Refresh}}">
-        <button class="btn btn-outline-secondary btn-sm" type="submit" name="theme" value="{{.NextTheme}}">Switch to {{.NextTheme}} mode</button>
-      </form>
+      <div class="d-flex align-items-center gap-2">
+        <a class="btn btn-outline-primary btn-sm" href="/settings?theme={{.Theme}}">Account settings</a>
+        <form action="/" method="get">
+          <input type="hidden" name="refresh" value="{{.Refresh}}">
+          <button class="btn btn-outline-secondary btn-sm" type="submit" name="theme" value="{{.NextTheme}}">Switch to {{.NextTheme}} mode</button>
+        </form>
+      </div>
     </div>
   </nav>
 

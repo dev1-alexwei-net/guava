@@ -36,12 +36,13 @@ var _ taskSessionStore = (*sessions.Store)(nil)
 // owns opening and closing the underlying store.
 type taskSessionManager struct {
 	baseConfig executor.Config
+	accountID  string
 	store      taskSessionStore
 	logger     *slog.Logger
 }
 
-func newTaskSessionManager(config executor.Config, store taskSessionStore, logger *slog.Logger) *taskSessionManager {
-	return &taskSessionManager{baseConfig: config, store: store, logger: logger}
+func newTaskSessionManager(config executor.Config, store taskSessionStore, logger *slog.Logger, accountID string) *taskSessionManager {
+	return &taskSessionManager{baseConfig: config, accountID: accountID, store: store, logger: logger}
 }
 
 // Create records the launch configuration for a fresh run before it starts
@@ -51,7 +52,7 @@ func newTaskSessionManager(config executor.Config, store taskSessionStore, logge
 func (m *taskSessionManager) Create(runner *executor.Executor) (*executor.Executor, *sessions.Record, error) {
 	summary := runner.SessionSummary()
 	record, err := m.store.Create(context.Background(), sessions.Record{
-		AgentID: summary.AgentID, RootDirectory: m.baseConfig.RootPath,
+		AccountID: m.accountID, AgentID: summary.AgentID, RootDirectory: m.baseConfig.RootPath,
 		Subdirectory: summary.Subdirectory, DatabaseFile: m.baseConfig.DatabasePath,
 		Status: sessions.StatusActive, StartedAt: time.Now().UTC(),
 	})

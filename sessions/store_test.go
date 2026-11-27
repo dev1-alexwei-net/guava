@@ -688,3 +688,129 @@ func TestStoreOpenStoreMigratesOriginColumn(t *testing.T) {
 		t.Fatalf("iterate legacy rows: %v", err)
 	}
 }
+
+func TestEnsureAccountInitializesOnceAndPreservesExistingRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metadata.sqlite")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`CREATE TABLE legacy_data (value TEXT); INSERT INTO legacy_data VALUES ('keep')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = legacy.Close()
+
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := AccountSettings{Host: "127.0.0.2", Port: "8090", DatabasePath: "/data/index.sqlite", RootPath: "/data/files", GatewayURL: "http://gateway:18789", AgentID: "writer"}
+	first, err := store.EnsureAccount(context.Background(), initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.ID) != 36 || first.ID[8] != '-' || first.ID[13] != '-' || first.ID[18] != '-' || first.ID[23] != '-' {
+		t.Errorf("account ID %q is not a UUID", first.ID)
+	}
+	if first.Host != initial.Host || first.Port != initial.Port || first.DatabasePath != initial.DatabasePath || first.RootPath != initial.RootPath || first.GatewayURL != initial.GatewayURL || first.AgentID != initial.AgentID || first.FileExplorerURL != DefaultAccountSettings().FileExplorerURL {
+		t.Errorf("initialized settings = %+v, want supplied values and missing-field defaults", first)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	changed := AccountSettings{Host: "0.0.0.0", Port: "80", DatabasePath: "/changed.sqlite", RootPath: "/changed"}
+	second, err := store.EnsureAccount(context.Background(), changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Errorf("reopened account = %+v, want persisted account %+v", second, first)
+	}
+	var value string
+	if err := store.db.QueryRow(`SELECT value FROM legacy_data`).Scan(&value); err != nil || value != "keep" {
+		t.Errorf("existing data = %q, error %v; want preserved row", value, err)
+	}
+}
+
+func TestDeleteAccountRemovesOwnedSessionAndProgress(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	legacy, err := store.Create(context.Background(), Record{AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := store.EnsureAccount(context.Background(), AccountSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = store.Get(context.Background(), legacy.ID)
+	if err != nil || legacy.AccountID != account.ID {
+		t.Fatalf("legacy session after account initialization = %+v, error %v", legacy, err)
+	}
+	record, err := store.Create(context.Background(), Record{AgentID: "agent", RootDirectory: "/files", DatabaseFile: "/data/index.sqlite", Status: StatusPaused})
+	if err != nil || record.AccountID != account.ID {
+		t.Fatalf("Create account-scoped session = %+v, error %v", record, err)
+	}
+	if _, err := store.SaveFileProgress(context.Background(), FileProgress{SessionID: record.ID, Path: "task.md", Status: ProgressCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteAccount(context.Background(), account.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{legacy.ID, record.ID} {
+		if _, err := store.Get(context.Background(), id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Get session %q after account deletion = %v, want ErrNotFound", id, err)
+		}
+	}
+	var progress int
+	if err := store.db.QueryRow(`SELECT count(*) FROM session_file_progress`).Scan(&progress); err != nil || progress != 0 {
+		t.Errorf("session progress after account deletion = %d, error %v; want none", progress, err)
+	}
+}
+
+func TestDefaultAccountSettingsUseLoopbackAndLocalPaths(t *testing.T) {
+	settings := DefaultAccountSettings()
+	if settings.Host != "127.0.0.1" || settings.Port != "8081" || settings.DatabasePath != "fileexplorer.sqlite" || settings.RootPath != "." || settings.FileExplorerURL != "http://127.0.0.1:8080" || settings.GatewayURL != "http://127.0.0.1:18789" || settings.AgentID != "main" || settings.Subdirectory != "" {
+		t.Errorf("DefaultAccountSettings() = %+v", settings)
+	}
+}
+
+func TestReplaceAccountChangesIdentityAndRemovesSessions(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	old, err := store.EnsureAccount(ctx, AccountSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.Create(ctx, Record{AgentID: old.AgentID, RootDirectory: old.RootPath, DatabaseFile: old.DatabasePath, Status: StatusPaused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.ReplaceAccount(ctx, old.ID, AccountSettings{Host: "0.0.0.0", Port: "8082", AgentID: "writer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID == old.ID || updated.Host != "0.0.0.0" || updated.Port != "8082" || updated.AgentID != "writer" {
+		t.Errorf("replacement account = %+v, want new identity and submitted settings", updated)
+	}
+	if _, err := store.Get(ctx, session.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("old account session lookup = %v, want ErrNotFound", err)
+	}
+	current, err := store.EnsureAccount(ctx, AccountSettings{})
+	if err != nil || current.ID != updated.ID {
+		t.Errorf("current account = %+v, %v; want replacement %q", current, err, updated.ID)
+	}
+}

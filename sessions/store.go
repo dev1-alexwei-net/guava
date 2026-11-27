@@ -83,6 +83,7 @@ type FileProgress struct {
 // fileexplorer index; the store itself uses the path passed to OpenStore.
 type Record struct {
 	ID            string
+	AccountID     string
 	AgentID       string
 	RootDirectory string
 	Subdirectory  string
@@ -111,6 +112,10 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("open task session store: %w", err)
 	}
 	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable task session foreign keys: %w", err)
+	}
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("connect to task session store: %w", err)
@@ -118,6 +123,7 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS task_sessions (
 			id TEXT PRIMARY KEY,
+			account_id TEXT REFERENCES executor_accounts(id) ON DELETE CASCADE,
 			agent_id TEXT NOT NULL,
 			root_directory TEXT NOT NULL,
 			subdirectory TEXT NOT NULL,
@@ -139,6 +145,19 @@ func OpenStore(path string) (*Store, error) {
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY (session_id, file_path)
 		);
+		CREATE TABLE IF NOT EXISTS executor_accounts (
+			id TEXT PRIMARY KEY,
+			singleton INTEGER NOT NULL UNIQUE CHECK (singleton = 1),
+			host TEXT NOT NULL,
+			port TEXT NOT NULL,
+			database_path TEXT NOT NULL,
+			root_path TEXT NOT NULL,
+			fileexplorer_url TEXT NOT NULL,
+			gateway_url TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
+			subdirectory TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
 	`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize task session store: %w", err)
@@ -147,7 +166,47 @@ func OpenStore(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate task session store: %w", err)
 	}
+	if err := (&Store{db: db}).migrateSessionAccount(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate task session store: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// migrateSessionAccount adds the account relationship to stores created
+// before saved sessions were account-scoped. Legacy rows are associated when
+// EnsureAccount initializes or loads the active account.
+func (s *Store) migrateSessionAccount() error {
+	hasAccountID := false
+	rows, err := s.db.Query(`PRAGMA table_info(task_sessions)`)
+	if err != nil {
+		return fmt.Errorf("inspect task_sessions schema: %w", err)
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, colType string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("inspect task_sessions schema: %w", err)
+		}
+		if name == "account_id" {
+			hasAccountID = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("inspect task_sessions schema: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("inspect task_sessions schema: %w", err)
+	}
+	if !hasAccountID {
+		if _, err := s.db.Exec(`ALTER TABLE task_sessions ADD COLUMN account_id TEXT REFERENCES executor_accounts(id) ON DELETE CASCADE`); err != nil {
+			return fmt.Errorf("add account relationship to task_sessions: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateFileProgressOrigin upgrades databases created before the origin
@@ -208,6 +267,14 @@ func (s *Store) Create(ctx context.Context, record Record) (Record, error) {
 		}
 		record.ID = id
 	}
+	if record.AccountID == "" {
+		// Preserve compatibility for callers that create records after account
+		// initialization while assigning them to the active account.
+		err := s.db.QueryRowContext(ctx, `SELECT id FROM executor_accounts WHERE singleton = 1`).Scan(&record.AccountID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return Record{}, fmt.Errorf("load active executor account for task session: %w", err)
+		}
+	}
 	now := time.Now().UTC()
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = now
@@ -217,9 +284,9 @@ func (s *Store) Create(ctx context.Context, record Record) (Record, error) {
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO task_sessions
-			(id, agent_id, root_directory, subdirectory, database_file, status, created_at, updated_at, started_at, finished_at, last_error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.ID, record.AgentID, record.RootDirectory, record.Subdirectory, record.DatabaseFile,
+			(id, account_id, agent_id, root_directory, subdirectory, database_file, status, created_at, updated_at, started_at, finished_at, last_error)
+		VALUES (?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ID, record.AccountID, record.AgentID, record.RootDirectory, record.Subdirectory, record.DatabaseFile,
 		string(record.Status), record.CreatedAt.UnixNano(), record.UpdatedAt.UnixNano(), nullableTime(record.StartedAt), nullableTime(record.FinishedAt), record.LastError); err != nil {
 		return Record{}, fmt.Errorf("create task session: %w", err)
 	}
@@ -244,6 +311,7 @@ func (s *Store) Update(ctx context.Context, record Record) (Record, error) {
 		return Record{}, err
 	}
 	record.CreatedAt = current.CreatedAt
+	record.AccountID = current.AccountID
 	record.UpdatedAt = time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE task_sessions SET
@@ -271,7 +339,7 @@ func (s *Store) Get(ctx context.Context, id string) (Record, error) {
 		return Record{}, errors.New("task session store is not open")
 	}
 	record, err := scanRecord(s.db.QueryRowContext(ctx, `
-		SELECT id, agent_id, root_directory, subdirectory, database_file, status,
+		SELECT id, account_id, agent_id, root_directory, subdirectory, database_file, status,
 			created_at, updated_at, started_at, finished_at, last_error
 		FROM task_sessions WHERE id = ?
 	`, id))
@@ -325,7 +393,7 @@ func (s *Store) List(ctx context.Context) ([]Record, error) {
 		return nil, errors.New("task session store is not open")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, agent_id, root_directory, subdirectory, database_file, status,
+		SELECT id, account_id, agent_id, root_directory, subdirectory, database_file, status,
 			created_at, updated_at, started_at, finished_at, last_error
 		FROM task_sessions ORDER BY updated_at DESC, id ASC
 	`)
@@ -696,14 +764,18 @@ func scanFileProgress(row rowScanner) (FileProgress, error) {
 
 func scanRecord(row rowScanner) (Record, error) {
 	var record Record
+	var accountID sql.NullString
 	var status string
 	var createdAt, updatedAt int64
 	var startedAt, finishedAt sql.NullInt64
-	if err := row.Scan(&record.ID, &record.AgentID, &record.RootDirectory, &record.Subdirectory, &record.DatabaseFile,
+	if err := row.Scan(&record.ID, &accountID, &record.AgentID, &record.RootDirectory, &record.Subdirectory, &record.DatabaseFile,
 		&status, &createdAt, &updatedAt, &startedAt, &finishedAt, &record.LastError); err != nil {
 		return Record{}, err
 	}
 	record.Status = Status(status)
+	if accountID.Valid {
+		record.AccountID = accountID.String
+	}
 	record.CreatedAt = time.Unix(0, createdAt).UTC()
 	record.UpdatedAt = time.Unix(0, updatedAt).UTC()
 	if startedAt.Valid {

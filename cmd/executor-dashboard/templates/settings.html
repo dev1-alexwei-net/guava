@@ -1,0 +1,70 @@
+{{define "settings.html" -}}
+<!doctype html>
+<html lang="en" data-bs-theme="{{.Theme}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account settings · Executor dashboard</title>
+  <link href="/static/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-body-tertiary">
+  <nav class="navbar border-bottom bg-body">
+    <div class="container py-2">
+      <a class="navbar-brand fw-semibold text-decoration-none" href="/">Executor dashboard</a>
+      <a class="btn btn-outline-secondary btn-sm" href="/?theme={{.Theme}}">Back to dashboard</a>
+    </div>
+  </nav>
+  <main class="container py-4 py-lg-5">
+    <header class="mb-4">
+      <h1 class="h3">Account settings</h1>
+      <p class="text-body-secondary mb-1">Changing these settings replaces this account and permanently removes its saved sessions.</p>
+      <p class="small text-body-secondary font-monospace mb-0">Account ID: {{.Account.ID}}</p>
+    </header>
+    {{if .Error}}<div class="alert alert-danger" role="alert">{{.Error}}</div>{{end}}
+    <form action="/settings?theme={{.Theme}}" method="post" class="card shadow-sm">
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="host">Dashboard host</label>
+            <input class="form-control" id="host" name="host" type="text" autocomplete="off" required value="{{.Account.Host}}">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="port">Dashboard port</label>
+            <input class="form-control" id="port" name="port" type="number" min="1" max="65535" inputmode="numeric" required value="{{.Account.Port}}">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="database_path">Fileexplorer database path</label>
+            <input class="form-control" id="database_path" name="database_path" type="text" autocomplete="off" required value="{{.Account.DatabasePath}}">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="root_path">Filesystem root path</label>
+            <input class="form-control" id="root_path" name="root_path" type="text" autocomplete="off" required value="{{.Account.RootPath}}">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="fileexplorer_url">Fileexplorer URL</label>
+            <input class="form-control" id="fileexplorer_url" name="fileexplorer_url" type="url" inputmode="url" required value="{{.Account.FileExplorerURL}}">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="gateway_url">OpenClaw Gateway URL</label>
+            <input class="form-control" id="gateway_url" name="gateway_url" type="url" inputmode="url" required value="{{.Account.GatewayURL}}">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="agent_id">OpenClaw agent ID</label>
+            <input class="form-control" id="agent_id" name="agent_id" type="text" autocomplete="off" required value="{{.Account.AgentID}}">
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label" for="subdirectory">Optional subdirectory</label>
+            <input class="form-control" id="subdirectory" name="subdirectory" type="text" autocomplete="off" value="{{.Account.Subdirectory}}">
+            <div class="form-text">Leave blank to use the full filesystem root.</div>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer bg-body d-flex flex-column flex-sm-row gap-2 justify-content-end">
+        <a class="btn btn-outline-secondary" href="/?theme={{.Theme}}">Cancel</a>
+        <button class="btn btn-primary" type="submit">Save account settings</button>
+      </div>
+    </form>
+  </main>
+</body>
+</html>
+{{- end}}

@@ -49,7 +49,7 @@ func newTestController(t *testing.T, databasePath string) *executorController {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	controller, err := newExecutorController(config, slog.LevelInfo, store)
+	controller, err := newExecutorController(config, slog.LevelInfo, store, "")
 	if err != nil {
 		t.Fatalf("newExecutorController: %v", err)
 	}
@@ -1183,7 +1183,7 @@ func TestPendingReporterRefreshesDashboardQueueAndOrigins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	manager := newTaskSessionManager(executor.Config{}, store, nil)
+	manager := newTaskSessionManager(executor.Config{}, store, nil, "")
 	report := manager.pendingReporter(record.ID, []string{"b.txt"})
 	if err := report([]string{"b.txt", "c.txt"}); err != nil {
 		t.Fatalf("persist initial refresh: %v", err)

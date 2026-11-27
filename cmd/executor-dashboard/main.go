@@ -34,7 +34,7 @@ func run() error {
 	databasePath := flags.String("database", "", "path to the fileexplorer SQLite database (required)")
 	sessionStorePath := flags.String("session-store", "", "path to the task-session metadata SQLite database (defaults to -database + .sessions.sqlite)")
 	rootPath := flags.String("root", "", "filesystem root for paths in the database (required)")
-	instructionsPath := flags.String("instructions", "instructions.md", "fallback instructions file")
+	instructionsPath := flags.String("instructions", "", "fallback instructions file")
 	gatewayURL := flags.String("gateway-url", "http://127.0.0.1:18789", "OpenClaw Gateway base URL")
 	fileExplorerURL := flags.String("fileexplorer-url", "http://127.0.0.1:8080", "fileexplorer base URL for refreshing the file index")
 	agentID := flags.String("agent-id", "main", "OpenClaw agent ID")

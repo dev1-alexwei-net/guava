@@ -1,0 +1,37 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "fileexplorer": {
+      "root": ".",
+      "framework": "go",
+      "buildCommand": "go build -o server ./fileexplorer"
+    },
+    "executor": {
+      "root": ".",
+      "framework": "go",
+      "buildCommand": "go build -o server ./cmd/executor-dashboard"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": {
+            "pre": "executor."
+          }
+        }
+      ],
+      "destination": {
+        "service": "executor"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "fileexplorer"
+      }
+    }
+  ]
+}

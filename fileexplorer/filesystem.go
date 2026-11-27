@@ -334,6 +334,66 @@ func (m *mutations) Delete(rel string) (string, error) {
 	return parent, nil
 }
 
+// Paste copies or moves one regular file into an existing directory. The
+// source remains untouched for copy operations and is removed only after a
+// successful rename for cut operations.
+func (m *mutations) Paste(mode, source, destination string) (string, error) {
+	if mode != "copy" && mode != "cut" {
+		return "", newInteractionError(http.StatusBadRequest, "Choose a file to copy or cut first")
+	}
+	sourceTarget, err := m.filesystem.Resolve(source)
+	if err != nil {
+		return "", err
+	}
+	sourceRel := m.filesystem.Relative(sourceTarget)
+	if sourceRel == "" {
+		return "", newInteractionError(http.StatusBadRequest, "The root directory cannot be copied or moved")
+	}
+	sourceInfo, err := m.filesystem.Stat(sourceRel)
+	if err != nil {
+		return "", err
+	}
+	if !sourceInfo.Mode().IsRegular() {
+		return "", newInteractionError(http.StatusBadRequest, "Only regular files can be copied or moved")
+	}
+	dir, current, err := m.filesystem.ResolveParent(destination)
+	if err != nil {
+		return "", err
+	}
+	destinationRel := path.Join(m.filesystem.Relative(dir), path.Base(sourceRel))
+	if sourceRel == destinationRel {
+		return "", newInteractionError(http.StatusConflict, "The file is already in this directory")
+	}
+	if _, err := m.filesystem.Lstat(destinationRel); err == nil {
+		return "", newInteractionError(http.StatusConflict, "A file with that name already exists in this directory")
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if mode == "cut" {
+		if err := m.filesystem.Rename(sourceRel, destinationRel); err != nil {
+			return "", newInteractionError(http.StatusConflict, "Unable to move file")
+		}
+		return current, nil
+	}
+
+	input, err := m.filesystem.Open(sourceRel)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	output, err := m.filesystem.OpenFile(destinationRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, sourceInfo.Mode().Perm())
+	if err != nil {
+		return "", newInteractionError(http.StatusConflict, "Unable to copy file")
+	}
+	_, copyErr := io.Copy(output, input)
+	closeErr := output.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = m.filesystem.Remove(destinationRel)
+		return "", newInteractionError(http.StatusInternalServerError, "Unable to finish copying file")
+	}
+	return current, nil
+}
+
 func (m *mutations) Upload(parent, name string, source io.Reader) (string, error) {
 	dir, current, err := m.filesystem.ResolveParent(parent)
 	if err != nil {

@@ -52,6 +52,11 @@ type pageData struct {
 	ParentURL            string
 	Items                []pageItem
 	Error                string
+	Notice               string
+	PasteAction          string
+	ClipboardMode        string
+	ClipboardPath        string
+	ClipboardName        string
 	Editor               bool
 	EditorPath           string
 	EditorURL            string
@@ -153,23 +158,57 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	data.UploadAction = r.withState("/upload", theme, wrap, pane, column)
 	data.DeleteAction = r.withState("/delete", theme, wrap, pane, column)
 	data.RenameAction = r.withState("/rename", theme, wrap, pane, column)
-	data.ParentURL = r.withState(data.ParentURL, theme, wrap, pane, column)
-	data.EditorURL = r.withState(data.EditorURL, theme, wrap, pane, column)
-	data.PreviewReturnURL = r.withState(data.PreviewReturnURL, theme, wrap, pane, column)
-	data.PreviewDownloadURL = r.withState(data.PreviewDownloadURL, theme, wrap, pane, column)
-	data.ReturnURL = r.withState(data.ReturnURL, theme, wrap, pane, column)
+	data.PasteAction = r.withState("/paste", theme, wrap, pane, column)
+	data.Notice = request.URL.Query().Get("notice")
+	data.ClipboardMode = request.URL.Query().Get("clipboard_mode")
+	data.ClipboardPath = request.URL.Query().Get("clipboard_path")
+	if (data.ClipboardMode != "copy" && data.ClipboardMode != "cut") || data.ClipboardPath == "" {
+		data.ClipboardMode, data.ClipboardPath = "", ""
+	} else {
+		data.ClipboardName = path.Base(data.ClipboardPath)
+	}
+	carryClipboard := func(target string) string {
+		if target == "" || data.ClipboardMode == "" {
+			return target
+		}
+		u, err := url.Parse(target)
+		if err != nil {
+			return target
+		}
+		query := u.Query()
+		query.Set("clipboard_mode", data.ClipboardMode)
+		query.Set("clipboard_path", data.ClipboardPath)
+		u.RawQuery = query.Encode()
+		return u.String()
+	}
+	data.HomeURL = carryClipboard(data.HomeURL)
+	data.ThemeToggleURL = carryClipboard(data.ThemeToggleURL)
+	data.WrapToggleURL = carryClipboard(data.WrapToggleURL)
+	data.PreviewPaneToggleURL = carryClipboard(data.PreviewPaneToggleURL)
+	data.ColumnToggleURL = carryClipboard(data.ColumnToggleURL)
+	data.MkdirAction = carryClipboard(data.MkdirAction)
+	data.CreateFileAction = carryClipboard(data.CreateFileAction)
+	data.UploadAction = carryClipboard(data.UploadAction)
+	data.DeleteAction = carryClipboard(data.DeleteAction)
+	data.RenameAction = carryClipboard(data.RenameAction)
+	data.PasteAction = carryClipboard(data.PasteAction)
+	data.ParentURL = carryClipboard(r.withState(data.ParentURL, theme, wrap, pane, column))
+	data.EditorURL = carryClipboard(r.withState(data.EditorURL, theme, wrap, pane, column))
+	data.PreviewReturnURL = carryClipboard(r.withState(data.PreviewReturnURL, theme, wrap, pane, column))
+	data.PreviewDownloadURL = carryClipboard(r.withState(data.PreviewDownloadURL, theme, wrap, pane, column))
+	data.ReturnURL = carryClipboard(r.withState(data.ReturnURL, theme, wrap, pane, column))
 	for i := range data.Breadcrumbs {
-		data.Breadcrumbs[i].URL = r.withState(data.Breadcrumbs[i].URL, theme, wrap, pane, column)
+		data.Breadcrumbs[i].URL = carryClipboard(r.withState(data.Breadcrumbs[i].URL, theme, wrap, pane, column))
 	}
 	for i := range data.Items {
 		item := &data.Items[i]
-		item.URL = r.withState(item.URL, theme, wrap, pane, column)
-		item.PreviewURL = r.withState(item.PreviewURL, theme, wrap, pane, column)
+		item.URL = carryClipboard(r.withState(item.URL, theme, wrap, pane, column))
+		item.PreviewURL = carryClipboard(r.withState(item.PreviewURL, theme, wrap, pane, column))
 		for a := range item.Actions {
-			item.Actions[a].Href = r.withState(item.Actions[a].Href, theme, wrap, pane, column)
+			item.Actions[a].Href = carryClipboard(r.withState(item.Actions[a].Href, theme, wrap, pane, column))
 		}
 		for a := range item.SecondaryActions {
-			item.SecondaryActions[a].Href = r.withState(item.SecondaryActions[a].Href, theme, wrap, pane, column)
+			item.SecondaryActions[a].Href = carryClipboard(r.withState(item.SecondaryActions[a].Href, theme, wrap, pane, column))
 		}
 	}
 	return data
@@ -420,6 +459,8 @@ func (r *renderer) entrySecondaryActions(entry Entry) []rowAction {
 	}
 	return []rowAction{
 		{Label: "Download", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Download " + entry.Name, Href: r.ItemURL(entry.Path, false) + "?download=1"},
+		{Label: "Copy", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Copy " + entry.Name, Href: "/clipboard/copy/" + r.EscapedPath(entry.Path)},
+		{Label: "Cut", Class: "btn btn-outline-secondary btn-sm", AriaLabel: "Cut " + entry.Name, Href: "/clipboard/cut/" + r.EscapedPath(entry.Path)},
 	}
 }
 

@@ -108,6 +108,9 @@ func (a *application) buildRoutes() http.Handler {
 	mux.Handle("GET /confirm-delete/{path...}", a.serialized(a.confirmDeletePage))
 	mux.Handle("GET /rename/{path...}", a.serialized(a.renamePage))
 	mux.Handle("GET /preview/{path...}", a.serialized(a.previewPage))
+	mux.Handle("GET /clipboard/{mode}/{path...}", a.serialized(a.selectClipboard))
+	mux.Handle("POST /paste", a.serialized(a.pasteFile))
+	mux.Handle("PUT /paste", a.serialized(a.pasteFile))
 	mux.HandleFunc("GET /static/bootstrap.min.css", a.renderer.Stylesheet)
 	mutations := []struct {
 		path string
@@ -401,6 +404,91 @@ func (e *application) redirectToDirectory(w http.ResponseWriter, r *http.Request
 	if current == "" {
 		target = "/"
 	}
+	http.Redirect(w, r, preserveClipboard(e.renderer.withState(target, requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), r), http.StatusSeeOther)
+}
+
+func preserveClipboard(target string, r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return target
+	}
+	mode, source := r.URL.Query().Get("clipboard_mode"), r.URL.Query().Get("clipboard_path")
+	if mode != "copy" && mode != "cut" {
+		return target
+	}
+	if source == "" {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	query := u.Query()
+	query.Set("clipboard_mode", mode)
+	query.Set("clipboard_path", source)
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func (e *application) selectClipboard(w http.ResponseWriter, r *http.Request) {
+	mode, requested := r.PathValue("mode"), r.PathValue("path")
+	if mode != "copy" && mode != "cut" {
+		e.renderError(w, r, http.StatusBadRequest, "Choose copy or cut")
+		return
+	}
+	target, err := e.filesystem.Resolve(requested)
+	if err != nil {
+		e.pathError(w, r, err)
+		return
+	}
+	rel := e.filesystem.Relative(target)
+	info, err := e.filesystem.Stat(rel)
+	if err != nil {
+		e.pathError(w, r, err)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		e.renderError(w, r, http.StatusBadRequest, "Only regular files can be copied or cut")
+		return
+	}
+	parent := path.Dir(rel)
+	if parent == "." {
+		parent = ""
+	}
+	returnTo := e.renderer.ItemURL(parent, true)
+	if parent == "" {
+		returnTo = "/"
+	}
+	query := url.Values{"clipboard_mode": {mode}, "clipboard_path": {rel}, "notice": {strings.Title(mode) + " ready: " + path.Base(rel) + ". Choose a destination folder and paste."}}
+	targetURL := returnTo + "?" + query.Encode()
+	http.Redirect(w, r, e.renderer.withState(targetURL, requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
+}
+
+func (e *application) pasteFile(w http.ResponseWriter, r *http.Request) {
+	if err := parseForm(w, r); err != nil {
+		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
+		return
+	}
+	mode, source, destination := r.FormValue("clipboard_mode"), r.FormValue("clipboard_path"), r.FormValue("destination")
+	current, err := e.mutations.Paste(mode, source, destination)
+	if err != nil {
+		var interaction *interactionError
+		if errors.As(err, &interaction) {
+			e.redirectMutationError(w, r, interaction.status, interaction.message)
+		} else {
+			e.redirectMutationPathError(w, r, err)
+		}
+		return
+	}
+	verb := "Copied"
+	if mode == "cut" {
+		verb = "Moved"
+	}
+	message := verb + " " + path.Base(source) + "."
+	target := e.renderer.ItemURL(current, true)
+	if current == "" {
+		target = "/"
+	}
+	target += "?" + url.Values{"notice": {message}}.Encode()
 	http.Redirect(w, r, e.renderer.withState(target, requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
 }
 
@@ -437,12 +525,15 @@ func (e *application) redirectMutationError(w http.ResponseWriter, r *http.Reque
 		target = e.renderer.ItemURL(current, true)
 	}
 	query := url.Values{"error": {message}, "status": {fmt.Sprint(status)}}
-	http.Redirect(w, r, e.renderer.withState(target+"?"+query.Encode(), requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
+	http.Redirect(w, r, preserveClipboard(e.renderer.withState(target+"?"+query.Encode(), requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), r), http.StatusSeeOther)
 }
 
 func mutationParent(r *http.Request) string {
 	if parent := r.FormValue("parent"); parent != "" {
 		return parent
+	}
+	if destination := r.FormValue("destination"); destination != "" {
+		return destination
 	}
 	target := r.FormValue("old")
 	if target == "" {

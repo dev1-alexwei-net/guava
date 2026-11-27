@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dev1-alexwei-net/guava/executor"
@@ -19,16 +20,20 @@ import (
 	"github.com/dev1-alexwei-net/guava/tasks"
 )
 
-//go:embed templates/index.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
+//go:embed templates/index.html templates/settings.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
 var dashboardFiles embed.FS
 
 type dashboard struct {
-	controller   *executorController
-	store        *sessions.Store
-	account      sessions.AccountSettings
-	page         *template.Template
-	databasePath string
-	routes       http.Handler
+	mu               sync.Mutex
+	controller       *executorController
+	store            *sessions.Store
+	account          sessions.AccountSettings
+	config           executor.Config
+	logLevel         slog.Level
+	page             *template.Template
+	databasePath     string
+	sessionStorePath string
+	routes           http.Handler
 }
 
 type dashboardPageData struct {
@@ -57,6 +62,12 @@ type dashboardPageData struct {
 	SavedSessionsHint string
 	Notice            string
 	PendingFiles      []pendingFileRow
+}
+
+type settingsPageData struct {
+	Account sessions.AccountSettings
+	Theme   string
+	Error   string
 }
 
 // pendingFileRow is one row of the dashboard's pending-files view: the
@@ -134,7 +145,7 @@ func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level
 		_ = store.Close()
 		return nil, err
 	}
-	page, err := template.ParseFS(dashboardFiles, "templates/index.html")
+	page, err := template.ParseFS(dashboardFiles, "templates/index.html", "templates/settings.html")
 	if err != nil {
 		controller.Close()
 		_ = store.Close()
@@ -142,14 +153,19 @@ func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level
 	}
 
 	app := &dashboard{
-		controller:   controller,
-		store:        store,
-		account:      account,
-		page:         page,
-		databasePath: config.DatabasePath,
+		controller:       controller,
+		store:            store,
+		account:          account,
+		config:           config,
+		logLevel:         logLevel,
+		page:             page,
+		databasePath:     config.DatabasePath,
+		sessionStorePath: sessionStorePath,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", app.show)
+	mux.HandleFunc("GET /settings", app.showSettings)
+	mux.HandleFunc("POST /settings", app.saveSettings)
 	mux.HandleFunc("POST /start", app.start)
 	mux.HandleFunc("POST /resume", app.resume)
 	mux.HandleFunc("POST /sessions/delete", app.deleteSession)
@@ -160,12 +176,109 @@ func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level
 }
 
 func (d *dashboard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.routes.ServeHTTP(w, r)
 }
 
 func (d *dashboard) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.controller.Close()
 	_ = d.store.Close()
+}
+
+func (d *dashboard) showSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	data := settingsPageData{Account: d.account, Theme: parseTheme(r.URL.Query().Get("theme")), Error: r.URL.Query().Get("error")}
+	if err := d.page.ExecuteTemplate(w, "settings.html", data); err != nil {
+		http.Error(w, "settings unavailable", http.StatusInternalServerError)
+	}
+}
+
+func (d *dashboard) saveSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := accountSettingsFromForm(r)
+	if err == nil && filepath.Clean(settings.DatabasePath) == filepath.Clean(d.sessionStorePath) {
+		err = fmt.Errorf("the fileexplorer database must be separate from the task session metadata database")
+	}
+	if err != nil {
+		redirectSettings(w, r, err)
+		return
+	}
+	if d.controller.Snapshot().Status == "running" || d.controller.Snapshot().Status == "stopping" {
+		redirectSettings(w, r, fmt.Errorf("stop the executor before changing account settings"))
+		return
+	}
+	if accountSettingsEqual(d.account, settings) {
+		respondRedirect(w, r, url.Values{"notice": {"settings_unchanged"}})
+		return
+	}
+	config := d.config
+	config.DatabasePath = settings.DatabasePath
+	config.RootPath = settings.RootPath
+	config.Subdirectory = settings.Subdirectory
+	config.FileExplorerURL = settings.FileExplorerURL
+	config.GatewayURL = settings.GatewayURL
+	config.AgentID = settings.AgentID
+	controller, err := newExecutorController(config, d.logLevel, d.store, d.account.ID)
+	if err != nil {
+		redirectSettings(w, r, err)
+		return
+	}
+	updated, err := d.store.ReplaceAccount(r.Context(), d.account.ID, settings)
+	if err != nil {
+		controller.Close()
+		redirectSettings(w, r, err)
+		return
+	}
+	controller.sessionManager.accountID = updated.ID
+	d.controller.Close()
+	d.controller = controller
+	d.account = updated
+	d.config = config
+	d.databasePath = updated.DatabasePath
+	respondRedirect(w, r, url.Values{"notice": {"settings_saved"}})
+}
+
+func accountSettingsFromForm(r *http.Request) (sessions.AccountSettings, error) {
+	settings := sessions.AccountSettings{
+		Host: strings.TrimSpace(r.FormValue("host")), Port: strings.TrimSpace(r.FormValue("port")),
+		DatabasePath: strings.TrimSpace(r.FormValue("database_path")), RootPath: strings.TrimSpace(r.FormValue("root_path")),
+		FileExplorerURL: strings.TrimSpace(r.FormValue("fileexplorer_url")), GatewayURL: strings.TrimSpace(r.FormValue("gateway_url")),
+		AgentID: strings.TrimSpace(r.FormValue("agent_id")), Subdirectory: strings.TrimSpace(r.FormValue("subdirectory")),
+	}
+	if settings.Host == "" || settings.DatabasePath == "" || settings.RootPath == "" || settings.AgentID == "" {
+		return settings, fmt.Errorf("host, database path, root path, and agent ID are required")
+	}
+	port, err := strconv.Atoi(settings.Port)
+	if err != nil || port < 1 || port > 65535 {
+		return settings, fmt.Errorf("port must be a number from 1 to 65535")
+	}
+	for label, raw := range map[string]string{"fileexplorer URL": settings.FileExplorerURL, "Gateway URL": settings.GatewayURL} {
+		parsed, err := url.ParseRequestURI(raw)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+			return settings, fmt.Errorf("%s must be an HTTP or HTTPS URL with a host", label)
+		}
+	}
+	return settings, nil
+}
+
+func accountSettingsEqual(a, b sessions.AccountSettings) bool {
+	return a.Host == b.Host && a.Port == b.Port && a.DatabasePath == b.DatabasePath && a.RootPath == b.RootPath &&
+		a.FileExplorerURL == b.FileExplorerURL && a.GatewayURL == b.GatewayURL && a.AgentID == b.AgentID && a.Subdirectory == b.Subdirectory
+}
+
+func redirectSettings(w http.ResponseWriter, r *http.Request, err error) {
+	query := url.Values{}
+	if theme := parseTheme(r.URL.Query().Get("theme")); theme == "dark" {
+		query.Set("theme", theme)
+	}
+	if err != nil {
+		query.Set("error", err.Error())
+	}
+	http.Redirect(w, r, "/settings?"+query.Encode(), http.StatusSeeOther)
 }
 
 func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
@@ -398,10 +511,16 @@ func (d *dashboard) deleteSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func noticeMessage(value string) string {
-	if value == "session_deleted" {
+	switch value {
+	case "session_deleted":
 		return "Saved session history deleted."
+	case "settings_saved":
+		return "Account settings saved. Restart the dashboard for host or port changes to take effect."
+	case "settings_unchanged":
+		return "No account settings changed."
+	default:
+		return ""
 	}
-	return ""
 }
 
 func (d *dashboard) stop(w http.ResponseWriter, r *http.Request) {

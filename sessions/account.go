@@ -43,28 +43,7 @@ func (s *Store) EnsureAccount(ctx context.Context, settings AccountSettings) (Ac
 	if s == nil || s.db == nil {
 		return AccountSettings{}, errors.New("task session store is not open")
 	}
-	defaults := DefaultAccountSettings()
-	if settings.Host == "" {
-		settings.Host = defaults.Host
-	}
-	if settings.Port == "" {
-		settings.Port = defaults.Port
-	}
-	if settings.DatabasePath == "" {
-		settings.DatabasePath = defaults.DatabasePath
-	}
-	if settings.RootPath == "" {
-		settings.RootPath = defaults.RootPath
-	}
-	if settings.FileExplorerURL == "" {
-		settings.FileExplorerURL = defaults.FileExplorerURL
-	}
-	if settings.GatewayURL == "" {
-		settings.GatewayURL = defaults.GatewayURL
-	}
-	if settings.AgentID == "" {
-		settings.AgentID = defaults.AgentID
-	}
+	settings = withAccountDefaults(settings)
 
 	var account AccountSettings
 	err := s.db.QueryRowContext(ctx, `
@@ -109,6 +88,80 @@ func (s *Store) EnsureAccount(ctx context.Context, settings AccountSettings) (Ac
 		return AccountSettings{}, err
 	}
 	return account, nil
+}
+
+func withAccountDefaults(settings AccountSettings) AccountSettings {
+	defaults := DefaultAccountSettings()
+	if settings.Host == "" {
+		settings.Host = defaults.Host
+	}
+	if settings.Port == "" {
+		settings.Port = defaults.Port
+	}
+	if settings.DatabasePath == "" {
+		settings.DatabasePath = defaults.DatabasePath
+	}
+	if settings.RootPath == "" {
+		settings.RootPath = defaults.RootPath
+	}
+	if settings.FileExplorerURL == "" {
+		settings.FileExplorerURL = defaults.FileExplorerURL
+	}
+	if settings.GatewayURL == "" {
+		settings.GatewayURL = defaults.GatewayURL
+	}
+	if settings.AgentID == "" {
+		settings.AgentID = defaults.AgentID
+	}
+	return settings
+}
+
+// ReplaceAccount atomically replaces the current account and its saved history.
+// A failed replacement leaves the old account and sessions intact.
+func (s *Store) ReplaceAccount(ctx context.Context, accountID string, settings AccountSettings) (AccountSettings, error) {
+	if s == nil || s.db == nil {
+		return AccountSettings{}, errors.New("task session store is not open")
+	}
+	if accountID == "" {
+		return AccountSettings{}, errors.New("executor account ID is required")
+	}
+	settings = withAccountDefaults(settings)
+	id, err := newID()
+	if err != nil {
+		return AccountSettings{}, fmt.Errorf("generate account UUID: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AccountSettings{}, fmt.Errorf("begin executor account replacement: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_file_progress WHERE session_id IN (SELECT id FROM task_sessions WHERE account_id = ?)`, accountID); err != nil {
+		return AccountSettings{}, fmt.Errorf("delete previous executor account session progress: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM executor_accounts WHERE id = ? AND singleton = 1`, accountID)
+	if err != nil {
+		return AccountSettings{}, fmt.Errorf("delete previous executor account: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return AccountSettings{}, fmt.Errorf("check previous executor account deletion: %w", err)
+	}
+	if deleted == 0 {
+		return AccountSettings{}, fmt.Errorf("%w: %q", ErrAccountNotFound, accountID)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO executor_accounts
+			(id, singleton, host, port, database_path, root_path, fileexplorer_url, gateway_url, agent_id, subdirectory, created_at)
+		VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+	`, id, settings.Host, settings.Port, settings.DatabasePath, settings.RootPath,
+		settings.FileExplorerURL, settings.GatewayURL, settings.AgentID, settings.Subdirectory); err != nil {
+		return AccountSettings{}, fmt.Errorf("create replacement executor account: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return AccountSettings{}, fmt.Errorf("commit executor account replacement: %w", err)
+	}
+	settings.ID = id
+	return settings, nil
 }
 
 // associateLegacySessions attaches pre-account saved sessions to the account

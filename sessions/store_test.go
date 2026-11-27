@@ -783,3 +783,34 @@ func TestDefaultAccountSettingsUseLoopbackAndLocalPaths(t *testing.T) {
 		t.Errorf("DefaultAccountSettings() = %+v", settings)
 	}
 }
+
+func TestReplaceAccountChangesIdentityAndRemovesSessions(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "sessions.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	old, err := store.EnsureAccount(ctx, AccountSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.Create(ctx, Record{AgentID: old.AgentID, RootDirectory: old.RootPath, DatabaseFile: old.DatabasePath, Status: StatusPaused})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.ReplaceAccount(ctx, old.ID, AccountSettings{Host: "0.0.0.0", Port: "8082", AgentID: "writer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID == old.ID || updated.Host != "0.0.0.0" || updated.Port != "8082" || updated.AgentID != "writer" {
+		t.Errorf("replacement account = %+v, want new identity and submitted settings", updated)
+	}
+	if _, err := store.Get(ctx, session.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("old account session lookup = %v, want ErrNotFound", err)
+	}
+	current, err := store.EnsureAccount(ctx, AccountSettings{})
+	if err != nil || current.ID != updated.ID {
+		t.Errorf("current account = %+v, %v; want replacement %q", current, err, updated.ID)
+	}
+}

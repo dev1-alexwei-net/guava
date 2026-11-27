@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dev1-alexwei-net/guava/conversations"
 	_ "modernc.org/sqlite"
 )
 
@@ -45,7 +46,46 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := recreateConstants(context.Background(), db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// recreateConstants rebuilds the read-only constants tables during startup.
+func recreateConstants(ctx context.Context, db *sql.DB) error {
+	instructions, ok := conversations.LookupConstant(conversations.InstructionsKey)
+	if !ok {
+		return errors.New("default instructions constant is not configured")
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, statement := range []string{
+		`DROP TABLE IF EXISTS constants_values`,
+		`DROP TABLE IF EXISTS constants_fields`,
+		`CREATE TABLE constants_fields (field_name TEXT PRIMARY KEY NOT NULL)`,
+		`CREATE TABLE constants_values (
+			field_name TEXT PRIMARY KEY NOT NULL REFERENCES constants_fields(field_name),
+			value TEXT NOT NULL
+		)`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO constants_fields (field_name) VALUES (?)`, conversations.InstructionsKey); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO constants_values (field_name, value) VALUES (?, ?)`, conversations.InstructionsKey, instructions); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Close closes the underlying database.

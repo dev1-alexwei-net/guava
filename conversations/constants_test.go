@@ -33,6 +33,11 @@ func TestLookupConstant(t *testing.T) {
 			key:  ConversationSessionKeyTemplateKey,
 			want: "agent:%s:guava:%s",
 		},
+		{
+			name: "default account instructions",
+			key:  InstructionsKey,
+			want: "Output <complete /> only when finished.",
+		},
 	}
 
 	for _, test := range tests {

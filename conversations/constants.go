@@ -14,6 +14,8 @@ const (
 	ProviderModelKey ConstantKey = "provider_model"
 	// ConversationSessionKeyTemplateKey identifies the runtime session-key template.
 	ConversationSessionKeyTemplateKey ConstantKey = "conversation_session_key_template"
+	// InstructionsKey identifies the suggested default account instructions.
+	InstructionsKey ConstantKey = "instructions"
 )
 
 const (
@@ -22,6 +24,7 @@ const (
 	providerSessionKeyFormat       = "session key:agentid:file_name:openclaw"
 	providerModel                  = "openclaw"
 	conversationSessionKeyTemplate = "agent:%s:guava:%s"
+	defaultInstructions            = "Output <complete /> only when finished."
 )
 
 // constantsTable is initialized with the conversations package and remains
@@ -32,6 +35,7 @@ var constantsTable = map[ConstantKey]string{
 	ProviderSessionKeyFormatKey:       providerSessionKeyFormat,
 	ProviderModelKey:                  providerModel,
 	ConversationSessionKeyTemplateKey: conversationSessionKeyTemplate,
+	InstructionsKey:                   defaultInstructions,
 }
 
 // LookupConstant returns a stable configured value and whether key is present.

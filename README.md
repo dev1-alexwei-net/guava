@@ -2,6 +2,10 @@
 
 A server-rendered file explorer and OpenClaw executor. The executor dashboard is a separate server-rendered command.
 
+## License
+
+This project is licensed under the GNU Affero General Public License, version 3 only (AGPL-3.0-only). See [LICENSE](LICENSE) for the complete license text.
+
 ## Development
 
 Requires Go 1.27 or newer. Run `make fmt`, `make vet`, `make test`, or `make lint`.

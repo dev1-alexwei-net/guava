@@ -126,7 +126,7 @@ func NewFileProvider(ctx context.Context, config FileProviderConfig) (*FileProvi
 		index:            index,
 		reader:           reader,
 		refresher:        refresher,
-		queue:            NewWorkQueue(),
+		queue:            queue,
 		instructionsPath: config.InstructionsPath,
 		subdirectory:     config.Subdirectory,
 		logger:           config.Logger,

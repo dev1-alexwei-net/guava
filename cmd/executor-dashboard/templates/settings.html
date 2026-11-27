@@ -60,6 +60,7 @@
           <div class="col-12">
             <label class="form-label" for="instructions">Instructions</label>
             <textarea class="form-control" id="instructions" name="instructions" rows="6">{{.Account.Instructions}}</textarea>
+            <div class="form-text">Suggested default: {{.SuggestedInstructions}}</div>
           </div>
           <div class="col-12">
             <div class="form-check">
@@ -71,6 +72,7 @@
       </div>
       <div class="card-footer bg-body d-flex flex-column flex-sm-row gap-2 justify-content-end">
         <a class="btn btn-outline-secondary" href="/?theme={{.Theme}}">Cancel</a>
+        <button class="btn btn-outline-secondary" type="submit" name="reset_instructions" value="1" {{if not .SuggestedInstructions}}disabled title="Suggested instructions are unavailable"{{end}}>Reset instructions to suggested default</button>
         <button class="btn btn-primary" type="submit">Save account settings</button>
       </div>
     </form>

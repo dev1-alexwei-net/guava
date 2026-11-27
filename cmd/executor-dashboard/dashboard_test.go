@@ -1253,3 +1253,74 @@ func TestAccountSettingsFromFormReadsInstructionsPreferences(t *testing.T) {
 		t.Error("unchecked append-nearest-instructions setting should be false")
 	}
 }
+
+func TestSettingsShowsAndResetsInstructionsFromConstantsTable(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE constants_fields (field_name TEXT PRIMARY KEY NOT NULL)`,
+		`CREATE TABLE constants_values (field_name TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)`,
+		`INSERT INTO constants_fields (field_name) VALUES ('instructions')`,
+		`INSERT INTO constants_values (field_name, value) VALUES ('instructions', 'Suggested from constants table')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("initialize constants: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	config := testConfig(t, databasePath)
+	initial := sessions.DefaultAccountSettings()
+	initial.DatabasePath = databasePath
+	initial.RootPath = config.RootPath
+	initial.Instructions = "Current account instructions"
+	app, err := newDashboardWithAccountSettings(config, slog.LevelInfo, filepath.Join(t.TempDir(), "sessions.sqlite"), initial)
+	if err != nil {
+		t.Fatalf("newDashboardWithAccountSettings: %v", err)
+	}
+	defer app.Close()
+
+	get := httptest.NewRecorder()
+	app.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "Current account instructions") || !strings.Contains(get.Body.String(), "Suggested from constants table") {
+		t.Fatalf("GET /settings = %d, body %q; want current and suggested instructions", get.Code, get.Body.String())
+	}
+
+	postSettings := func(instructions string, reset bool) {
+		t.Helper()
+		account := app.account
+		form := url.Values{
+			"host": {account.Host}, "port": {account.Port}, "database_path": {account.DatabasePath},
+			"root_path": {account.RootPath}, "fileexplorer_url": {account.FileExplorerURL},
+			"gateway_url": {account.GatewayURL}, "agent_id": {account.AgentID},
+			"subdirectory": {account.Subdirectory}, "instructions": {instructions},
+		}
+		if account.AppendNearestInstructions {
+			form.Set("append_nearest_instructions", "on")
+		}
+		if reset {
+			form.Set("reset_instructions", "1")
+		}
+		request := httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response := httptest.NewRecorder()
+		app.ServeHTTP(response, request)
+		if response.Code != http.StatusSeeOther {
+			t.Fatalf("POST /settings = %d, body %q; want redirect", response.Code, response.Body.String())
+		}
+	}
+
+	postSettings("Edited account instructions", false)
+	if app.account.Instructions != "Edited account instructions" {
+		t.Fatalf("saved instructions = %q, want edited account instructions", app.account.Instructions)
+	}
+	postSettings("ignored submitted text", true)
+	if app.account.Instructions != "Suggested from constants table" {
+		t.Fatalf("reset instructions = %q, want value read from constants table", app.account.Instructions)
+	}
+}

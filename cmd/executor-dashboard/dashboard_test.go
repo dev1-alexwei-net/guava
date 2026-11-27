@@ -1225,3 +1225,31 @@ func TestPendingReporterRefreshesDashboardQueueAndOrigins(t *testing.T) {
 		t.Errorf("refreshed origins = %s, %s, %s, want new, carried, new", got[0].Origin, got[1].Origin, got[2].Origin)
 	}
 }
+
+func TestAccountSettingsFromFormReadsInstructionsPreferences(t *testing.T) {
+	form := url.Values{
+		"host": {"127.0.0.1"}, "port": {"8081"}, "database_path": {"index.sqlite"},
+		"root_path": {"."}, "fileexplorer_url": {"http://127.0.0.1:8080"},
+		"gateway_url": {"http://127.0.0.1:18789"}, "agent_id": {"main"},
+		"instructions": {"First line\nSecond line"}, "append_nearest_instructions": {"on"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	settings, err := accountSettingsFromForm(request)
+	if err != nil {
+		t.Fatalf("accountSettingsFromForm() error = %v", err)
+	}
+	if settings.Instructions != "First line\nSecond line" || !settings.AppendNearestInstructions {
+		t.Errorf("parsed instruction settings = %q/%t", settings.Instructions, settings.AppendNearestInstructions)
+	}
+	form.Del("append_nearest_instructions")
+	request = httptest.NewRequest(http.MethodPost, "/settings", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	settings, err = accountSettingsFromForm(request)
+	if err != nil {
+		t.Fatalf("accountSettingsFromForm() without checkbox error = %v", err)
+	}
+	if settings.AppendNearestInstructions {
+		t.Error("unchecked append-nearest-instructions setting should be false")
+	}
+}

@@ -12,7 +12,7 @@ func validConfig() Config {
 	return Config{
 		DatabasePath:     "/tmp/fileexplorer.sqlite",
 		RootPath:         "/tmp/files",
-		InstructionsPath: "/tmp/instructions.md",
+		InstructionsPath: "",
 		GatewayURL:       "http://127.0.0.1:18789/",
 		FileExplorerURL:  "http://127.0.0.1:8080/",
 		AgentID:          "default",
@@ -27,7 +27,6 @@ func TestConfigValidateRequiresInputs(t *testing.T) {
 	}{
 		{name: "database", mutate: func(c *Config) { c.DatabasePath = " " }, want: "database path"},
 		{name: "root", mutate: func(c *Config) { c.RootPath = "" }, want: "filesystem root"},
-		{name: "instructions", mutate: func(c *Config) { c.InstructionsPath = "" }, want: "instructions path"},
 		{name: "Gateway", mutate: func(c *Config) { c.GatewayURL = "" }, want: "Gateway URL"},
 		{name: "fileexplorer", mutate: func(c *Config) { c.FileExplorerURL = " " }, want: "fileexplorer URL"},
 		{name: "agent", mutate: func(c *Config) { c.AgentID = "" }, want: "agent ID"},

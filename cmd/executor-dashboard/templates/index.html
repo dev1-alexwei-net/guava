@@ -32,97 +32,77 @@
     <section class="card shadow-sm mb-4" aria-labelledby="controls-heading">
       <div class="card-body">
         <h2 class="h5" id="controls-heading">Controls</h2>
-        <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post">
-          <fieldset class="border-0 p-0 mb-3">
-            <legend class="h6">Choose a task session</legend>
-            <p class="text-body-secondary small">Start fresh by default, or explicitly choose an available saved session to resume.</p>
-            <div class="row g-3">
-              <div class="col-12">
-                <label class="card h-100" for="session-fresh">
-                  <span class="card-body d-flex align-items-start gap-3">
-                    <input class="form-check-input mt-1 flex-shrink-0" id="session-fresh" type="radio" name="session_id" value="" checked>
-                    <span>
-                      <span class="d-flex flex-wrap align-items-center gap-2">
-                        <span class="fw-semibold">Fresh session</span>
-                        <span class="badge text-bg-primary">Default</span>
-                      </span>
-                      <span class="text-body-secondary small">Start a new run with the dashboard's current configuration.</span>
-                    </span>
-                  </span>
-                </label>
-              </div>
-              {{range .SavedSessions}}
-              <div class="col-12 col-md-6">
-                <div class="card h-100">
-                  <label class="card-body d-flex align-items-start gap-3" for="saved-session-{{.ID}}">
-                    <input class="form-check-input mt-1 flex-shrink-0" id="saved-session-{{.ID}}" type="radio" name="session_id" value="{{.ID}}" {{if or $.Busy (not .CanResume)}}disabled{{end}}>
-                    <span class="min-w-0">
-                      <span class="d-flex flex-wrap align-items-center gap-2 mb-1">
-                        <span class="fw-semibold text-break">{{.AgentID}}</span>
-                        <span class="badge {{.StatusClass}}">{{.Status}}</span>
-                      </span>
-                      <span class="d-block small">{{if .Subdirectory}}/{{.Subdirectory}}{{else}}All files (root){{end}}</span>
-                      <span class="d-block text-body-secondary small">Updated {{.UpdatedAt}}</span>
-                      <span class="d-block text-body-secondary small font-monospace">{{.ID}}</span>
-                      {{if not .CanResume}}<span class="d-block text-body-secondary small">This session is active and cannot be resumed.</span>{{end}}
-                    </span>
-                  </label>
-                  {{if .CanDelete}}
-                  <div class="card-body pt-0">
-                    <div class="form-check mb-2">
-                      <input class="form-check-input" id="confirm-delete-{{.ID}}" type="checkbox" name="confirm" value="yes" form="delete-session-{{.ID}}" required>
-                      <label class="form-check-label small" for="confirm-delete-{{.ID}}">I confirm permanent deletion of this saved history.</label>
-                    </div>
-                    <button class="btn btn-outline-danger btn-sm" type="submit" form="delete-session-{{.ID}}">Delete saved session</button>
-                  </div>
-                  {{else}}
-                  <p class="card-body pt-0 small text-body-secondary mb-0">Active sessions cannot be deleted.</p>
-                  {{end}}
-                </div>
-              </div>
-              {{end}}
-            </div>
-            {{if .SavedSessionsHint}}<p class="alert alert-warning mt-3 mb-0" role="status">{{.SavedSessionsHint}}</p>{{else if not .SavedSessions}}<p class="text-body-secondary small mt-3 mb-0">No saved sessions yet.</p>{{end}}
-          </fieldset>
-
-          <div class="row g-2 align-items-end mb-3">
-            <div class="col-12 col-sm-8 col-lg-6">
-              <label class="form-label mb-1" for="subdirectory">Fresh session subdirectory</label>
+        <h3 class="h6" id="run-heading">Run</h3>
+        <div class="d-flex flex-column flex-md-row align-items-md-end gap-3 mb-4">
+          <div class="flex-grow-1">
+            <h4 class="h6 mt-0" id="fresh-session-heading">Start a fresh session</h4>
+            <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" aria-labelledby="fresh-session-heading" class="mb-0">
+              <label class="form-label mb-1" for="subdirectory">Subdirectory</label>
               <select class="form-select" id="subdirectory" name="subdirectory">
                 <option value="" selected>All files (root)</option>
                 {{range .Subdirectories}}
                 <option value="{{.}}">{{.}}</option>
                 {{end}}
               </select>
-              <div class="form-text">Used only for a fresh session; saved sessions keep their original configuration.</div>
-            </div>
-            <div class="col-12 col-sm-auto">
-              <button class="btn btn-primary w-100" type="submit" {{if .Busy}}disabled{{end}}>Continue with selection</button>
-            </div>
+              {{if .SubdirectoryHint}}<p class="text-body-secondary small mt-1 mb-2">{{.SubdirectoryHint}}</p>{{else}}<p class="text-body-secondary small mt-1 mb-2">Limits this fresh run to the selected subdirectory; the root option processes all files.</p>{{end}}
+              <button class="btn btn-primary" type="submit" {{if .Busy}}disabled{{end}}>Start fresh session</button>
+            </form>
           </div>
-          {{if .SubdirectoryHint}}<p class="text-body-secondary small mb-3">{{.SubdirectoryHint}}</p>{{end}}
-        </form>
-        {{range .SavedSessions}}
-        {{if .CanDelete}}<form id="delete-session-{{.ID}}" action="/sessions/delete?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post"><input type="hidden" name="session_id" value="{{.ID}}"></form>{{end}}
-        {{end}}
-        <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="mb-3">
-          <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
-        </form>
+          <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="mb-0">
+            <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
+          </form>
+        </div>
 
-        <form action="/" method="get" class="row g-2 align-items-end">
-          <input type="hidden" name="theme" value="{{.Theme}}">
-          <div class="col-auto">
-            <label class="form-label mb-0" for="refresh">Refresh page</label>
-            <select class="form-select" id="refresh" name="refresh">
-              <option value="0" {{if eq .Refresh 0}}selected{{end}}>Off</option>
-              <option value="2" {{if eq .Refresh 2}}selected{{end}}>Every 2 seconds</option>
-              <option value="5" {{if eq .Refresh 5}}selected{{end}}>Every 5 seconds</option>
-              <option value="10" {{if eq .Refresh 10}}selected{{end}}>Every 10 seconds</option>
-              <option value="30" {{if eq .Refresh 30}}selected{{end}}>Every 30 seconds</option>
-            </select>
+        <h3 class="h6" id="resume-heading">Resume a saved session</h3>
+        {{if .SavedSessionsHint}}<div class="alert alert-warning" role="status">{{.SavedSessionsHint}}</div>{{else if not .SavedSessions}}<p class="text-body-secondary small mb-3">No saved sessions yet.</p>{{end}}
+        <div class="row g-3 mb-3">
+          {{range .SavedSessions}}
+          <div class="col-12 col-md-6">
+            <div class="card h-100">
+              <div class="card-body">
+                <span class="d-flex flex-wrap align-items-center gap-2">
+                  <span class="fw-semibold text-break">{{.AgentID}}</span>
+                  <span class="badge {{.StatusClass}}">{{.Status}}</span>
+                </span>
+                <span class="d-block small">{{if .Subdirectory}}/{{.Subdirectory}}{{else}}All files (root){{end}}</span>
+                <span class="d-block text-body-secondary small">Updated {{.UpdatedAt}}</span>
+                <span class="d-block text-body-secondary small font-monospace">{{.ID}}</span>
+                {{if or $.Busy (not .CanResume)}}<p class="text-body-secondary small">This session cannot be resumed right now.</p>{{end}}
+                <form action="/start?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post">
+                  <input type="hidden" name="session_id" value="{{.ID}}">
+                  <button class="btn btn-outline-primary" type="submit" {{if or $.Busy (not .CanResume)}}disabled{{end}}>Resume</button>
+                </form>
+              </div>
+              {{if .CanDelete}}
+              <div class="card-body pt-0">
+                {{if eq .ID $.ArmedDeleteID}}
+                <p class="small text-body-secondary mb-2">This permanently deletes the saved history for this session.</p>
+                <form class="d-flex flex-wrap align-items-center gap-2" action="/sessions/delete?refresh={{$.Refresh}}&amp;theme={{$.Theme}}" method="post">
+                  <input type="hidden" name="session_id" value="{{.ID}}">
+                  <input type="hidden" name="confirm" value="yes">
+                  <button class="btn btn-danger btn-sm" type="submit">Confirm permanent deletion</button>
+                  <a class="btn btn-outline-secondary btn-sm" href="/?refresh={{$.Refresh}}&amp;theme={{$.Theme}}">Cancel</a>
+                </form>
+                {{else}}
+                <a class="btn btn-outline-danger btn-sm" href="/?arming={{.ID}}&amp;refresh={{$.Refresh}}&amp;theme={{$.Theme}}">Delete saved session</a>
+                {{end}}
+              </div>
+              {{else}}
+              <p class="card-body pt-0 small text-body-secondary mb-0">Active sessions cannot be deleted.</p>
+              {{end}}
+            </div>
           </div>
-          <div class="col-auto">
-            <button class="btn btn-outline-primary" type="submit">Apply</button>
+          {{end}}
+        </div>
+        <form action="/" method="get" aria-labelledby="refresh-heading">
+          <input type="hidden" name="theme" value="{{.Theme}}">
+          <h3 class="h6" id="refresh-heading">Refresh page</h3>
+          <div class="btn-group flex-wrap" role="group" aria-labelledby="refresh-heading">
+            <button class="btn btn-sm {{if eq .Refresh 0}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="0" aria-pressed="{{if eq .Refresh 0}}true{{else}}false{{end}}">Off</button>
+            <button class="btn btn-sm {{if eq .Refresh 2}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="2" aria-pressed="{{if eq .Refresh 2}}true{{else}}false{{end}}">Every 2 seconds</button>
+            <button class="btn btn-sm {{if eq .Refresh 5}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="5" aria-pressed="{{if eq .Refresh 5}}true{{else}}false{{end}}">Every 5 seconds</button>
+            <button class="btn btn-sm {{if eq .Refresh 10}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="10" aria-pressed="{{if eq .Refresh 10}}true{{else}}false{{end}}">Every 10 seconds</button>
+            <button class="btn btn-sm {{if eq .Refresh 30}}btn-primary{{else}}btn-outline-primary{{end}}" type="submit" name="refresh" value="30" aria-pressed="{{if eq .Refresh 30}}true{{else}}false{{end}}">Every 30 seconds</button>
           </div>
         </form>
       </div>

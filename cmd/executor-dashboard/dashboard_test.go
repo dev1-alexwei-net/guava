@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -486,6 +488,62 @@ func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testi
 	}
 }
 
+func TestResumeIgnoresFormSubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	savedDatabase := filepath.Join(dir, "saved-fileexplorer.sqlite")
+	createManifestFixture(t, savedDatabase, nil, nil)
+	savedRoot := filepath.Join(dir, "saved-root")
+	if err := os.MkdirAll(savedRoot, 0o755); err != nil {
+		t.Fatalf("create saved root: %v", err)
+	}
+	storePath := filepath.Join(dir, "task-sessions.sqlite")
+	store, err := sessions.OpenStore(storePath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	saved, err := store.Create(context.Background(), sessions.Record{
+		AgentID: "saved-agent", RootDirectory: savedRoot, Subdirectory: "docs",
+		DatabaseFile: savedDatabase, Status: sessions.StatusFailed,
+		LastError: "gateway unavailable", FinishedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("Create saved session: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close initial store: %v", err)
+	}
+
+	refreshServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer refreshServer.Close()
+	base := testConfig(t, filepath.Join(dir, "wrong-fileexplorer.sqlite"))
+	base.FileExplorerURL = refreshServer.URL
+	base.AgentID = "fresh-agent"
+	app, err := newDashboard(base, slog.LevelInfo, storePath)
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	// A resume request must use the saved configuration even when the form
+	// carries a subdirectory selection. An unknown value would reject a fresh
+	// start, so this pins the resume path to the saved record.
+	form := url.Values{"session_id": {saved.ID}, "subdirectory": {"stale-subdirectory"}}
+	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	app.start(rec, req)
+	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("resume response = %d %q, want a successful redirect without subdirectory validation", rec.Code, rec.Header().Get("Location"))
+	}
+
+	snapshot := waitForControllerStatus(t, app.controller, "completed")
+	if snapshot.AgentID != "saved-agent" || snapshot.Subdirectory != "docs" {
+		t.Errorf("resumed session summary = %+v, want saved agent and subdirectory", snapshot)
+	}
+}
+
 func createIndexedFile(t *testing.T, root, databasePath, relativePath, content string) {
 	t.Helper()
 	filePath := filepath.Join(root, filepath.FromSlash(relativePath))
@@ -653,7 +711,7 @@ func createManifestFixture(t *testing.T, databasePath string, files []string, di
 	}
 }
 
-func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
+func TestShowRendersSubdirectoryControlOnlyForFreshSession(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
 	createManifestFixture(t, databasePath, nil, nil)
 	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
@@ -679,24 +737,142 @@ func TestShowRendersSavedSessionsWithFreshChoiceSelected(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`<link href="/static/bootstrap.min.css" rel="stylesheet">`,
-		`id="session-fresh" type="radio" name="session_id" value="" checked`,
-		`value="paused-session"`, `agent-paused`, `paused`, `/docs`,
-		`value="active-session"`, `agent-active`, `active`,
-		`id="saved-session-active-session" type="radio" name="session_id" value="active-session" disabled`,
+		`data-bs-theme="light"`, `id="run-heading"`, `>Run<`,
+		`id="fresh-session-heading"`, `>Start a fresh session<`, `>Start fresh session<`,
+		`id="resume-heading"`, `>Resume a saved session<`,
+		`name="subdirectory"`, `id="subdirectory"`,
+		`name="session_id" value="paused-session"`, `agent-paused`, `>paused<`, `/docs`, `>Resume<`,
+		`name="session_id" value="active-session"`, `agent-active`, `>active<`,
+		`type="submit" disabled>Resume<`, `type="submit" disabled>Stop executor<`,
+		`d-flex flex-column flex-md-row align-items-md-end gap-3`,
 		`col-12 col-md-6`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered page missing %q", want)
 		}
 	}
-	if !strings.Contains(body, `name="confirm" value="yes" form="delete-session-paused-session" required`) {
-		t.Error("rendered page missing explicit saved-history deletion confirmation")
+	if got := strings.Count(body, `name="subdirectory"`); got != 1 {
+		t.Errorf("rendered page has %d subdirectory controls, want exactly one", got)
 	}
-	if strings.Contains(body, `id="confirm-delete-active-session"`) {
-		t.Error("active session must not offer a delete confirmation")
+	for _, gone := range []string{`Choose a task session`, `Continue with selection`, `id="session-fresh"`, `type="radio"`} {
+		if strings.Contains(body, gone) {
+			t.Errorf("rendered page still contains %q", gone)
+		}
 	}
+
+	// Run controls are grouped in visual and keyboard order. Start and Stop
+	// appear together before Resume, while the fresh form has no session_id.
+	runHeading := strings.Index(body, `id="run-heading"`)
+	freshHeading := strings.Index(body, `id="fresh-session-heading"`)
+	startButton := strings.Index(body, `>Start fresh session<`)
+	stopButton := strings.Index(body, `>Stop executor<`)
+	resumeHeading := strings.Index(body, `id="resume-heading"`)
+	subdirectoryControl := strings.Index(body, `id="subdirectory"`)
+	if runHeading == -1 || freshHeading == -1 || startButton == -1 || stopButton == -1 || resumeHeading == -1 || subdirectoryControl == -1 {
+		t.Fatalf("rendered page is missing Run controls: run=%d fresh=%d subdirectory=%d start=%d stop=%d resume=%d", runHeading, freshHeading, subdirectoryControl, startButton, stopButton, resumeHeading)
+	}
+	if !(runHeading < freshHeading && freshHeading < subdirectoryControl && subdirectoryControl < startButton && startButton < stopButton && stopButton < resumeHeading) {
+		t.Errorf("Run controls must appear in Run / fresh session / Stop / Resume order; got run=%d fresh=%d subdirectory=%d start=%d stop=%d resume=%d", runHeading, freshHeading, subdirectoryControl, startButton, stopButton, resumeHeading)
+	}
+	runSection := body[runHeading:resumeHeading]
+	if got := strings.Count(runSection, `btn-primary`); got != 1 {
+		t.Errorf("Run area has %d primary-styled buttons, want exactly one", got)
+	}
+	if !strings.Contains(runSection, `class="btn btn-outline-danger"`) {
+		t.Error("Stop executor should use a non-primary danger style")
+	}
+	if strings.Contains(runSection, `name="session_id"`) {
+		t.Error("fresh-session section must not include a session_id control")
+	}
+	resumeSection := body[resumeHeading:]
+	for _, want := range []string{`name="session_id" value="paused-session"`, `name="session_id" value="active-session"`} {
+		if !strings.Contains(resumeSection, want) {
+			t.Errorf("resume section missing %q", want)
+		}
+	}
+
 	if strings.Contains(strings.ToLower(body), "<script") {
 		t.Error("rendered selector must not include client-side JavaScript")
+	}
+}
+
+// TestShowArmsTwoStepDeleteForSavedSession covers the two-step delete for a
+// saved session: a first click (GET with arming=<id>) arms a clearly labeled
+// "Confirm permanent deletion" action, and only that armed action performs the
+// POST. Active sessions stay undeletable, and nothing is deleted in a single
+// click.
+func TestShowArmsTwoStepDeleteForSavedSession(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "fileexplorer.sqlite")
+	createManifestFixture(t, databasePath, nil, nil)
+	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	for _, record := range []sessions.Record{
+		{ID: "paused-session", AgentID: "agent-paused", RootDirectory: "/saved/files", DatabaseFile: "/saved/index.sqlite", Status: sessions.StatusPaused},
+		{ID: "active-session", AgentID: "agent-active", RootDirectory: "/active/files", DatabaseFile: "/active/index.sqlite", Status: sessions.StatusActive},
+	} {
+		if _, err := app.store.Create(context.Background(), record); err != nil {
+			t.Fatalf("Create saved session %q: %v", record.ID, err)
+		}
+	}
+
+	// Unarmed: the saved session offers a first-click delete control, but no
+	// confirm button, no hidden confirmation form, and no checkbox/`form=`
+	// association. The active session offers no delete control at all.
+	rec := httptest.NewRecorder()
+	app.show(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `arming=paused-session`) {
+		t.Error("unarmed page missing the first-click delete control for the saved session")
+	}
+	for _, gone := range []string{
+		`>Confirm permanent deletion<`,
+		`form="delete-session-`,
+		`name="confirm" value="yes"`,
+		`confirm-delete-`,
+		`arming=active-session`,
+		"I confirm permanent deletion",
+	} {
+		if strings.Contains(body, gone) {
+			t.Errorf("unarmed page must not contain %q", gone)
+		}
+	}
+	if !strings.Contains(body, "Active sessions cannot be deleted.") {
+		t.Error("active session must remain undeletable")
+	}
+	if strings.Contains(strings.ToLower(body), "<script") {
+		t.Error("two-step delete must not use client-side JavaScript")
+	}
+
+	// Armed: the saved session's card now offers the clearly labeled confirm
+	// action that POSTs to /sessions/delete with the server-side confirmation,
+	// while the active session offers none. Exactly one confirm action renders.
+	rec = httptest.NewRecorder()
+	app.show(rec, httptest.NewRequest("GET", "/?arming=paused-session&refresh=5&theme=dark", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("armed show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	armed := rec.Body.String()
+	if got := strings.Count(armed, `>Confirm permanent deletion<`); got != 1 {
+		t.Errorf("armed page has %d confirm actions, want exactly one (the saved session)", got)
+	}
+	if !strings.Contains(armed, `/sessions/delete?refresh=5&amp;theme=dark`) {
+		t.Error("armed confirm form must POST to /sessions/delete, carrying refresh and theme")
+	}
+	if !strings.Contains(armed, `name="confirm" value="yes"`) {
+		t.Error("armed confirm form must carry the server-side confirmation")
+	}
+	if !strings.Contains(armed, `name="session_id" value="paused-session"`) {
+		t.Error("armed confirm form must target the saved session")
+	}
+	if !strings.Contains(armed, "Active sessions cannot be deleted.") {
+		t.Error("active session must remain undeletable in the armed state")
 	}
 }
 
@@ -913,5 +1089,78 @@ func TestShowRendersRootOnlyWhenManifestCannotBeRead(t *testing.T) {
 	}
 	if !strings.Contains(body, "The subdirectory list is unavailable") {
 		t.Error("degradation hint missing")
+	}
+}
+
+func TestShowRendersOneClickRefreshIntervals(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	// A deletable saved session exercises the action URLs that only render
+	// when saved history exists.
+	if _, err := app.store.Create(context.Background(), sessions.Record{
+		ID: "paused-session", AgentID: "agent-paused", RootDirectory: "/saved/files", DatabaseFile: "/saved/index.sqlite", Status: sessions.StatusPaused,
+	}); err != nil {
+		t.Fatalf("Create saved session: %v", err)
+	}
+
+	intervals := []int{0, 2, 5, 10, 30}
+	for _, active := range intervals {
+		t.Run(strconv.Itoa(active), func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/?refresh="+strconv.Itoa(active)+"&theme=dark", nil)
+			rec := httptest.NewRecorder()
+			app.show(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, `data-bs-theme="dark"`) {
+				t.Error("rendered page should preserve the requested dark theme")
+			}
+			for _, interval := range intervals {
+				button := refreshButton(body, interval)
+				if button == "" {
+					t.Fatalf("rendered page has no refresh button for interval %d", interval)
+				}
+				wantActive := interval == active
+				if active := strings.Contains(button, " btn-primary"); active != wantActive {
+					t.Errorf("interval %d marked active = %v, want %v (button: %s)", interval, active, wantActive, button)
+				}
+			}
+			if strings.Contains(body, ">Apply<") {
+				t.Error("the Apply button is still rendered; every interval must apply on a single click")
+			}
+			if active == 5 {
+				for _, want := range []string{`/start?refresh=5&amp;theme=dark`, `/stop?refresh=5&amp;theme=dark`, `arming=paused-session&amp;refresh=5&amp;theme=dark`} {
+					if !strings.Contains(body, want) {
+						t.Errorf("rendered action URL missing %q", want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// refreshButton returns the <button> element that submits the given refresh
+// interval, or "" when the rendered page has no such control.
+func refreshButton(body string, interval int) string {
+	rest := body
+	for {
+		start := strings.Index(rest, "<button")
+		if start == -1 {
+			return ""
+		}
+		end := strings.Index(rest[start:], "</button>")
+		if end == -1 {
+			return ""
+		}
+		button := rest[start : start+end+len("</button>")]
+		if strings.Contains(button, `name="refresh"`) && strings.Contains(button, fmt.Sprintf(`value="%d"`, interval)) {
+			return button
+		}
+		rest = rest[start+1:]
 	}
 }

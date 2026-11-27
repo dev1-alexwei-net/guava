@@ -625,7 +625,17 @@ func TestStartAppliesSelectedSubdirectory(t *testing.T) {
 		[]string{"root.txt", "docs/notes.md", "docs/deep/page.md"},
 		[]string{"docs", "docs/deep"},
 	)
-	app, err := newDashboard(testConfig(t, databasePath), slog.LevelInfo, "")
+	requestStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestStarted <- struct{}{}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	config := testConfig(t, databasePath)
+	config.FileExplorerURL = server.URL
+	config.HTTPClient = server.Client()
+	app, err := newDashboard(config, slog.LevelInfo, "")
 	if err != nil {
 		t.Fatalf("newDashboard: %v", err)
 	}
@@ -634,6 +644,13 @@ func TestStartAppliesSelectedSubdirectory(t *testing.T) {
 	query := redirectLocation(t, postStart(t, app, "docs/deep"))
 	if got := query.Get("error"); got != "" {
 		t.Fatalf("redirect error = %q, want none for a manifest-listed subdirectory", got)
+	}
+	select {
+	case <-requestStarted:
+		// Keep the asynchronous executor run blocked in fileexplorer refresh
+		// while inspecting the accepted session state below.
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor did not reach the fileexplorer refresh request")
 	}
 
 	snapshot := app.controller.Snapshot()
@@ -656,6 +673,11 @@ func TestStartAppliesSelectedSubdirectory(t *testing.T) {
 	if !strings.Contains(body, " -subdirectory docs/deep") {
 		t.Error("rendered CLI args missing the applied -subdirectory flag")
 	}
+
+	if err := app.controller.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitForControllerStatus(t, app.controller, "stopped")
 }
 
 func TestStartEmptySelectionKeepsWholeRoot(t *testing.T) {

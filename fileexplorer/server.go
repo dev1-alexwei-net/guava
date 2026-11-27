@@ -736,13 +736,21 @@ func (e *application) moveDirectoryChoices() ([]directoryChoice, error) {
 	return choices, nil
 }
 
-func (e *application) renderMoveForm(w http.ResponseWriter, r *http.Request, rel, destination, message string, status int) {
+func (e *application) renderMoveForm(w http.ResponseWriter, r *http.Request, rel, mode, destination, returnPath, message string, status int) {
 	directories, err := e.moveDirectoryChoices()
 	if err != nil {
 		e.renderError(w, r, http.StatusInternalServerError, "Unable to list destination folders")
 		return
 	}
-	e.writePage(w, r, status, e.renderer.MoveForm(rel, destination, directories, message))
+	data := e.renderer.MoveForm(rel, mode, destination, returnPath, directories, message)
+	e.writePage(w, r, status, data)
+}
+
+func requestedMoveMode(requested string) (string, bool) {
+	if requested == "" {
+		return "cut", true
+	}
+	return requested, requested == "cut" || requested == "copy"
 }
 
 func (e *application) movePage(w http.ResponseWriter, r *http.Request) {
@@ -750,17 +758,48 @@ func (e *application) movePage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	destination := filepath.ToSlash(filepath.Dir(rel))
-	if destination == "." {
+	mode, valid := requestedMoveMode(r.URL.Query().Get("mode"))
+	if !valid {
+		e.renderError(w, r, http.StatusBadRequest, "Choose copy or cut")
+		return
+	}
+	parent := filepath.ToSlash(filepath.Dir(rel))
+	if parent == "." {
+		parent = ""
+	}
+	destination, returnPath, message := parent, parent, ""
+	if destination == "" {
 		destination = "."
 	}
-	e.renderMoveForm(w, r, rel, destination, "", http.StatusOK)
+	status := http.StatusOK
+	if requested := r.URL.Query().Get("destination"); requested != "" {
+		if _, resolved, err := e.filesystem.ResolveParent(requested); err == nil {
+			destination = resolved
+			if destination == "" {
+				destination = "."
+			}
+		} else {
+			message = "Choose an available destination folder: " + pathInteraction(err).message
+			status = pathInteraction(err).status
+		}
+	}
+	if requested := r.URL.Query().Get("return"); requested != "" {
+		if _, resolved, err := e.filesystem.ResolveParent(requested); err == nil {
+			returnPath = resolved
+		}
+	}
+	e.renderMoveForm(w, r, rel, mode, destination, returnPath, message, status)
 }
 
 func (e *application) submitMove(w http.ResponseWriter, r *http.Request) {
 	if err := parseForm(w, r); err != nil {
 		if rel, ok := e.moveSource(w, r, r.FormValue("source")); ok {
-			e.renderMoveForm(w, r, rel, r.FormValue("destination"), "Please choose a valid destination folder.", http.StatusBadRequest)
+			mode, _ := requestedMoveMode(r.FormValue("mode"))
+			if mode == "" {
+				mode = "cut"
+			}
+			returnPath := r.FormValue("return")
+			e.renderMoveForm(w, r, rel, mode, r.FormValue("destination"), returnPath, "Please choose a valid destination folder.", http.StatusBadRequest)
 		}
 		return
 	}
@@ -768,24 +807,42 @@ func (e *application) submitMove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	destination := r.FormValue("destination")
-	if _, _, err := e.filesystem.ResolveParent(destination); err != nil {
-		interaction := pathInteraction(err)
-		e.renderMoveForm(w, r, rel, destination, "Choose an available destination folder: "+interaction.message, interaction.status)
+	mode, valid := requestedMoveMode(r.FormValue("mode"))
+	if !valid {
+		e.renderMoveForm(w, r, rel, "cut", r.FormValue("destination"), r.FormValue("return"), "Choose copy or cut.", http.StatusBadRequest)
 		return
 	}
-	current, err := e.mutations.Paste("cut", rel, destination)
+	destination := r.FormValue("destination")
+	returnPath := r.FormValue("return")
+	if _, resolved, err := e.filesystem.ResolveParent(returnPath); err == nil {
+		returnPath = resolved
+	} else {
+		returnPath = filepath.ToSlash(filepath.Dir(rel))
+		if returnPath == "." {
+			returnPath = ""
+		}
+	}
+	if _, _, err := e.filesystem.ResolveParent(destination); err != nil {
+		interaction := pathInteraction(err)
+		e.renderMoveForm(w, r, rel, mode, destination, returnPath, "Choose an available destination folder: "+interaction.message, interaction.status)
+		return
+	}
+	current, err := e.mutations.Paste(mode, rel, destination)
 	if err != nil {
 		var interaction *interactionError
 		if errors.As(err, &interaction) {
-			e.renderMoveForm(w, r, rel, destination, interaction.message, interaction.status)
+			e.renderMoveForm(w, r, rel, mode, destination, returnPath, interaction.message, interaction.status)
 			return
 		}
 		pathIssue := pathInteraction(err)
-		e.renderMoveForm(w, r, rel, destination, pathIssue.message, pathIssue.status)
+		e.renderMoveForm(w, r, rel, mode, destination, returnPath, pathIssue.message, pathIssue.status)
 		return
 	}
-	message := "Moved " + path.Base(rel) + "."
+	verb := "Moved"
+	if mode == "copy" {
+		verb = "Copied"
+	}
+	message := verb + " " + path.Base(rel) + "."
 	target := e.renderer.ItemURL(current, true)
 	if current == "" {
 		target = "/"

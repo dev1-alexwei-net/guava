@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -610,6 +611,21 @@ func TestMoveDestinationForm(t *testing.T) {
 	}
 }
 
+func destinationFormURL(t *testing.T, body, source string) string {
+	t.Helper()
+	prefix := `href="/move/` + source + `?`
+	start := strings.Index(body, prefix)
+	if start < 0 {
+		t.Fatalf("destination form link for %q not found", source)
+	}
+	start += len(`href="`)
+	end := strings.IndexByte(body[start:], '"')
+	if end < 0 {
+		t.Fatalf("destination form link for %q is unterminated", source)
+	}
+	return html.UnescapeString(body[start : start+end])
+}
+
 func TestCutCopyPasteFileActions(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "destination"), 0o755); err != nil {
@@ -636,14 +652,22 @@ func TestCutCopyPasteFileActions(t *testing.T) {
 	}
 	location := "/d/destination?clipboard_mode=copy&clipboard_path=source.txt"
 	destinationPage := get(t, h, location)
-	if destinationPage.Code != http.StatusOK || !strings.Contains(destinationPage.Body.String(), "Ready to copy") || !strings.Contains(destinationPage.Body.String(), `name="destination" value="destination"`) {
+	if destinationPage.Code != http.StatusOK || !strings.Contains(destinationPage.Body.String(), "Ready to copy") || !strings.Contains(destinationPage.Body.String(), ">Paste here</a>") {
 		t.Fatalf("copy clipboard did not persist to destination: status=%d body=%s", destinationPage.Code, destinationPage.Body.String())
 	}
-	copied := formRequest(t, h, http.MethodPost, "/paste", url.Values{
-		"clipboard_mode": {"copy"}, "clipboard_path": {"source.txt"}, "destination": {"destination"},
+	copyFormURL := destinationFormURL(t, destinationPage.Body.String(), "source.txt")
+	copyForm := get(t, h, copyFormURL)
+	if copyForm.Code != http.StatusOK || !strings.Contains(copyForm.Body.String(), "Copy source.txt") || !strings.Contains(copyForm.Body.String(), ">Copy file</button>") || !strings.Contains(copyForm.Body.String(), `<option value="destination" selected>destination/</option>`) {
+		t.Fatalf("copy destination form: status=%d body=%s", copyForm.Code, copyForm.Body.String())
+	}
+	if !strings.Contains(copyForm.Body.String(), `href="/d/destination?clipboard_mode=copy&amp;clipboard_path=source.txt"`) {
+		t.Fatal("cancel does not return to the destination with the pending copy preserved")
+	}
+	copied := formRequest(t, h, http.MethodPost, "/move", url.Values{
+		"mode": {"copy"}, "source": {"source.txt"}, "destination": {"destination"}, "return": {"destination"},
 	})
-	if copied.Code != http.StatusSeeOther || !strings.Contains(copied.Header().Get("Location"), "notice=") {
-		t.Fatalf("copy paste: status=%d location=%q body=%s", copied.Code, copied.Header().Get("Location"), copied.Body.String())
+	if copied.Code != http.StatusSeeOther || !strings.Contains(copied.Header().Get("Location"), "notice=") || strings.Contains(copied.Header().Get("Location"), "clipboard_mode=") {
+		t.Fatalf("copy submission: status=%d location=%q body=%s", copied.Code, copied.Header().Get("Location"), copied.Body.String())
 	}
 	for _, name := range []string{"source.txt", filepath.Join("destination", "source.txt")} {
 		contents, err := os.ReadFile(filepath.Join(root, name))
@@ -656,11 +680,16 @@ func TestCutCopyPasteFileActions(t *testing.T) {
 	if cutSelected.Code != http.StatusSeeOther {
 		t.Fatalf("cut selection: status=%d", cutSelected.Code)
 	}
-	conflict := formRequest(t, h, http.MethodPost, "/paste", url.Values{
-		"clipboard_mode": {"cut"}, "clipboard_path": {"source.txt"}, "destination": {"destination"},
+	cutPage := get(t, h, "/d/destination?clipboard_mode=cut&clipboard_path=source.txt")
+	cutForm := get(t, h, destinationFormURL(t, cutPage.Body.String(), "source.txt"))
+	if cutForm.Code != http.StatusOK || !strings.Contains(cutForm.Body.String(), "Move source.txt") || !strings.Contains(cutForm.Body.String(), `name="mode" value="cut"`) {
+		t.Fatalf("cut destination form: status=%d body=%s", cutForm.Code, cutForm.Body.String())
+	}
+	conflict := formRequest(t, h, http.MethodPost, "/move", url.Values{
+		"mode": {"cut"}, "source": {"source.txt"}, "destination": {"destination"}, "return": {"destination"},
 	})
-	if conflict.Code != http.StatusSeeOther || !strings.Contains(conflict.Header().Get("Location"), "error=") {
-		t.Fatalf("cut conflict: status=%d location=%q", conflict.Code, conflict.Header().Get("Location"))
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "already exists") || !strings.Contains(conflict.Body.String(), `name="mode" value="cut"`) {
+		t.Fatalf("cut conflict form: status=%d body=%s", conflict.Code, conflict.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "source.txt")); err != nil {
 		t.Fatalf("source removed by conflicting cut: %v", err)
@@ -668,11 +697,11 @@ func TestCutCopyPasteFileActions(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "destination", "source.txt")); err != nil {
 		t.Fatal(err)
 	}
-	moved := formRequest(t, h, http.MethodPost, "/paste", url.Values{
-		"clipboard_mode": {"cut"}, "clipboard_path": {"source.txt"}, "destination": {"destination"},
+	moved := formRequest(t, h, http.MethodPost, "/move", url.Values{
+		"mode": {"cut"}, "source": {"source.txt"}, "destination": {"destination"}, "return": {"destination"},
 	})
-	if moved.Code != http.StatusSeeOther || !strings.Contains(moved.Header().Get("Location"), "notice=") {
-		t.Fatalf("cut paste: status=%d location=%q body=%s", moved.Code, moved.Header().Get("Location"), moved.Body.String())
+	if moved.Code != http.StatusSeeOther || !strings.Contains(moved.Header().Get("Location"), "notice=") || strings.Contains(moved.Header().Get("Location"), "clipboard_mode=") {
+		t.Fatalf("cut submission: status=%d location=%q body=%s", moved.Code, moved.Header().Get("Location"), moved.Body.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "source.txt")); !os.IsNotExist(err) {
 		t.Fatalf("source still exists after cut: err=%v", err)

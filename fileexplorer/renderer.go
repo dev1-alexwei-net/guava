@@ -58,9 +58,11 @@ type pageData struct {
 	ClipboardPath        string
 	ClipboardName        string
 	MoveForm             bool
+	MoveMode             string
 	MovePath             string
 	MoveName             string
 	MoveDestination      string
+	MoveReturnPath       string
 	MoveAction           string
 	MoveDirectories      []directoryChoice
 	Editor               bool
@@ -169,7 +171,7 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	data.UploadAction = r.withState("/upload", theme, wrap, pane, column)
 	data.DeleteAction = r.withState("/delete", theme, wrap, pane, column)
 	data.RenameAction = r.withState("/rename", theme, wrap, pane, column)
-	data.PasteAction = r.withState("/paste", theme, wrap, pane, column)
+	data.PasteAction = ""
 	data.MoveAction = r.withState("/move", theme, wrap, pane, column)
 	data.Notice = request.URL.Query().Get("notice")
 	data.ClipboardMode = request.URL.Query().Get("clipboard_mode")
@@ -178,6 +180,7 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 		data.ClipboardMode, data.ClipboardPath = "", ""
 	} else {
 		data.ClipboardName = path.Base(data.ClipboardPath)
+		data.PasteAction = r.withState(r.MoveURL(data.ClipboardPath, data.ClipboardMode, data.Current, data.Current), theme, wrap, pane, column)
 	}
 	carryClipboard := func(target string) string {
 		if target == "" || data.ClipboardMode == "" {
@@ -204,6 +207,7 @@ func (r *renderer) ForRequest(data pageData, request *http.Request) pageData {
 	data.DeleteAction = carryClipboard(data.DeleteAction)
 	data.RenameAction = carryClipboard(data.RenameAction)
 	data.PasteAction = carryClipboard(data.PasteAction)
+	data.MoveAction = carryClipboard(data.MoveAction)
 	data.ParentURL = carryClipboard(r.withState(data.ParentURL, theme, wrap, pane, column))
 	data.EditorURL = carryClipboard(r.withState(data.EditorURL, theme, wrap, pane, column))
 	data.PreviewReturnURL = carryClipboard(r.withState(data.PreviewReturnURL, theme, wrap, pane, column))
@@ -524,23 +528,41 @@ func (r *renderer) RenameConfirmation(rel string) pageData {
 	}
 }
 
-// MoveForm builds the dedicated destination-selection page for moving a file.
-func (r *renderer) MoveForm(rel, destination string, directories []directoryChoice, pageError string) pageData {
+// MoveForm builds the dedicated destination-selection page for a file operation.
+func (r *renderer) MoveForm(rel, mode, destination, returnPath string, directories []directoryChoice, pageError string) pageData {
 	parent := path.Dir(rel)
 	if parent == "." {
 		parent = ""
 	}
+	returnURL := r.ItemURL(returnPath, true)
+	if returnPath == "" || returnPath == "." {
+		returnURL = "/"
+	}
 	return pageData{
 		MoveForm:        true,
+		MoveMode:        mode,
 		Version:         version.SemVer,
 		MovePath:        rel,
 		MoveName:        path.Base(rel),
 		MoveDestination: destination,
+		MoveReturnPath:  returnPath,
 		MoveDirectories: directories,
 		Error:           pageError,
-		ReturnURL:       r.ParentURL(rel),
+		ReturnURL:       returnURL,
 		Breadcrumbs:     r.Breadcrumbs(parent),
 	}
+}
+
+// MoveURL opens the dedicated destination form for a copied or cut file.
+func (r *renderer) MoveURL(source, mode, destination, returnPath string) string {
+	if destination == "" {
+		destination = "."
+	}
+	if returnPath == "" {
+		returnPath = "."
+	}
+	query := url.Values{"mode": {mode}, "destination": {destination}, "return": {returnPath}}
+	return "/move/" + r.EscapedPath(source) + "?" + query.Encode()
 }
 
 func (r *renderer) Preview(data *pageData, current, rel string, preview previewContent) {

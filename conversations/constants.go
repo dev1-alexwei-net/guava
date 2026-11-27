@@ -8,11 +8,14 @@ const (
 	RetryPromptTextKey ConstantKey = "retry_prompt_text"
 	// ProviderSessionKeyFormatKey identifies the documented provider session-key format.
 	ProviderSessionKeyFormatKey ConstantKey = "provider_session_key_format"
+	// ProviderModelKey identifies the model name used for OpenResponses requests.
+	ProviderModelKey ConstantKey = "provider_model"
 )
 
 const (
 	retryPromptText          = "Continue with your prompt"
 	providerSessionKeyFormat = "session key:agentid:file_name:openclaw"
+	providerModel            = "openclaw"
 )
 
 // constantsTable is initialized with the conversations package and remains
@@ -20,6 +23,7 @@ const (
 var constantsTable = map[ConstantKey]string{
 	RetryPromptTextKey:          retryPromptText,
 	ProviderSessionKeyFormatKey: providerSessionKeyFormat,
+	ProviderModelKey:            providerModel,
 }
 
 // LookupConstant returns a stable configured value and whether key is present.

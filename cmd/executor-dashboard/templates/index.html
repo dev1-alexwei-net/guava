@@ -32,18 +32,26 @@
     <section class="card shadow-sm mb-4" aria-labelledby="controls-heading">
       <div class="card-body">
         <h2 class="h5" id="controls-heading">Controls</h2>
-        <h3 class="h6 mt-0" id="fresh-session-heading">Start a fresh session</h3>
-        <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" aria-labelledby="fresh-session-heading" class="mb-4">
-          <label class="form-label mb-1" for="subdirectory">Subdirectory</label>
-          <select class="form-select" id="subdirectory" name="subdirectory">
-            <option value="" selected>All files (root)</option>
-            {{range .Subdirectories}}
-            <option value="{{.}}">{{.}}</option>
-            {{end}}
-          </select>
-          {{if .SubdirectoryHint}}<p class="text-body-secondary small mt-1 mb-2">{{.SubdirectoryHint}}</p>{{else}}<p class="text-body-secondary small mt-1 mb-2">Limits this fresh run to the selected subdirectory; the root option processes all files.</p>{{end}}
-          <button class="btn btn-primary" type="submit" {{if .Busy}}disabled{{end}}>Start fresh session</button>
-        </form>
+        <h3 class="h6" id="run-heading">Run</h3>
+        <div class="d-flex flex-column flex-md-row align-items-md-end gap-3 mb-4">
+          <div class="flex-grow-1">
+            <h4 class="h6 mt-0" id="fresh-session-heading">Start a fresh session</h4>
+            <form action="/start?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" aria-labelledby="fresh-session-heading" class="mb-0">
+              <label class="form-label mb-1" for="subdirectory">Subdirectory</label>
+              <select class="form-select" id="subdirectory" name="subdirectory">
+                <option value="" selected>All files (root)</option>
+                {{range .Subdirectories}}
+                <option value="{{.}}">{{.}}</option>
+                {{end}}
+              </select>
+              {{if .SubdirectoryHint}}<p class="text-body-secondary small mt-1 mb-2">{{.SubdirectoryHint}}</p>{{else}}<p class="text-body-secondary small mt-1 mb-2">Limits this fresh run to the selected subdirectory; the root option processes all files.</p>{{end}}
+              <button class="btn btn-primary" type="submit" {{if .Busy}}disabled{{end}}>Start fresh session</button>
+            </form>
+          </div>
+          <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="mb-0">
+            <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
+          </form>
+        </div>
 
         <h3 class="h6" id="resume-heading">Resume a saved session</h3>
         {{if .SavedSessionsHint}}<div class="alert alert-warning" role="status">{{.SavedSessionsHint}}</div>{{else if not .SavedSessions}}<p class="text-body-secondary small mb-3">No saved sessions yet.</p>{{end}}
@@ -86,10 +94,6 @@
           </div>
           {{end}}
         </div>
-        <form action="/stop?refresh={{.Refresh}}&amp;theme={{.Theme}}" method="post" class="mb-3">
-          <button class="btn btn-outline-danger" type="submit" {{if not .Running}}disabled{{end}}>Stop executor</button>
-        </form>
-
         <form action="/" method="get" aria-labelledby="refresh-heading">
           <input type="hidden" name="theme" value="{{.Theme}}">
           <h3 class="h6" id="refresh-heading">Refresh page</h3>

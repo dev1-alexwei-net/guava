@@ -737,12 +737,14 @@ func TestShowRendersSubdirectoryControlOnlyForFreshSession(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`<link href="/static/bootstrap.min.css" rel="stylesheet">`,
+		`data-bs-theme="light"`, `id="run-heading"`, `>Run<`,
 		`id="fresh-session-heading"`, `>Start a fresh session<`, `>Start fresh session<`,
 		`id="resume-heading"`, `>Resume a saved session<`,
 		`name="subdirectory"`, `id="subdirectory"`,
 		`name="session_id" value="paused-session"`, `agent-paused`, `>paused<`, `/docs`, `>Resume<`,
 		`name="session_id" value="active-session"`, `agent-active`, `>active<`,
-		`type="submit" disabled>Resume<`,
+		`type="submit" disabled>Resume<`, `type="submit" disabled>Stop executor<`,
+		`d-flex flex-column flex-md-row align-items-md-end gap-3`,
 		`col-12 col-md-6`,
 	} {
 		if !strings.Contains(body, want) {
@@ -758,17 +760,28 @@ func TestShowRendersSubdirectoryControlOnlyForFreshSession(t *testing.T) {
 		}
 	}
 
-	// The subdirectory control belongs to the fresh-session section, before
-	// the resume section, and the fresh form carries no session_id field.
+	// Run controls are grouped in visual and keyboard order. Start and Stop
+	// appear together before Resume, while the fresh form has no session_id.
+	runHeading := strings.Index(body, `id="run-heading"`)
 	freshHeading := strings.Index(body, `id="fresh-session-heading"`)
+	startButton := strings.Index(body, `>Start fresh session<`)
+	stopButton := strings.Index(body, `>Stop executor<`)
 	resumeHeading := strings.Index(body, `id="resume-heading"`)
 	subdirectoryControl := strings.Index(body, `id="subdirectory"`)
-	if freshHeading == -1 || resumeHeading == -1 || subdirectoryControl == -1 ||
-		!(freshHeading < subdirectoryControl && subdirectoryControl < resumeHeading) {
-		t.Errorf("subdirectory control must sit between the fresh-session heading (at %d) and the resume heading (at %d), got %d", freshHeading, resumeHeading, subdirectoryControl)
+	if runHeading == -1 || freshHeading == -1 || startButton == -1 || stopButton == -1 || resumeHeading == -1 || subdirectoryControl == -1 {
+		t.Fatalf("rendered page is missing Run controls: run=%d fresh=%d subdirectory=%d start=%d stop=%d resume=%d", runHeading, freshHeading, subdirectoryControl, startButton, stopButton, resumeHeading)
 	}
-	freshSection := body[freshHeading:resumeHeading]
-	if strings.Contains(freshSection, `name="session_id"`) {
+	if !(runHeading < freshHeading && freshHeading < subdirectoryControl && subdirectoryControl < startButton && startButton < stopButton && stopButton < resumeHeading) {
+		t.Errorf("Run controls must appear in Run / fresh session / Stop / Resume order; got run=%d fresh=%d subdirectory=%d start=%d stop=%d resume=%d", runHeading, freshHeading, subdirectoryControl, startButton, stopButton, resumeHeading)
+	}
+	runSection := body[runHeading:resumeHeading]
+	if got := strings.Count(runSection, `btn-primary`); got != 1 {
+		t.Errorf("Run area has %d primary-styled buttons, want exactly one", got)
+	}
+	if !strings.Contains(runSection, `class="btn btn-outline-danger"`) {
+		t.Error("Stop executor should use a non-primary danger style")
+	}
+	if strings.Contains(runSection, `name="session_id"`) {
 		t.Error("fresh-session section must not include a session_id control")
 	}
 	resumeSection := body[resumeHeading:]
@@ -1104,6 +1117,9 @@ func TestShowRendersOneClickRefreshIntervals(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 			}
 			body := rec.Body.String()
+			if !strings.Contains(body, `data-bs-theme="dark"`) {
+				t.Error("rendered page should preserve the requested dark theme")
+			}
 			for _, interval := range intervals {
 				button := refreshButton(body, interval)
 				if button == "" {

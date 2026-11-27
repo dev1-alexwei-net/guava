@@ -281,7 +281,7 @@ func TestShowRendersDashboardPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Executor dashboard", "idle", "refresh", "dark", "Session summary", "Pending files", "No session yet"} {
+	for _, want := range []string{"Executor dashboard", "idle", "refresh", "dark", "Session summary", "Pending files", "No session yet", `id="executor-logs"`, "logs.scrollTop = logs.scrollHeight"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("rendered page missing %q", want)
 		}
@@ -791,7 +791,7 @@ func TestShowRendersSubdirectoryControlOnlyForFreshSession(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(strings.ToLower(body), "<script") {
+	if strings.Contains(strings.ToLower(runSection), "<script") {
 		t.Error("rendered selector must not include client-side JavaScript")
 	}
 }
@@ -846,8 +846,13 @@ func TestShowArmsTwoStepDeleteForSavedSession(t *testing.T) {
 	if !strings.Contains(body, "Active sessions cannot be deleted.") {
 		t.Error("active session must remain undeletable")
 	}
-	if strings.Contains(strings.ToLower(body), "<script") {
-		t.Error("two-step delete must not use client-side JavaScript")
+	controlsStart := strings.Index(body, `aria-labelledby="controls-heading"`)
+	logsStart := strings.Index(body, `id="logs-heading"`)
+	if controlsStart < 0 || logsStart <= controlsStart {
+		t.Fatal("rendered page is missing the controls or logs section")
+	}
+	if strings.Contains(strings.ToLower(body[controlsStart:logsStart]), "<script") {
+		t.Error("two-step delete controls must not use client-side JavaScript")
 	}
 
 	// Armed: the saved session's card now offers the clearly labeled confirm

@@ -187,7 +187,7 @@
         <small class="text-body-secondary">Recent 64 KiB</small>
       </div>
       <div class="card-body">
-        <textarea class="form-control font-monospace" aria-label="Executor logs" rows="24" readonly>{{.Logs}}</textarea>
+        <textarea id="executor-logs" class="form-control font-monospace" aria-label="Executor logs" rows="24" readonly>{{.Logs}}</textarea>
       </div>
     </section>
   </main>
@@ -195,6 +195,10 @@
   <footer class="container py-3">
     <p class="mb-0 text-body-secondary small font-monospace text-center">{{.Version}}</p>
   </footer>
+  <script>
+    const logs = document.getElementById("executor-logs");
+    logs.scrollTop = logs.scrollHeight;
+  </script>
 </body>
 </html>
 {{- end}}

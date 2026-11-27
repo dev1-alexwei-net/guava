@@ -253,3 +253,41 @@ func TestSync_NonexistentRoot(t *testing.T) {
 		t.Fatal("seed entry should survive a failed sync")
 	}
 }
+
+func TestOpenRecreatesConstantsOnStartup(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "constants.sqlite")
+
+	store, err := Open(databasePath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	var got string
+	err = store.db.QueryRow(`
+		SELECT constants_values.value
+		FROM constants_fields
+		JOIN constants_values USING (field_name)
+		WHERE constants_fields.field_name = 'instructions'`).Scan(&got)
+	if err != nil || got != "Output <complete /> only when finished." {
+		t.Fatalf("instructions constant = %q, err=%v", got, err)
+	}
+	if _, err := store.db.Exec(`UPDATE constants_values SET value = 'stale value'`); err != nil {
+		t.Fatalf("change value to simulate a stale database: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close before restart: %v", err)
+	}
+
+	store, err = Open(databasePath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store.Close()
+	err = store.db.QueryRow(`
+		SELECT constants_values.value
+		FROM constants_fields
+		JOIN constants_values USING (field_name)
+		WHERE constants_fields.field_name = 'instructions'`).Scan(&got)
+	if err != nil || got != "Output <complete /> only when finished." {
+		t.Fatalf("instructions constant after restart = %q, err=%v", got, err)
+	}
+}

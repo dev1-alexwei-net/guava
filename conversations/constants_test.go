@@ -18,6 +18,11 @@ func TestLookupConstant(t *testing.T) {
 			key:  ProviderSessionKeyFormatKey,
 			want: "session key:agentid:file_name:openclaw",
 		},
+		{
+			name: "default account instructions",
+			key:  InstructionsKey,
+			want: "Output <complete /> only when finished.",
+		},
 	}
 
 	for _, test := range tests {

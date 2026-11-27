@@ -10,20 +10,24 @@ const (
 	ProviderSessionKeyFormatKey ConstantKey = "provider_session_key_format"
 	// ProviderModelKey identifies the model name used for OpenResponses requests.
 	ProviderModelKey ConstantKey = "provider_model"
+	// ConversationSessionKeyTemplateKey identifies the runtime session-key template.
+	ConversationSessionKeyTemplateKey ConstantKey = "conversation_session_key_template"
 )
 
 const (
-	retryPromptText          = "Continue with your prompt"
-	providerSessionKeyFormat = "session key:agentid:file_name:openclaw"
-	providerModel            = "openclaw"
+	retryPromptText                = "Continue with your prompt"
+	providerSessionKeyFormat       = "session key:agentid:file_name:openclaw"
+	providerModel                  = "openclaw"
+	conversationSessionKeyTemplate = "agent:%s:guava:%s"
 )
 
 // constantsTable is initialized with the conversations package and remains
 // available through LookupConstant for the lifetime of the process.
 var constantsTable = map[ConstantKey]string{
-	RetryPromptTextKey:          retryPromptText,
-	ProviderSessionKeyFormatKey: providerSessionKeyFormat,
-	ProviderModelKey:            providerModel,
+	RetryPromptTextKey:                retryPromptText,
+	ProviderSessionKeyFormatKey:       providerSessionKeyFormat,
+	ProviderModelKey:                  providerModel,
+	ConversationSessionKeyTemplateKey: conversationSessionKeyTemplate,
 }
 
 // LookupConstant returns a stable configured value and whether key is present.

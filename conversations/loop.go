@@ -22,7 +22,8 @@ func conversationSessionKey(agentID, taskID string) string {
 	if agentID == "" || taskID == "" {
 		return ""
 	}
-	return "agent:" + agentID + ":guava:" + taskID
+	format, _ := LookupConstant(ConversationSessionKeyTemplateKey)
+	return fmt.Sprintf(format, agentID, taskID)
 }
 
 func (s *Service) RunPrompt(ctx context.Context, taskID, initialInput string) error {

@@ -11,7 +11,6 @@ import (
 )
 
 const completionMarker = "<complete />"
-const continueMessage = "Continue. Remember to output the completion marker <complete /> only if you have finished."
 
 // conversationSessionKey returns the explicit agent-scoped Gateway session
 // key for a file conversation, or "" for a conversation with no file. The
@@ -22,7 +21,8 @@ func conversationSessionKey(agentID, taskID string) string {
 	if agentID == "" || taskID == "" {
 		return ""
 	}
-	return "agent:" + agentID + ":guava:" + taskID
+	format, _ := LookupConstant(ConversationSessionKeyTemplateKey)
+	return fmt.Sprintf(format, agentID, taskID)
 }
 
 func (s *Service) RunPrompt(ctx context.Context, taskID, initialInput string) error {
@@ -87,7 +87,11 @@ func (s *Service) RunPrompt(ctx context.Context, taskID, initialInput string) er
 			return nil
 		}
 		logAttrs(s.config.Logger, ctx, slog.LevelDebug, "Continuing file conversation", attrs...)
-		input = continueMessage
+		continuationPrompt, ok := LookupConstant(ContinuationPromptTextKey)
+		if !ok {
+			return fmt.Errorf("continuation prompt constant %q is missing", ContinuationPromptTextKey)
+		}
+		input = continuationPrompt
 		previousResponseID = response.id
 	}
 }

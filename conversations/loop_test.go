@@ -69,8 +69,12 @@ func TestRunFileConversationContinuesUntilCompletion(t *testing.T) {
 	if requests[0].PreviousResponseID != "" {
 		t.Errorf("first previous_response_id = %q, want empty", requests[0].PreviousResponseID)
 	}
-	if requests[1].Input != continueMessage {
-		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continueMessage)
+	continuationPrompt, ok := LookupConstant(ContinuationPromptTextKey)
+	if !ok {
+		t.Fatal("continuation prompt constant is missing")
+	}
+	if requests[1].Input != continuationPrompt {
+		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continuationPrompt)
 	}
 	if requests[1].PreviousResponseID != "resp_first" {
 		t.Errorf("follow-up previous_response_id = %q, want resp_first", requests[1].PreviousResponseID)
@@ -121,8 +125,12 @@ func TestRunFileConversationContinuesAfterModelCutoff(t *testing.T) {
 	if requests[0].Input != "initial input" {
 		t.Errorf("first input = %q, want initial input", requests[0].Input)
 	}
-	if requests[1].Input != continueMessage {
-		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continueMessage)
+	continuationPrompt, ok := LookupConstant(ContinuationPromptTextKey)
+	if !ok {
+		t.Fatal("continuation prompt constant is missing")
+	}
+	if requests[1].Input != continuationPrompt {
+		t.Errorf("follow-up input = %q, want %q", requests[1].Input, continuationPrompt)
 	}
 	if requests[1].PreviousResponseID != "" {
 		t.Errorf("follow-up previous_response_id = %q, want empty after an error response", requests[1].PreviousResponseID)
@@ -527,7 +535,11 @@ func TestRunFileConversationRetriesAPIErrorWithoutLosingContinuationContext(t *t
 	if len(requests) != 3 {
 		t.Fatalf("requests = %d, want 3", len(requests))
 	}
-	wantInputs := []string{"initial prompt", continueMessage, continueMessage}
+	continuationPrompt, ok := LookupConstant(ContinuationPromptTextKey)
+	if !ok {
+		t.Fatal("continuation prompt constant is missing")
+	}
+	wantInputs := []string{"initial prompt", continuationPrompt, continuationPrompt}
 	wantPreviousIDs := []string{"", "response-1", "response-1"}
 	wantSessionKey := conversationSessionKey(config.AgentID, filePath)
 	for i := range requests {

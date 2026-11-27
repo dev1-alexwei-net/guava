@@ -6,10 +6,63 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Account settings · Executor dashboard</title>
   <link href="/static/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .suggested-instructions {
+      position: relative;
+      display: inline-flex;
+    }
+
+    .suggested-instructions__trigger {
+      display: inline-flex;
+      width: 1.75rem;
+      height: 1.75rem;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border-radius: 50%;
+      cursor: pointer;
+      list-style: none;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .suggested-instructions__trigger::-webkit-details-marker {
+      display: none;
+    }
+
+    .suggested-instructions__tooltip {
+      position: absolute;
+      z-index: 10;
+      top: calc(100% + .5rem);
+      left: 0;
+      display: none;
+      width: min(32rem, calc(100vw - 3rem));
+      max-height: min(60vh, 24rem);
+      overflow: auto;
+      padding: 1rem;
+      border: 1px solid var(--bs-border-color);
+      border-radius: var(--bs-border-radius);
+      background: var(--bs-body-bg);
+      box-shadow: var(--bs-box-shadow);
+    }
+
+    .suggested-instructions:hover .suggested-instructions__tooltip,
+    .suggested-instructions:focus-within .suggested-instructions__tooltip,
+    .suggested-instructions[open] .suggested-instructions__tooltip {
+      display: block;
+    }
+
+    .suggested-instructions__text {
+      margin: .5rem 0 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: inherit;
+    }
+  </style>
 </head>
 <body class="bg-body-tertiary">
   <nav class="navbar border-bottom bg-body">
-    <div class="container py-2">
+    <div class="container py-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
       <a class="navbar-brand fw-semibold text-decoration-none" href="/">Executor dashboard</a>
       <a class="btn btn-outline-secondary btn-sm" href="/?theme={{.Theme}}">Back to dashboard</a>
     </div>
@@ -24,43 +77,56 @@
     <form action="/settings?theme={{.Theme}}" method="post" class="card shadow-sm">
       <div class="card-body">
         <div class="row g-3">
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="host">Dashboard host</label>
             <input class="form-control" id="host" name="host" type="text" autocomplete="off" required value="{{.Account.Host}}">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="port">Dashboard port</label>
             <input class="form-control" id="port" name="port" type="number" min="1" max="65535" inputmode="numeric" required value="{{.Account.Port}}">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="database_path">Fileexplorer database path</label>
             <input class="form-control" id="database_path" name="database_path" type="text" autocomplete="off" required value="{{.Account.DatabasePath}}">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="root_path">Filesystem root path</label>
             <input class="form-control" id="root_path" name="root_path" type="text" autocomplete="off" required value="{{.Account.RootPath}}">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="fileexplorer_url">Fileexplorer URL</label>
             <input class="form-control" id="fileexplorer_url" name="fileexplorer_url" type="url" inputmode="url" required value="{{.Account.FileExplorerURL}}">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="gateway_url">OpenClaw Gateway URL</label>
             <input class="form-control" id="gateway_url" name="gateway_url" type="url" inputmode="url" required value="{{.Account.GatewayURL}}">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="agent_id">OpenClaw agent ID</label>
             <input class="form-control" id="agent_id" name="agent_id" type="text" autocomplete="off" required value="{{.Account.AgentID}}">
           </div>
-          <div class="col-12 col-md-6">
+          <div class="col-12 col-lg-6">
             <label class="form-label" for="subdirectory">Optional subdirectory</label>
             <input class="form-control" id="subdirectory" name="subdirectory" type="text" autocomplete="off" value="{{.Account.Subdirectory}}">
             <div class="form-text">Leave blank to use the full filesystem root.</div>
           </div>
           <div class="col-12">
-            <label class="form-label" for="instructions">Instructions</label>
-            <textarea class="form-control" id="instructions" name="instructions" rows="6">{{.Account.Instructions}}</textarea>
-            <div class="form-text">Suggested default: {{.SuggestedInstructions}}</div>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <label class="form-label mb-0" for="instructions">Instructions</label>
+              {{if .SuggestedInstructions}}
+              <details class="suggested-instructions">
+                <summary class="btn btn-sm btn-outline-secondary suggested-instructions__trigger" aria-label="Show suggested instructions" aria-describedby="suggested-instructions-tooltip">i</summary>
+                <div class="suggested-instructions__tooltip" id="suggested-instructions-tooltip" role="tooltip">
+                  <strong>Suggested default</strong>
+                  <pre class="suggested-instructions__text">{{.SuggestedInstructions}}</pre>
+                </div>
+              </details>
+              {{else}}
+              <span class="form-text">Suggested instructions are unavailable.</span>
+              {{end}}
+            </div>
+            <textarea class="form-control" id="instructions" name="instructions" rows="8" aria-describedby="instructions-help">{{.Account.Instructions}}</textarea>
+            <div class="form-text" id="instructions-help">Edit your account instructions here, or reset them to the suggested default.</div>
           </div>
           <div class="col-12">
             <div class="form-check">
@@ -70,10 +136,12 @@
           </div>
         </div>
       </div>
-      <div class="card-footer bg-body d-flex flex-column flex-sm-row gap-2 justify-content-end">
+      <div class="card-footer bg-body d-flex flex-column flex-lg-row align-items-stretch align-items-lg-center justify-content-between gap-2">
         <a class="btn btn-outline-secondary" href="/?theme={{.Theme}}">Cancel</a>
-        <button class="btn btn-outline-secondary" type="submit" name="reset_instructions" value="1" {{if not .SuggestedInstructions}}disabled title="Suggested instructions are unavailable"{{end}}>Reset instructions to suggested default</button>
-        <button class="btn btn-primary" type="submit">Save account settings</button>
+        <div class="d-flex flex-column flex-sm-row gap-2">
+          <button class="btn btn-outline-secondary" type="submit" name="reset_instructions" value="1" {{if not .SuggestedInstructions}}disabled title="Suggested instructions are unavailable"{{end}}>Reset to suggested default</button>
+          <button class="btn btn-primary" type="submit">Save account settings</button>
+        </div>
       </div>
     </form>
   </main>

@@ -57,6 +57,9 @@ func (e *Executor) Run(ctx context.Context) error {
 	if e.conversationService == nil {
 		return errors.New("conversation service is not configured")
 	}
+	if err := initializeConstants(ctx, e.config.DatabasePath); err != nil {
+		return e.conversationService.Run(ctx, failedTaskProvider{err: err})
+	}
 	provider, err := tasks.NewFileProvider(ctx, tasks.FileProviderConfig{
 		DatabasePath:     e.config.DatabasePath,
 		RootPath:         e.config.RootPath,

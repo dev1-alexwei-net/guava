@@ -6,7 +6,7 @@ The `executor` package runs an OpenClaw Responses conversation for each regular 
 
 Create an `executor.Config` with:
 
-- `DatabasePath`: an existing fileexplorer SQLite database. The executor opens it read-only and reads regular-file rows from the existing `files` table.
+- `DatabasePath`: the fileexplorer SQLite database. The executor reads regular-file rows from its existing `files` table and initializes the constants tables when a run starts; it does not modify file-index rows.
 - `RootPath`: the filesystem root corresponding to the relative paths in that database. The database stores metadata, not file contents.
 - `Subdirectory`: optional folder inside `RootPath` to scope a run to. Paths are relative and slash-separated, matching the index; the work list is filtered by exact folder prefix, so a sibling folder that merely shares a name prefix is out of scope. Leave it empty to keep the whole-root behavior. Instruction resolution is unaffected and still sees the full index, so an indexed `instructions.md` outside the subdirectory is still sourced for files inside it.
 - `InstructionsPath`: the fallback path to an `instructions.md` file. A closer indexed `instructions.md` for each target file takes precedence.
@@ -160,7 +160,7 @@ Per-file outcomes, discovered/processed/queued counts, current file, and turn co
 - Each file starts a separate conversation routed to a stable per-file Gateway session using the explicit `x-openclaw-session-key` header, set to `agent:<AgentID>:guava:<relative-path>`. If assistant output text does not contain the exact marker `<complete />`, the package sends `Continue` with the previous `previous_response_id`. It does not start the next file until the marker appears. When a turn fails with an output-token cutoff and returns no response id, the package still sends `Continue` with the same explicit session key, so the Gateway routes it to the cut-off turn's session.
 - `Run` refreshes fileexplorer and discovers the current regular-file paths before selecting work, then refreshes again between file routines. New paths are merged into the pending set, which is sorted as a whole by SQLite binary path order; files created during a routine are placed correctly relative to all older pending paths. A path is processed at most once per run. Dashboard sessions persist the ordered, still-eligible queue after each refresh, before the next file is selected.
 - Queue and completion state are in memory and scoped to one `Run`. A later run starts fresh; failed runs stop at the first error, and restarting does not resume prior progress.
-- Database rows and source files are not modified by the executor. The configured fileexplorer GET may of course refresh its own index as part of its normal page behavior.
+- The executor owns and refreshes the `constants_fields` and `constants_values` tables at the start of each run. It leaves file-index rows and source files unchanged; the configured fileexplorer GET may refresh its own index as part of normal page behavior.
 - `Run` accepts a `context.Context`; cancellation and database, file, and HTTP errors stop the run and are returned to the caller.
 
 ## Dynamic discovery interfaces

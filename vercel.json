@@ -3,6 +3,10 @@
   "framework": null,
   "rewrites": [
     {
+      "source": "/health",
+      "destination": "/api/health"
+    },
+    {
       "source": "/(.*)",
       "has": [
         {

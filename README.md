@@ -14,7 +14,9 @@ Requires Go 1.27 or newer. Run `make fmt`, `make vet`, `make test`, or `make lin
 
 `vercel.json` selects Vercel's Other framework preset so the root `go.mod` does not trigger the Go server entrypoint detector, then routes the default project hostname to `/api/fileexplorer` and requests on a hostname beginning with `executor.` to `/api/executor`. These endpoints are Go serverless functions built from the repository's root `go.mod`, rather than long-running Vercel Services. Attach an `executor.<your-domain>` domain to the Vercel project to expose the executor route.
 
-The function handlers are deployment stubs and return `501 Not Implemented`; adapting the full applications to request-scoped execution is out of scope for this change. Vercel may reuse warm function instances, so serverless execution does not guarantee a fresh operating-system process for every request. Function-local files are not durable storage.
+The `/health` route is a lightweight preview health check; it returns `{"status":"ok"}` without starting application or executor work. The file explorer and executor function handlers remain deployment stubs that return `501 Not Implemented`; adapting the full applications to request-scoped execution is out of scope.
+
+Vercel's Go Functions runtime is in Beta. Functions have plan- and compute-dependent memory and maximum-duration limits, and Vercel terminates an invocation that exceeds its configured maximum. Check Vercel's [Go runtime](https://vercel.com/docs/functions/runtimes/go), [duration](https://vercel.com/docs/functions/configuring-functions/duration), and [limits](https://vercel.com/docs/functions/limitations) documentation for current values and configuration. Keep request handlers short and bounded: do not run long-lived executor jobs in a function invocation or continue work after returning a response. Submit such work to a durable job system and process it in a separate worker. Vercel may reuse warm function instances, so serverless execution does not guarantee a fresh process per request, and function-local files are not durable storage.
 
 ## Executor dashboard
 

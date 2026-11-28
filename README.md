@@ -12,9 +12,9 @@ Requires Go 1.27 or newer. Run `make fmt`, `make vet`, `make test`, or `make lin
 
 ## Vercel deployment
 
-`vercel.json` configures two Go services in one Vercel deployment. The project root must be the repository root so both services can build from the shared `go.mod`. The default project hostname serves `fileexplorer`; requests on a hostname beginning with `executor.` serve the executor dashboard. Attach an `executor.<your-domain>` domain to the Vercel project to expose the dashboard.
+`vercel.json` selects Vercel's Other framework preset so the root `go.mod` does not trigger the Go server entrypoint detector, then routes the default project hostname to `/api/fileexplorer` and requests on a hostname beginning with `executor.` to `/api/executor`. These endpoints are Go serverless functions built from the repository's root `go.mod`, rather than long-running Vercel Services. Attach an `executor.<your-domain>` domain to the Vercel project to expose the executor route.
 
-The config sets HOST to 0.0.0.0 so the executor dashboard accepts traffic from Vercel. Vercel supplies PORT; do not override it. Configure a reachable OpenClaw Gateway in the dashboard settings before starting runs. Vercel Services and its Go runtime are currently Beta. Vercel instances can scale down and their local files are not durable or shared between services, so this setup exposes both interfaces but does not provide persistent/shared file storage for executor runs.
+The function handlers are deployment stubs and return `501 Not Implemented`; adapting the full applications to request-scoped execution is out of scope for this change. Vercel may reuse warm function instances, so serverless execution does not guarantee a fresh operating-system process for every request. Function-local files are not durable storage.
 
 ## Executor dashboard
 

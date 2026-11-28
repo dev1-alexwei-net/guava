@@ -1,24 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "env": {
-    "HOST": "0.0.0.0"
-  },
-  "services": {
-    "fileexplorer": {
-      "root": ".",
-      "framework": "go",
-      "entrypoint": "fileexplorer/main.go",
-      "buildCommand": "go build -o server ./fileexplorer",
-      "devCommand": "go run ./fileexplorer"
-    },
-    "executor": {
-      "root": ".",
-      "framework": "go",
-      "entrypoint": "cmd/executor-dashboard/main.go",
-      "buildCommand": "go build -o server ./cmd/executor-dashboard",
-      "devCommand": "go run ./cmd/executor-dashboard"
-    }
-  },
+  "framework": null,
   "rewrites": [
     {
       "source": "/(.*)",
@@ -30,15 +12,11 @@
           }
         }
       ],
-      "destination": {
-        "service": "executor"
-      }
+      "destination": "/api/executor"
     },
     {
       "source": "/(.*)",
-      "destination": {
-        "service": "fileexplorer"
-      }
+      "destination": "/api/fileexplorer"
     }
   ]
 }

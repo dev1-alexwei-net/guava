@@ -67,6 +67,45 @@ func TestHandlerSyncsAndSortsDirectoriesFirst(t *testing.T) {
 	}
 }
 
+func TestGinRoutesPreserveMethodsAndWildcardParameters(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested", "sub")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "note.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := makeTestHandler(t, root)
+
+	directory := get(t, h, "/d/nested/sub")
+	if directory.Code != http.StatusOK || !strings.Contains(directory.Body.String(), "note.txt") {
+		t.Fatalf("nested directory route: status=%d body=%s", directory.Code, directory.Body.String())
+	}
+
+	head := httptest.NewRecorder()
+	h.ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/f/nested/sub/note.txt", nil))
+	if head.Code != http.StatusOK || head.Body.Len() != 0 {
+		t.Fatalf("HEAD file route: status=%d body=%q", head.Code, head.Body.String())
+	}
+
+	clipboard := httptest.NewRecorder()
+	h.ServeHTTP(clipboard, httptest.NewRequest(http.MethodGet, "/clipboard/copy/nested/sub/note.txt", nil))
+	if clipboard.Code != http.StatusSeeOther || !strings.Contains(clipboard.Header().Get("Location"), "clipboard_mode=copy") {
+		t.Fatalf("clipboard route params: status=%d location=%q body=%s", clipboard.Code, clipboard.Header().Get("Location"), clipboard.Body.String())
+	}
+
+	methodNotAllowed := httptest.NewRecorder()
+	h.ServeHTTP(methodNotAllowed, httptest.NewRequest(http.MethodPost, "/f/nested/sub/note.txt", nil))
+	if methodNotAllowed.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("unsupported method status=%d body=%q", methodNotAllowed.Code, methodNotAllowed.Body.String())
+	}
+
+	if got := directory.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("shared security header=%q", got)
+	}
+}
+
 func TestHandlerMutationRoutes(t *testing.T) {
 	root := t.TempDir()
 	h := makeTestHandler(t, root)

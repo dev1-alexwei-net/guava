@@ -69,6 +69,38 @@ func newTestStore(t *testing.T, objects *memoryObjects) *Store {
 	return store
 }
 
+func newFileBackedTestStore(t *testing.T, dbPath string, objects ObjectStore) *Store {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	store, err := NewStore(db, objects)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := store.Migrate(context.Background()); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	return store
+}
+
+type interruptedPutObjects struct {
+	*memoryObjects
+}
+
+func (m *interruptedPutObjects) Put(_ context.Context, notebookID, objectID, _ string, _ int64, body io.Reader) error {
+	partial, err := io.ReadAll(io.LimitReader(body, 3))
+	if err != nil {
+		return err
+	}
+	m.data[notebookID+"/"+objectID] = partial
+	return errors.New("simulated interrupted object upload")
+}
+
 func TestStorePersistsMetadataAndKeepsContentInObjectStore(t *testing.T) {
 	ctx := context.Background()
 	objects := newMemoryObjects()
@@ -137,6 +169,91 @@ func TestStorePersistsMetadataAndKeepsContentInObjectStore(t *testing.T) {
 	}
 	if string(gotBody) != secondBody || metadata.Revision != 2 {
 		t.Fatalf("latest read metadata=%+v body=%q", metadata, gotBody)
+	}
+}
+
+func TestCommittedFileCanBeReadByFreshStoreInstance(t *testing.T) {
+	ctx := context.Background()
+	objects := newMemoryObjects()
+	dbPath := t.TempDir() + "/metadata.sqlite"
+	store := newFileBackedTestStore(t, dbPath, objects)
+	notebook, err := store.CreateNotebook(ctx, "owner-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const note = "committed note survives a new function instance"
+	if _, err := store.WriteFile(ctx, notebook.ID, "notes/committed.md", "text/markdown", int64(len(note)), 0, strings.NewReader(note)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new Store and object-store adapter model a later function invocation.
+	freshObjects := &memoryObjects{data: objects.data}
+	freshStore := newFileBackedTestStore(t, dbPath, freshObjects)
+	defer freshStore.Close()
+	metadata, content, err := freshStore.ReadFile(ctx, notebook.ID, "notes/committed.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer content.Close()
+	got, err := io.ReadAll(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != note || metadata.Revision != 1 {
+		t.Fatalf("fresh instance read metadata=%+v body=%q, want revision 1 and committed note", metadata, got)
+	}
+}
+
+func TestInterruptedReplacementNeverBecomesVisibleToFreshStoreInstance(t *testing.T) {
+	ctx := context.Background()
+	objects := newMemoryObjects()
+	dbPath := t.TempDir() + "/metadata.sqlite"
+	store := newFileBackedTestStore(t, dbPath, objects)
+	notebook, err := store.CreateNotebook(ctx, "owner-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const committed = "previous committed note"
+	if _, err := store.WriteFile(ctx, notebook.ID, "notes/committed.md", "text/markdown", int64(len(committed)), 0, strings.NewReader(committed)); err != nil {
+		t.Fatal(err)
+	}
+
+	interrupted := &interruptedPutObjects{memoryObjects: objects}
+	storeWithInterruptedUpload, err := NewStore(store.db, interrupted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const replacement = "replacement that is interrupted"
+	if _, err := storeWithInterruptedUpload.WriteFile(ctx, notebook.ID, "notes/committed.md", "text/markdown", int64(len(replacement)), 1, strings.NewReader(replacement)); err == nil {
+		t.Fatal("WriteFile succeeded despite an interrupted object upload")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The failed upload left partial bytes in object storage, but no metadata
+	// pointer was committed. A fresh invocation must continue to see only the
+	// previously committed object.
+	freshObjects := &memoryObjects{data: objects.data}
+	freshStore := newFileBackedTestStore(t, dbPath, freshObjects)
+	defer freshStore.Close()
+	metadata, content, err := freshStore.ReadFile(ctx, notebook.ID, "notes/committed.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer content.Close()
+	got, err := io.ReadAll(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != committed || metadata.Revision != 1 {
+		t.Fatalf("interrupted replacement became visible: metadata=%+v body=%q", metadata, got)
+	}
+	if len(freshObjects.data[notebook.ID+"/"+metadata.ObjectID]) != len(committed) {
+		t.Fatal("read resolved to incomplete object bytes")
 	}
 }
 

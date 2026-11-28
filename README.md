@@ -12,7 +12,7 @@ Requires Go 1.27 or newer. Run `make fmt`, `make vet`, `make test`, or `make lin
 
 ## Vercel deployment
 
-`vercel.json` routes the default project hostname to `/api/fileexplorer` and requests on a hostname beginning with `executor.` to `/api/executor`. These endpoints are Go serverless functions, built from the repository's root `go.mod`, rather than long-running Vercel Services. Attach an `executor.<your-domain>` domain to the Vercel project to expose the executor route.
+`vercel.json` selects Vercel's Other framework preset so the root `go.mod` does not trigger the Go server entrypoint detector, then routes the default project hostname to `/api/fileexplorer` and requests on a hostname beginning with `executor.` to `/api/executor`. These endpoints are Go serverless functions built from the repository's root `go.mod`, rather than long-running Vercel Services. Attach an `executor.<your-domain>` domain to the Vercel project to expose the executor route.
 
 The function handlers are deployment stubs and return `501 Not Implemented`; adapting the full applications to request-scoped execution is out of scope for this change. Vercel may reuse warm function instances, so serverless execution does not guarantee a fresh operating-system process for every request. Function-local files are not durable storage.
 

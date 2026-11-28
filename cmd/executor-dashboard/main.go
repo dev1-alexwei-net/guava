@@ -19,6 +19,7 @@ import (
 	"github.com/dev1-alexwei-net/guava/conversations"
 	"github.com/dev1-alexwei-net/guava/executor"
 	"github.com/dev1-alexwei-net/guava/sessions"
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
@@ -80,7 +81,7 @@ func run() error {
 		FileExplorerURL: *fileExplorerURL, GatewayURL: *gatewayURL,
 		AgentID: *agentID, Subdirectory: *subdirectory,
 	}
-	app, err := newDashboardWithAccountSettings(config, parsedLogLevel, strings.TrimSpace(*sessionStorePath), initialSettings)
+	app, err := newDashboardWithAccountSettings(config, parsedLogLevel, strings.TrimSpace(*sessionStorePath), initialSettings, *accountFlow)
 	if err != nil {
 		return fmt.Errorf("configure executor dashboard: %w", err)
 	}
@@ -90,7 +91,7 @@ func run() error {
 	if *addr != "" {
 		listen = normalizeAddress(*addr)
 	}
-	server := &http.Server{Addr: listen, Handler: startupLandingHandler(app, *accountFlow)}
+	server := &http.Server{Addr: listen, Handler: app}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -115,12 +116,13 @@ func run() error {
 	}
 }
 
-func startupLandingHandler(next http.Handler, accountFlow bool) http.Handler {
+func startupLandingHandler(next gin.HandlerFunc, accountFlow bool) gin.HandlerFunc {
 	if !accountFlow {
 		return next
 	}
 	var firstDashboardRequest sync.Once
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return func(c *gin.Context) {
+		r := c.Request
 		if r.Method == http.MethodGet && r.URL.Path == "/" {
 			first := false
 			firstDashboardRequest.Do(func() { first = true })
@@ -129,12 +131,13 @@ func startupLandingHandler(next http.Handler, accountFlow bool) http.Handler {
 				if r.URL.RawQuery != "" {
 					location += "?" + r.URL.RawQuery
 				}
-				http.Redirect(w, r, location, http.StatusFound)
+				http.Redirect(c.Writer, r, location, http.StatusFound)
+				c.Abort()
 				return
 			}
 		}
-		next.ServeHTTP(w, r)
-	})
+		next(c)
+	}
 }
 
 func envOrDefault(name, fallback string) string {

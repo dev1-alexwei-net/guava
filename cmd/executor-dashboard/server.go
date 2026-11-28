@@ -17,8 +17,10 @@ import (
 	"github.com/dev1-alexwei-net/guava/conversations"
 	"github.com/dev1-alexwei-net/guava/executor"
 	"github.com/dev1-alexwei-net/guava/internal/version"
+	"github.com/dev1-alexwei-net/guava/internal/web"
 	"github.com/dev1-alexwei-net/guava/sessions"
 	"github.com/dev1-alexwei-net/guava/tasks"
+	"github.com/gin-gonic/gin"
 )
 
 //go:embed templates/index.html templates/settings.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
@@ -34,7 +36,7 @@ type dashboard struct {
 	page             *template.Template
 	databasePath     string
 	sessionStorePath string
-	routes           http.Handler
+	routes           *gin.Engine
 }
 
 type dashboardPageData struct {
@@ -108,7 +110,7 @@ func newDashboard(config executor.Config, logLevel slog.Level, sessionStorePath 
 	return newDashboardWithAccountSettings(config, logLevel, sessionStorePath, settings)
 }
 
-func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level, sessionStorePath string, initial sessions.AccountSettings) (*dashboard, error) {
+func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level, sessionStorePath string, initial sessions.AccountSettings, accountFlow ...bool) (*dashboard, error) {
 	if sessionStorePath == "" {
 		storeDatabasePath := config.DatabasePath
 		if storeDatabasePath == "" {
@@ -164,16 +166,26 @@ func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level
 		databasePath:     config.DatabasePath,
 		sessionStorePath: sessionStorePath,
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", app.show)
-	mux.HandleFunc("GET /settings", app.showSettings)
-	mux.HandleFunc("POST /settings", app.saveSettings)
-	mux.HandleFunc("POST /start", app.start)
-	mux.HandleFunc("POST /resume", app.resume)
-	mux.HandleFunc("POST /sessions/delete", app.deleteSession)
-	mux.HandleFunc("POST /stop", app.stop)
-	mux.HandleFunc("GET /static/bootstrap.min.css", app.stylesheet)
-	app.routes = mux
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
+	router.RedirectTrailingSlash = false
+	router.RedirectFixedPath = false
+	router.HandleMethodNotAllowed = true
+	router.Use(web.SecurityHeaders())
+	showLanding := len(accountFlow) > 0 && accountFlow[0]
+	landing := startupLandingHandler(app.show, showLanding)
+	router.GET("/", landing)
+	router.HEAD("/", landing)
+	router.GET("/settings", app.showSettings)
+	router.HEAD("/settings", app.showSettings)
+	router.POST("/settings", app.saveSettings)
+	router.POST("/start", app.start)
+	router.POST("/resume", app.resume)
+	router.POST("/sessions/delete", app.deleteSession)
+	router.POST("/stop", app.stop)
+	router.GET("/static/bootstrap.min.css", app.stylesheet)
+	router.HEAD("/static/bootstrap.min.css", app.stylesheet)
+	app.routes = router
 	return app, nil
 }
 
@@ -190,11 +202,11 @@ func (d *dashboard) Close() {
 	_ = d.store.Close()
 }
 
-func (d *dashboard) showSettings(w http.ResponseWriter, r *http.Request) {
+func (d *dashboard) showSettings(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	data := settingsPageData{Account: d.account, Theme: parseTheme(r.URL.Query().Get("theme")), Error: r.URL.Query().Get("error")}
+	data := settingsPageData{Account: d.account, Theme: parseTheme(web.QueryValue(c, "theme")), Error: web.QueryValue(c, "error")}
 	suggested, err := tasks.LookupConstant(r.Context(), d.account.DatabasePath, conversations.InstructionsKey)
 	if err != nil {
 		data.Error = "Suggested instructions are unavailable: " + err.Error()
@@ -206,9 +218,10 @@ func (d *dashboard) showSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (d *dashboard) saveSettings(w http.ResponseWriter, r *http.Request) {
+func (d *dashboard) saveSettings(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	settings, err := accountSettingsFromForm(r)
-	if err == nil && r.FormValue("reset_instructions") == "1" {
+	if err == nil && web.FormValue(c, "reset_instructions") == "1" {
 		settings.Instructions, err = tasks.LookupConstant(r.Context(), d.account.DatabasePath, conversations.InstructionsKey)
 	}
 	if err == nil && filepath.Clean(settings.DatabasePath) == filepath.Clean(d.sessionStorePath) {
@@ -294,7 +307,8 @@ func redirectSettings(w http.ResponseWriter, r *http.Request, err error) {
 	http.Redirect(w, r, "/settings?"+query.Encode(), http.StatusSeeOther)
 }
 
-func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
+func (d *dashboard) show(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	subdirectories, subdirectoryErr := d.subdirectories(r.Context())
 	if subdirectoryErr != nil {
 		// The page still renders: the select falls back to the root option
@@ -312,11 +326,10 @@ func (d *dashboard) show(w http.ResponseWriter, r *http.Request) {
 	data.PendingFiles = d.pendingFiles(r.Context(), snapshot.SessionID)
 	// Deletion is two-step: a GET arms the target session's "Confirm
 	// permanent deletion" action, and a second click performs the POST.
-	data.ArmedDeleteID = strings.TrimSpace(query.Get("arming"))
+	data.ArmedDeleteID = strings.TrimSpace(web.QueryValue(c, "arming"))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if err := d.page.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		http.Error(w, "dashboard unavailable", http.StatusInternalServerError)
 	}
@@ -453,7 +466,8 @@ func sessionDuration(snapshot executorSnapshot) string {
 	return elapsed.Round(time.Second).String()
 }
 
-func (d *dashboard) stylesheet(w http.ResponseWriter, _ *http.Request) {
+func (d *dashboard) stylesheet(c *gin.Context) {
+	w := c.Writer
 	css, err := dashboardFiles.ReadFile("static/bootstrap.min.css")
 	if err != nil {
 		http.Error(w, "stylesheet unavailable", http.StatusInternalServerError)
@@ -461,18 +475,18 @@ func (d *dashboard) stylesheet(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(css)
 }
 
-func (d *dashboard) start(w http.ResponseWriter, r *http.Request) {
+func (d *dashboard) start(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	var err error
-	if sessionID := strings.TrimSpace(r.FormValue("session_id")); sessionID != "" {
+	if sessionID := strings.TrimSpace(web.FormValue(c, "session_id")); sessionID != "" {
 		err = d.controller.Resume(sessionID)
 	} else {
 		var subdirectory string
-		subdirectory, err = d.selectedSubdirectory(r)
+		subdirectory, err = d.selectedSubdirectory(c)
 		if err == nil {
 			err = d.controller.Start(subdirectory)
 		}
@@ -487,12 +501,12 @@ func (d *dashboard) start(w http.ResponseWriter, r *http.Request) {
 // subdirectories, so an unknown or stale choice — including one from an old
 // page — is rejected with a user-friendly error instead of starting a run
 // that would process nothing.
-func (d *dashboard) selectedSubdirectory(r *http.Request) (string, error) {
-	selection := strings.TrimSpace(r.FormValue("subdirectory"))
+func (d *dashboard) selectedSubdirectory(c *gin.Context) (string, error) {
+	selection := strings.TrimSpace(web.FormValue(c, "subdirectory"))
 	if selection == "" {
 		return "", nil
 	}
-	candidates, err := d.subdirectories(r.Context())
+	candidates, err := d.subdirectories(c.Request.Context())
 	if err != nil {
 		return "", fmt.Errorf("cannot verify subdirectory %q: the file list is unavailable right now; refresh the page and try again", selection)
 	}
@@ -504,17 +518,19 @@ func (d *dashboard) selectedSubdirectory(r *http.Request) (string, error) {
 	return "", fmt.Errorf("subdirectory %q is not in the file list; refresh the page and try again", selection)
 }
 
-func (d *dashboard) resume(w http.ResponseWriter, r *http.Request) {
-	err := d.controller.Resume(r.FormValue("session_id"))
+func (d *dashboard) resume(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	err := d.controller.Resume(web.FormValue(c, "session_id"))
 	redirectDashboard(w, r, err)
 }
 
-func (d *dashboard) deleteSession(w http.ResponseWriter, r *http.Request) {
-	if r.FormValue("confirm") != "yes" {
+func (d *dashboard) deleteSession(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	if web.FormValue(c, "confirm") != "yes" {
 		redirectDashboard(w, r, fmt.Errorf("confirm permanent deletion of the saved session history"))
 		return
 	}
-	if err := d.controller.DeleteSession(r.FormValue("session_id")); err != nil {
+	if err := d.controller.DeleteSession(web.FormValue(c, "session_id")); err != nil {
 		redirectDashboard(w, r, err)
 		return
 	}
@@ -536,7 +552,8 @@ func noticeMessage(value string) string {
 	}
 }
 
-func (d *dashboard) stop(w http.ResponseWriter, r *http.Request) {
+func (d *dashboard) stop(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	err := d.controller.Stop()
 	redirectDashboard(w, r, err)
 }

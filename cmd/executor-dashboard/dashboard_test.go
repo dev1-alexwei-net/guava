@@ -260,6 +260,41 @@ func TestSessionDuration(t *testing.T) {
 	}
 }
 
+func TestDashboardRouterPreservesRouteMethods(t *testing.T) {
+	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
+	if err != nil {
+		t.Fatalf("newDashboard: %v", err)
+	}
+	t.Cleanup(app.Close)
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		status int
+		allow  string
+	}{
+		{method: http.MethodGet, path: "/settings", status: http.StatusOK},
+		{method: http.MethodHead, path: "/settings", status: http.StatusOK},
+		{method: http.MethodGet, path: "/settings/", status: http.StatusNotFound},
+		{method: http.MethodGet, path: "/start", status: http.StatusMethodNotAllowed, allow: http.MethodPost},
+		{method: http.MethodGet, path: "/missing", status: http.StatusNotFound},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			app.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+			if tc.allow != "" && rec.Header().Get("Allow") != tc.allow {
+				t.Errorf("Allow = %q, want %q", rec.Header().Get("Allow"), tc.allow)
+			}
+		})
+	}
+}
+
 func TestShowRendersDashboardPage(t *testing.T) {
 	app, err := newDashboard(testConfig(t, filepath.Join(t.TempDir(), "missing.sqlite")), slog.LevelInfo, "")
 	if err != nil {
@@ -269,7 +304,7 @@ func TestShowRendersDashboardPage(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/?refresh=5&theme=dark", nil)
 	rec := httptest.NewRecorder()
-	app.show(rec, req)
+	app.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -302,7 +337,7 @@ func TestShowRendersSessionSummaryCard(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
-	app.show(rec, req)
+	app.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -405,7 +440,7 @@ func TestShowRendersPendingFilesView(t *testing.T) {
 
 			req := httptest.NewRequest("GET", "/", nil)
 			rec := httptest.NewRecorder()
-			app.show(rec, req)
+			app.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 			}
@@ -469,7 +504,7 @@ func TestResumeFailedSessionAfterDashboardRestartUsesSavedConfiguration(t *testi
 	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	app.start(rec, req)
+	app.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
 		t.Fatalf("selected-session response = %d %q, want a successful redirect", rec.Code, rec.Header().Get("Location"))
 	}
@@ -533,7 +568,7 @@ func TestResumeIgnoresFormSubdirectory(t *testing.T) {
 	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	app.start(rec, req)
+	app.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
 		t.Fatalf("resume response = %d %q, want a successful redirect without subdirectory validation", rec.Code, rec.Header().Get("Location"))
 	}
@@ -565,7 +600,7 @@ func postStart(t *testing.T, app *dashboard, subdirectory string) *httptest.Resp
 	req := httptest.NewRequest("POST", "/start", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
-	app.start(rec, req)
+	app.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -665,7 +700,7 @@ func TestStartAppliesSelectedSubdirectory(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	app.show(rec, httptest.NewRequest("GET", "/", nil))
+	app.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	body := rec.Body.String()
 	if !strings.Contains(body, `aria-label="Subdirectory: docs/deep"`) {
 		t.Error("rendered session summary missing the applied subdirectory")
@@ -752,7 +787,7 @@ func TestShowRendersSubdirectoryControlOnlyForFreshSession(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	app.show(rec, httptest.NewRequest("GET", "/", nil))
+	app.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -845,7 +880,7 @@ func TestShowArmsTwoStepDeleteForSavedSession(t *testing.T) {
 	// confirm button, no hidden confirmation form, and no checkbox/`form=`
 	// association. The active session offers no delete control at all.
 	rec := httptest.NewRecorder()
-	app.show(rec, httptest.NewRequest("GET", "/", nil))
+	app.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -881,7 +916,7 @@ func TestShowArmsTwoStepDeleteForSavedSession(t *testing.T) {
 	// action that POSTs to /sessions/delete with the server-side confirmation,
 	// while the active session offers none. Exactly one confirm action renders.
 	rec = httptest.NewRecorder()
-	app.show(rec, httptest.NewRequest("GET", "/?arming=paused-session&refresh=5&theme=dark", nil))
+	app.ServeHTTP(rec, httptest.NewRequest("GET", "/?arming=paused-session&refresh=5&theme=dark", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("armed show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -1000,7 +1035,7 @@ func TestShowRendersSubdirectorySelectFromManifest(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
-	app.show(rec, req)
+	app.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -1053,7 +1088,7 @@ func TestShowRefreshesSubdirectorySelectFromManifestOnEveryRequest(t *testing.T)
 	render := func() string {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		app.show(rec, httptest.NewRequest("GET", "/?refresh=2", nil))
+		app.ServeHTTP(rec, httptest.NewRequest("GET", "/?refresh=2", nil))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("show status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 		}
@@ -1098,7 +1133,7 @@ func TestShowRendersRootOnlyWhenManifestCannotBeRead(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
-	app.show(rec, req)
+	app.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -1139,7 +1174,7 @@ func TestShowRendersOneClickRefreshIntervals(t *testing.T) {
 		t.Run(strconv.Itoa(active), func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/?refresh="+strconv.Itoa(active)+"&theme=dark", nil)
 			rec := httptest.NewRecorder()
-			app.show(rec, req)
+			app.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
 			}

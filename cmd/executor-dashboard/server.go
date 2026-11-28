@@ -174,17 +174,14 @@ func newDashboardWithAccountSettings(config executor.Config, logLevel slog.Level
 	router.Use(web.SecurityHeaders())
 	showLanding := len(accountFlow) > 0 && accountFlow[0]
 	landing := startupLandingHandler(app.show, showLanding)
-	router.GET("/", landing)
-	router.HEAD("/", landing)
-	router.GET("/settings", app.showSettings)
-	router.HEAD("/settings", app.showSettings)
+	router.Match([]string{http.MethodGet, http.MethodHead}, "/", landing)
+	router.Match([]string{http.MethodGet, http.MethodHead}, "/settings", app.showSettings)
 	router.POST("/settings", app.saveSettings)
 	router.POST("/start", app.start)
 	router.POST("/resume", app.resume)
 	router.POST("/sessions/delete", app.deleteSession)
 	router.POST("/stop", app.stop)
-	router.GET("/static/bootstrap.min.css", app.stylesheet)
-	router.HEAD("/static/bootstrap.min.css", app.stylesheet)
+	router.Match([]string{http.MethodGet, http.MethodHead}, "/static/bootstrap.min.css", app.stylesheet)
 	app.routes = router
 	return app, nil
 }
@@ -206,7 +203,7 @@ func (d *dashboard) showSettings(c *gin.Context) {
 	w, r := c.Writer, c.Request
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	data := settingsPageData{Account: d.account, Theme: parseTheme(web.QueryValue(c, "theme")), Error: web.QueryValue(c, "error")}
+	data := settingsPageData{Account: d.account, Theme: parseTheme(c.Request.URL.Query().Get("theme")), Error: c.Request.URL.Query().Get("error")}
 	suggested, err := tasks.LookupConstant(r.Context(), d.account.DatabasePath, conversations.InstructionsKey)
 	if err != nil {
 		data.Error = "Suggested instructions are unavailable: " + err.Error()
@@ -221,7 +218,7 @@ func (d *dashboard) showSettings(c *gin.Context) {
 func (d *dashboard) saveSettings(c *gin.Context) {
 	w, r := c.Writer, c.Request
 	settings, err := accountSettingsFromForm(r)
-	if err == nil && web.FormValue(c, "reset_instructions") == "1" {
+	if err == nil && c.Request.FormValue("reset_instructions") == "1" {
 		settings.Instructions, err = tasks.LookupConstant(r.Context(), d.account.DatabasePath, conversations.InstructionsKey)
 	}
 	if err == nil && filepath.Clean(settings.DatabasePath) == filepath.Clean(d.sessionStorePath) {
@@ -326,7 +323,7 @@ func (d *dashboard) show(c *gin.Context) {
 	data.PendingFiles = d.pendingFiles(r.Context(), snapshot.SessionID)
 	// Deletion is two-step: a GET arms the target session's "Confirm
 	// permanent deletion" action, and a second click performs the POST.
-	data.ArmedDeleteID = strings.TrimSpace(web.QueryValue(c, "arming"))
+	data.ArmedDeleteID = strings.TrimSpace(c.Request.URL.Query().Get("arming"))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -482,7 +479,7 @@ func (d *dashboard) stylesheet(c *gin.Context) {
 func (d *dashboard) start(c *gin.Context) {
 	w, r := c.Writer, c.Request
 	var err error
-	if sessionID := strings.TrimSpace(web.FormValue(c, "session_id")); sessionID != "" {
+	if sessionID := strings.TrimSpace(c.Request.FormValue("session_id")); sessionID != "" {
 		err = d.controller.Resume(sessionID)
 	} else {
 		var subdirectory string
@@ -502,7 +499,7 @@ func (d *dashboard) start(c *gin.Context) {
 // page — is rejected with a user-friendly error instead of starting a run
 // that would process nothing.
 func (d *dashboard) selectedSubdirectory(c *gin.Context) (string, error) {
-	selection := strings.TrimSpace(web.FormValue(c, "subdirectory"))
+	selection := strings.TrimSpace(c.Request.FormValue("subdirectory"))
 	if selection == "" {
 		return "", nil
 	}
@@ -520,17 +517,17 @@ func (d *dashboard) selectedSubdirectory(c *gin.Context) (string, error) {
 
 func (d *dashboard) resume(c *gin.Context) {
 	w, r := c.Writer, c.Request
-	err := d.controller.Resume(web.FormValue(c, "session_id"))
+	err := d.controller.Resume(c.Request.FormValue("session_id"))
 	redirectDashboard(w, r, err)
 }
 
 func (d *dashboard) deleteSession(c *gin.Context) {
 	w, r := c.Writer, c.Request
-	if web.FormValue(c, "confirm") != "yes" {
+	if c.Request.FormValue("confirm") != "yes" {
 		redirectDashboard(w, r, fmt.Errorf("confirm permanent deletion of the saved session history"))
 		return
 	}
-	if err := d.controller.DeleteSession(web.FormValue(c, "session_id")); err != nil {
+	if err := d.controller.DeleteSession(c.Request.FormValue("session_id")); err != nil {
 		redirectDashboard(w, r, err)
 		return
 	}

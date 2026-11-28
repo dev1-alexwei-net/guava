@@ -114,27 +114,23 @@ func (a *application) buildRoutes() *gin.Engine {
 		c.Next()
 	})
 
-	handle := func(method, route string, handler gin.HandlerFunc) {
-		router.Handle(method, route, handler)
-	}
 	get := func(route string, handler gin.HandlerFunc) {
-		handle(http.MethodGet, route, handler)
-		handle(http.MethodHead, route, handler)
+		router.Match([]string{http.MethodGet, http.MethodHead}, route, handler)
 	}
 
 	get("/", a.rootPage)
 	get("/d/*path", a.directoryPage)
 	get("/f/*path", a.filePage)
 	get("/edit/*path", a.editorPage)
-	handle(http.MethodPost, "/edit/*path", a.saveFile)
+	router.Handle(http.MethodPost, "/edit/*path", a.saveFile)
 	get("/confirm-delete/*path", a.confirmDeletePage)
 	get("/rename/*path", a.renamePage)
 	get("/move/*path", a.movePage)
-	handle(http.MethodPost, "/move", a.submitMove)
+	router.Handle(http.MethodPost, "/move", a.submitMove)
 	get("/preview/*path", a.previewPage)
 	get("/clipboard/:mode/*path", a.selectClipboard)
-	handle(http.MethodPost, "/paste", a.pasteFile)
-	handle(http.MethodPut, "/paste", a.pasteFile)
+	router.Handle(http.MethodPost, "/paste", a.pasteFile)
+	router.Handle(http.MethodPut, "/paste", a.pasteFile)
 	get("/static/bootstrap.min.css", a.renderer.Stylesheet)
 
 	mutations := []struct {
@@ -142,23 +138,23 @@ func (a *application) buildRoutes() *gin.Engine {
 		run  func(*gin.Context) (string, error)
 	}{
 		{path: "/mkdir", run: func(c *gin.Context) (string, error) {
-			return a.mutations.MakeDirectory(web.FormValue(c, "parent"), web.FormValue(c, "name"))
+			return a.mutations.MakeDirectory(c.Request.FormValue("parent"), c.Request.FormValue("name"))
 		}},
 		{path: "/create-file", run: func(c *gin.Context) (string, error) {
-			return a.mutations.CreateFile(web.FormValue(c, "parent"), web.FormValue(c, "name"))
+			return a.mutations.CreateFile(c.Request.FormValue("parent"), c.Request.FormValue("name"))
 		}},
 		{path: "/rename", run: func(c *gin.Context) (string, error) {
-			return a.mutations.Rename(web.FormValue(c, "old"), web.FormValue(c, "new"))
+			return a.mutations.Rename(c.Request.FormValue("old"), c.Request.FormValue("new"))
 		}},
 		{path: "/delete", run: func(c *gin.Context) (string, error) {
-			return a.mutations.Delete(web.FormValue(c, "path"))
+			return a.mutations.Delete(c.Request.FormValue("path"))
 		}},
 	}
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		for _, mutation := range mutations {
-			handle(method, mutation.path, a.formMutation(mutation.run))
+			router.Handle(method, mutation.path, a.formMutation(mutation.run))
 		}
-		handle(method, "/upload", a.upload)
+		router.Handle(method, "/upload", a.upload)
 	}
 	return router
 }
@@ -407,7 +403,7 @@ func (e *application) upload(c *gin.Context) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid upload")
 		return
 	}
-	_, parent, err := e.filesystem.ResolveParent(web.FormValue(c, "parent"))
+	_, parent, err := e.filesystem.ResolveParent(c.Request.FormValue("parent"))
 	if err != nil {
 		e.redirectMutationPathError(w, r, err)
 		return
@@ -496,7 +492,7 @@ func (e *application) pasteFile(c *gin.Context) {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
 	}
-	mode, source, destination := web.FormValue(c, "clipboard_mode"), web.FormValue(c, "clipboard_path"), web.FormValue(c, "destination")
+	mode, source, destination := c.Request.FormValue("clipboard_mode"), c.Request.FormValue("clipboard_path"), c.Request.FormValue("destination")
 	current, err := e.mutations.Paste(mode, source, destination)
 	if err != nil {
 		var interaction *interactionError
@@ -674,7 +670,7 @@ func (e *application) saveFile(c *gin.Context) {
 		e.renderError(w, r, status, message)
 		return
 	}
-	content := web.FormValue(c, "content")
+	content := c.Request.FormValue("content")
 	if err := e.mutations.SaveText(rel, content, info.Mode().Perm()); err != nil {
 		status, message := interactionDetails(err, "Unable to save file")
 		e.renderError(w, r, status, message)
@@ -824,27 +820,27 @@ func (e *application) movePage(c *gin.Context) {
 func (e *application) submitMove(c *gin.Context) {
 	w, r := c.Writer, c.Request
 	if err := parseForm(w, r); err != nil {
-		if rel, ok := e.moveSource(w, r, web.FormValue(c, "source")); ok {
-			mode, _ := requestedMoveMode(web.FormValue(c, "mode"))
+		if rel, ok := e.moveSource(w, r, c.Request.FormValue("source")); ok {
+			mode, _ := requestedMoveMode(c.Request.FormValue("mode"))
 			if mode == "" {
 				mode = "cut"
 			}
-			returnPath := web.FormValue(c, "return")
-			e.renderMoveForm(w, r, rel, mode, web.FormValue(c, "destination"), returnPath, "Please choose a valid destination folder.", http.StatusBadRequest)
+			returnPath := c.Request.FormValue("return")
+			e.renderMoveForm(w, r, rel, mode, c.Request.FormValue("destination"), returnPath, "Please choose a valid destination folder.", http.StatusBadRequest)
 		}
 		return
 	}
-	rel, ok := e.moveSource(w, r, web.FormValue(c, "source"))
+	rel, ok := e.moveSource(w, r, c.Request.FormValue("source"))
 	if !ok {
 		return
 	}
-	mode, valid := requestedMoveMode(web.FormValue(c, "mode"))
+	mode, valid := requestedMoveMode(c.Request.FormValue("mode"))
 	if !valid {
-		e.renderMoveForm(w, r, rel, "cut", web.FormValue(c, "destination"), web.FormValue(c, "return"), "Choose copy or cut.", http.StatusBadRequest)
+		e.renderMoveForm(w, r, rel, "cut", c.Request.FormValue("destination"), c.Request.FormValue("return"), "Choose copy or cut.", http.StatusBadRequest)
 		return
 	}
-	destination := web.FormValue(c, "destination")
-	returnPath := web.FormValue(c, "return")
+	destination := c.Request.FormValue("destination")
+	returnPath := c.Request.FormValue("return")
 	if _, resolved, err := e.filesystem.ResolveParent(returnPath); err == nil {
 		returnPath = resolved
 	} else {

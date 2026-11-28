@@ -16,6 +16,8 @@ Requires Go 1.27 or newer. Run `make fmt`, `make vet`, `make test`, or `make lin
 
 The `/health` route is a lightweight preview health check; it returns `{"status":"ok"}` without starting application or executor work. The file explorer and executor function handlers remain deployment stubs that return `501 Not Implemented`; adapting the full applications to request-scoped execution is out of scope.
 
+The durable notebook metadata and object-storage primitives are documented in [`notebooks/README.md`](notebooks/README.md). They are not yet wired into the serverless routes; the dependent notebook-operations task owns that boundary.
+
 Vercel's Go Functions runtime is in Beta. Functions have plan- and compute-dependent memory and maximum-duration limits, and Vercel terminates an invocation that exceeds its configured maximum. Check Vercel's [Go runtime](https://vercel.com/docs/functions/runtimes/go), [duration](https://vercel.com/docs/functions/configuring-functions/duration), and [limits](https://vercel.com/docs/functions/limitations) documentation for current values and configuration. Keep request handlers short and bounded: do not run long-lived executor jobs in a function invocation or continue work after returning a response. Submit such work to a durable job system and process it in a separate worker. Vercel may reuse warm function instances, so serverless execution does not guarantee a fresh process per request, and function-local files are not durable storage.
 
 ## Executor dashboard

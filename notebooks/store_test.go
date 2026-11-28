@@ -87,7 +87,7 @@ func TestStorePersistsMetadataAndKeepsContentInObjectStore(t *testing.T) {
 	}
 
 	firstBody := "durable note bytes"
-	first, err := store.WriteFile(ctx, notebook.ID, "notes/readme.md", "text/markdown", int64(len(firstBody)), strings.NewReader(firstBody))
+	first, err := store.WriteFile(ctx, notebook.ID, "notes/readme.md", "text/markdown", int64(len(firstBody)), 0, strings.NewReader(firstBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestStorePersistsMetadataAndKeepsContentInObjectStore(t *testing.T) {
 	}
 
 	secondBody := "new immutable version"
-	second, err := store.WriteFile(ctx, notebook.ID, "notes/readme.md", "text/markdown", int64(len(secondBody)), strings.NewReader(secondBody))
+	second, err := store.WriteFile(ctx, notebook.ID, "notes/readme.md", "text/markdown", int64(len(secondBody)), 1, strings.NewReader(secondBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestWriteFileDoesNotCommitMetadataWhenObjectUploadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	objects.putErr = errors.New("object storage unavailable")
-	_, err = store.WriteFile(ctx, notebook.ID, "note.txt", "text/plain", 4, strings.NewReader("data"))
+	_, err = store.WriteFile(ctx, notebook.ID, "note.txt", "text/plain", 4, 0, strings.NewReader("data"))
 	if err == nil {
 		t.Fatal("WriteFile succeeded despite object upload failure")
 	}
@@ -175,7 +175,7 @@ func TestWriteFileRejectsInvalidPathsBeforeObjectWrite(t *testing.T) {
 	}
 	for _, filePath := range []string{"../outside", "notes/../../outside", "/absolute", `C:\\absolute`, ""} {
 		t.Run(filePath, func(t *testing.T) {
-			_, err := store.WriteFile(ctx, notebook.ID, filePath, "text/plain", 1, strings.NewReader("x"))
+			_, err := store.WriteFile(ctx, notebook.ID, filePath, "text/plain", 1, 0, strings.NewReader("x"))
 			if !errors.Is(err, ErrInvalidData) {
 				t.Fatalf("WriteFile error = %v, want ErrInvalidData", err)
 			}
@@ -189,11 +189,96 @@ func TestWriteFileRejectsInvalidPathsBeforeObjectWrite(t *testing.T) {
 func TestWriteFileForMissingNotebookDoesNotWriteObject(t *testing.T) {
 	objects := newMemoryObjects()
 	store := newTestStore(t, objects)
-	_, err := store.WriteFile(context.Background(), "28c81446-d031-427d-b129-f981173f2001", "note.txt", "text/plain", 1, strings.NewReader("x"))
+	_, err := store.WriteFile(context.Background(), "28c81446-d031-427d-b129-f981173f2001", "note.txt", "text/plain", 1, 0, strings.NewReader("x"))
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("WriteFile error = %v, want ErrNotFound", err)
 	}
 	if objects.puts != 0 {
 		t.Fatalf("missing notebook reached object storage %d times", objects.puts)
+	}
+}
+
+func TestWriteFileRejectsStaleRevisionWithoutOverwriting(t *testing.T) {
+	ctx := context.Background()
+	objects := newMemoryObjects()
+	store := newTestStore(t, objects)
+	notebook, err := store.CreateNotebook(ctx, "owner-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.WriteFile(ctx, notebook.ID, "note.txt", "text/plain", 8, 0, strings.NewReader("original"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.WriteFile(ctx, notebook.ID, "note.txt", "text/plain", 6, 0, strings.NewReader("stale!"))
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale WriteFile error = %v, want ErrConflict", err)
+	}
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || conflict.ExpectedRevision != 0 || conflict.CurrentRevision != 1 {
+		t.Fatalf("conflict details = %+v, error = %v", conflict, err)
+	}
+	if objects.puts != 1 {
+		t.Fatalf("stale write uploaded content; puts = %d, want 1", objects.puts)
+	}
+	metadata, content, err := store.ReadFile(ctx, notebook.ID, "note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer content.Close()
+	body, err := io.ReadAll(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "original" || metadata.ObjectID != first.ObjectID || metadata.Revision != 1 {
+		t.Fatalf("stale write changed content: metadata=%+v body=%q", metadata, body)
+	}
+}
+
+func TestListAndDeleteFilesUseNotebookRevision(t *testing.T) {
+	ctx := context.Background()
+	objects := newMemoryObjects()
+	store := newTestStore(t, objects)
+	notebook, err := store.CreateNotebook(ctx, "owner-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.WriteFile(ctx, notebook.ID, "z.txt", "text/plain", 1, 0, strings.NewReader("z")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.WriteFile(ctx, notebook.ID, "a.txt", "text/plain", 1, 1, strings.NewReader("a")); err != nil {
+		t.Fatal(err)
+	}
+	files, err := store.ListFiles(ctx, notebook.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Path != "a.txt" || files[1].Path != "z.txt" {
+		t.Fatalf("listed files = %+v, want path order [a.txt z.txt]", files)
+	}
+
+	revision, err := store.DeleteFile(ctx, notebook.ID, "z.txt", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision != 3 {
+		t.Fatalf("delete revision = %d, want 3", revision)
+	}
+	if _, _, err := store.ReadFile(ctx, notebook.ID, "z.txt"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ReadFile after delete error = %v, want ErrNotFound", err)
+	}
+	files, err = store.ListFiles(ctx, notebook.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Path != "a.txt" {
+		t.Fatalf("files after delete = %+v, want only a.txt", files)
+	}
+	if _, err := store.DeleteFile(ctx, notebook.ID, "a.txt", 2); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale DeleteFile error = %v, want ErrConflict", err)
+	}
+	files, err = store.ListFiles(ctx, notebook.ID)
+	if err != nil || len(files) != 1 || files[0].Path != "a.txt" {
+		t.Fatalf("stale delete changed files: files=%+v err=%v", files, err)
 	}
 }

@@ -17,7 +17,20 @@ import (
 var (
 	ErrNotFound    = errors.New("notebook or file not found")
 	ErrInvalidData = errors.New("invalid notebook data")
+	ErrConflict    = errors.New("revision conflict")
 )
+
+// ConflictError reports that a mutation was based on an obsolete notebook revision.
+type ConflictError struct {
+	ExpectedRevision int64
+	CurrentRevision  int64
+}
+
+func (e *ConflictError) Error() string {
+	return fmt.Sprintf("%v: expected revision %d, current revision %d", ErrConflict, e.ExpectedRevision, e.CurrentRevision)
+}
+
+func (e *ConflictError) Unwrap() error { return ErrConflict }
 
 var schema = []string{
 	`CREATE TABLE IF NOT EXISTS notebooks (
@@ -173,9 +186,10 @@ func (s *Store) GetNotebook(ctx context.Context, notebookID string) (Notebook, e
 }
 
 // WriteFile stores bytes as a new immutable object, then commits only its
-// metadata pointer and revision in PostgreSQL. The object key is opaque and
-// notebook-scoped; no durable content is staged on function-local disk.
-func (s *Store) WriteFile(ctx context.Context, notebookID, filePath, contentType string, size int64, body io.Reader) (File, error) {
+// metadata pointer if expectedRevision is still current. The object key is
+// opaque and notebook-scoped; no durable content is staged on function-local
+// disk. A failed metadata commit may leave an unreferenced object for cleanup.
+func (s *Store) WriteFile(ctx context.Context, notebookID, filePath, contentType string, size, expectedRevision int64, body io.Reader) (File, error) {
 	id, err := canonicalUUID(notebookID)
 	if err != nil {
 		return File{}, err
@@ -184,13 +198,13 @@ func (s *Store) WriteFile(ctx context.Context, notebookID, filePath, contentType
 	if err != nil {
 		return File{}, err
 	}
-	if body == nil || size < 0 {
-		return File{}, fmt.Errorf("%w: file body and non-negative size are required", ErrInvalidData)
+	if body == nil || size < 0 || expectedRevision < 0 {
+		return File{}, fmt.Errorf("%w: file body, non-negative size, and non-negative expected revision are required", ErrInvalidData)
 	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	if _, err := s.GetNotebook(ctx, id); err != nil {
+	if err := s.checkRevision(ctx, id, expectedRevision); err != nil {
 		return File{}, err
 	}
 	objectID := uuid.NewString()
@@ -206,11 +220,12 @@ func (s *Store) WriteFile(ctx context.Context, notebookID, filePath, contentType
 	now := time.Now().UTC()
 	var revision int64
 	err = tx.QueryRowContext(ctx,
-		`UPDATE notebooks SET revision = revision + 1, updated_at = $2 WHERE id = $1 RETURNING revision`,
-		id, now.UnixMilli(),
+		`UPDATE notebooks SET revision = revision + 1, updated_at = $3 WHERE id = $1 AND revision = $2 RETURNING revision`,
+		id, expectedRevision, now.UnixMilli(),
 	).Scan(&revision)
 	if errors.Is(err, sql.ErrNoRows) {
-		return File{}, ErrNotFound
+		_ = tx.Rollback()
+		return File{}, s.revisionConflict(ctx, id, expectedRevision)
 	}
 	if err != nil {
 		return File{}, fmt.Errorf("advance notebook revision: %w", err)
@@ -271,6 +286,112 @@ func (s *Store) ReadFile(ctx context.Context, notebookID, filePath string) (File
 		return File{}, nil, fmt.Errorf("read notebook object: %w", err)
 	}
 	return file, content, nil
+}
+
+// ListFiles returns file metadata for a notebook in stable path order.
+func (s *Store) ListFiles(ctx context.Context, notebookID string) ([]File, error) {
+	id, err := canonicalUUID(notebookID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.GetNotebook(ctx, id); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT notebook_id, path, object_id, revision, size, content_type, updated_at
+		FROM notebook_files WHERE notebook_id = $1 ORDER BY path`, id)
+	if err != nil {
+		return nil, fmt.Errorf("list notebook files: %w", err)
+	}
+	defer rows.Close()
+	files := make([]File, 0)
+	for rows.Next() {
+		var file File
+		var updatedAt int64
+		if err := rows.Scan(&file.NotebookID, &file.Path, &file.ObjectID, &file.Revision, &file.Size, &file.ContentType, &updatedAt); err != nil {
+			return nil, fmt.Errorf("read notebook file metadata: %w", err)
+		}
+		file.UpdatedAt = time.UnixMilli(updatedAt).UTC()
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list notebook files: %w", err)
+	}
+	return files, nil
+}
+
+// DeleteFile removes the authoritative metadata pointer if expectedRevision is
+// current and advances the notebook revision. The now-unreferenced object is
+// left for storage lifecycle cleanup, as metadata and object storage cannot be
+// changed atomically.
+func (s *Store) DeleteFile(ctx context.Context, notebookID, filePath string, expectedRevision int64) (int64, error) {
+	id, err := canonicalUUID(notebookID)
+	if err != nil {
+		return 0, err
+	}
+	filePath, err = cleanFilePath(filePath)
+	if err != nil {
+		return 0, err
+	}
+	if expectedRevision < 0 {
+		return 0, fmt.Errorf("%w: expected revision must be non-negative", ErrInvalidData)
+	}
+	if err := s.checkRevision(ctx, id, expectedRevision); err != nil {
+		return 0, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin notebook metadata transaction: %w", err)
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx,
+		`SELECT 1 FROM notebook_files WHERE notebook_id = $1 AND path = $2`, id, filePath,
+	).Scan(new(int))
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read file metadata for deletion: %w", err)
+	}
+	var revision int64
+	err = tx.QueryRowContext(ctx,
+		`UPDATE notebooks SET revision = revision + 1, updated_at = $3 WHERE id = $1 AND revision = $2 RETURNING revision`,
+		id, expectedRevision, time.Now().UTC().UnixMilli(),
+	).Scan(&revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return 0, s.revisionConflict(ctx, id, expectedRevision)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("advance notebook revision: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM notebook_files WHERE notebook_id = $1 AND path = $2`, id, filePath); err != nil {
+		return 0, fmt.Errorf("delete file metadata: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit file deletion: %w", err)
+	}
+	return revision, nil
+}
+
+func (s *Store) checkRevision(ctx context.Context, notebookID string, expectedRevision int64) error {
+	notebook, err := s.GetNotebook(ctx, notebookID)
+	if err != nil {
+		return err
+	}
+	if notebook.Revision != expectedRevision {
+		return &ConflictError{ExpectedRevision: expectedRevision, CurrentRevision: notebook.Revision}
+	}
+	return nil
+}
+
+func (s *Store) revisionConflict(ctx context.Context, notebookID string, expectedRevision int64) error {
+	notebook, err := s.GetNotebook(ctx, notebookID)
+	if err != nil {
+		return err
+	}
+	return &ConflictError{ExpectedRevision: expectedRevision, CurrentRevision: notebook.Revision}
 }
 
 func canonicalUUID(value string) (string, error) {

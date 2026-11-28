@@ -27,5 +27,21 @@ the uploaded object is not visible through notebook metadata; an orphaned
 object may require later cleanup. Neither adapter stages durable content on
 function-local disk.
 
-This package is the persistence layer; Vercel HTTP routes and owner/revision
-conflict policy are handled by the dependent notebook-operations task.
+`internal/notebookops` is the repository-internal operation boundary for list,
+read, write, and delete. It is an in-process Go package, not a public HTTP route;
+no notebook operations are registered in `vercel.json`. Callers must pass the
+owner ID obtained from trusted authentication, never an owner ID supplied by a
+request. A notebook owned by a different identity is reported as not found.
+
+Writes and deletes require the notebook's expected revision. Each successful
+mutation advances the notebook revision by one; a stale revision returns
+`notebooks.ErrConflict` (with expected and current values in `*ConflictError`)
+and does not replace or remove the file metadata. `ErrNotFound` represents a
+missing notebook/file or an ownership mismatch, while `ErrInvalidData` covers
+invalid IDs, paths, and revisions. Listing and reading do not advance revisions.
+
+Delete removes the file's metadata pointer, which is authoritative for reads
+and listings. The immutable object is left unreferenced because PostgreSQL and
+object storage cannot be updated atomically; object lifecycle cleanup is a
+separate concern. As with a failed write metadata commit, cleanup may be needed
+for unreferenced objects.

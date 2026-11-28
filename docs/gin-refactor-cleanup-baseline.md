@@ -73,3 +73,16 @@ Documentation mismatch on this snapshot: `fileexplorer/README.md` still says the
 Checks at the audit commit: Go 1.27.4; formatting, `go vet ./...`, `go build ./...`, `go test ./...`, and the cgo-disabled file-explorer build all passed. The SQLite and filesystem tests use temporary fixtures; no production-data or cross-process persistence smoke test was run.
 
 The file explorer uses a configured rooted local directory as its source of truth and a SQLite replica for listings; task readers use the index read-only. There is no separate interchangeable local-files backend.
+
+## Final verification (#425)
+
+Repeated the counting command above without modification at the recorded baseline commit `879d67499c8d059664aef2795d1830f4b42b9984` and at the combined cleanup head `572c80315acfb1fb31dd15fbd69b673baf8ade88`:
+
+| Snapshot | Production | Tests | Total |
+| --- | ---: | ---: | ---: |
+| Baseline (`879d674`) | 7,193 lines / 38 files | 6,598 lines / 22 files | 13,791 lines / 60 files |
+| Cleanup head (`572c803`) | 7,150 lines / 38 files | 6,530 lines / 22 files | 13,680 lines / 60 files |
+
+Against the #422 baseline, one third is 4,597 lines; the cleanup head is 99.2% of baseline and exceeds that ceiling by 9,083 lines. The stack reduces 111 lines overall. The older `docs/maintainability-baseline.md` records a separate 13,047-line pre-Gin baseline (one-third ceiling: 4,349); even against that older denominator the target is unmet by 9,331 lines. The #422 task explicitly establishes the post-Gin 13,791-line baseline used for the primary comparison here. No application behavior or meaningful test coverage was removed to chase the remaining target.
+
+Checks on Go 1.27.4 (`linux/arm64`), at `572c803`: `test -z "$(gofmt -l .)"`, `go vet ./...`, `go build ./...`, `go test ./fileexplorer ./tasks ./sessions`, `go test ./...`, and `CGO_ENABLED=0 go build -o /tmp/guava-fileexplorer-425 ./fileexplorer/...` all passed. The focused backend tests and full suite pass. The cleanup diff changes no storage implementation under `fileexplorer`'s index/synchronization/rooted-filesystem code, `tasks`, or `sessions`; the file-explorer, task-reader, and SQLite session-store tests remain in place. This verifies the supported rooted local-files plus SQLite-replica arrangement, not a distinct interchangeable local-files backend or production-data persistence.

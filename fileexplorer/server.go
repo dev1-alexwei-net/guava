@@ -108,72 +108,57 @@ func (a *application) buildRoutes() *gin.Engine {
 			return
 		}
 		c.Next()
+	}, func(c *gin.Context) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		c.Next()
 	})
 
-	adapt := func(handler http.Handler) gin.HandlerFunc {
-		return func(c *gin.Context) {
-			r := c.Request.Clone(c.Request.Context())
-			for _, param := range c.Params {
-				value := param.Value
-				if param.Key == "path" {
-					value = strings.TrimPrefix(value, "/")
-				}
-				r.SetPathValue(param.Key, value)
-			}
-			handler.ServeHTTP(c.Writer, r)
-		}
+	handle := func(method, route string, handler gin.HandlerFunc) {
+		router.Handle(method, route, handler)
 	}
-	handle := func(method, route string, handler http.Handler) {
-		router.Handle(method, route, adapt(handler))
-	}
-	get := func(route string, handler http.Handler) {
+	get := func(route string, handler gin.HandlerFunc) {
 		handle(http.MethodGet, route, handler)
 		handle(http.MethodHead, route, handler)
 	}
 
-	get("/", a.serialized(a.rootPage))
-	get("/d/*path", a.serialized(func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("path") == "" {
-			a.rootPage(w, r)
-			return
-		}
-		a.directoryPage(w, r)
-	}))
-	get("/f/*path", a.serialized(a.filePage))
-	get("/edit/*path", a.serialized(a.editorPage))
-	handle(http.MethodPost, "/edit/*path", a.serialized(a.saveFile))
-	get("/confirm-delete/*path", a.serialized(a.confirmDeletePage))
-	get("/rename/*path", a.serialized(a.renamePage))
-	get("/move/*path", a.serialized(a.movePage))
-	handle(http.MethodPost, "/move", a.serialized(a.submitMove))
-	get("/preview/*path", a.serialized(a.previewPage))
-	get("/clipboard/:mode/*path", a.serialized(a.selectClipboard))
-	handle(http.MethodPost, "/paste", a.serialized(a.pasteFile))
-	handle(http.MethodPut, "/paste", a.serialized(a.pasteFile))
-	get("/static/bootstrap.min.css", http.HandlerFunc(a.renderer.Stylesheet))
+	get("/", a.rootPage)
+	get("/d/*path", a.directoryPage)
+	get("/f/*path", a.filePage)
+	get("/edit/*path", a.editorPage)
+	handle(http.MethodPost, "/edit/*path", a.saveFile)
+	get("/confirm-delete/*path", a.confirmDeletePage)
+	get("/rename/*path", a.renamePage)
+	get("/move/*path", a.movePage)
+	handle(http.MethodPost, "/move", a.submitMove)
+	get("/preview/*path", a.previewPage)
+	get("/clipboard/:mode/*path", a.selectClipboard)
+	handle(http.MethodPost, "/paste", a.pasteFile)
+	handle(http.MethodPut, "/paste", a.pasteFile)
+	get("/static/bootstrap.min.css", a.renderer.Stylesheet)
 
 	mutations := []struct {
 		path string
-		run  func(*http.Request) (string, error)
+		run  func(*gin.Context) (string, error)
 	}{
-		{path: "/mkdir", run: func(r *http.Request) (string, error) {
-			return a.mutations.MakeDirectory(r.FormValue("parent"), r.FormValue("name"))
+		{path: "/mkdir", run: func(c *gin.Context) (string, error) {
+			return a.mutations.MakeDirectory(web.FormValue(c, "parent"), web.FormValue(c, "name"))
 		}},
-		{path: "/create-file", run: func(r *http.Request) (string, error) {
-			return a.mutations.CreateFile(r.FormValue("parent"), r.FormValue("name"))
+		{path: "/create-file", run: func(c *gin.Context) (string, error) {
+			return a.mutations.CreateFile(web.FormValue(c, "parent"), web.FormValue(c, "name"))
 		}},
-		{path: "/rename", run: func(r *http.Request) (string, error) {
-			return a.mutations.Rename(r.FormValue("old"), r.FormValue("new"))
+		{path: "/rename", run: func(c *gin.Context) (string, error) {
+			return a.mutations.Rename(web.FormValue(c, "old"), web.FormValue(c, "new"))
 		}},
-		{path: "/delete", run: func(r *http.Request) (string, error) {
-			return a.mutations.Delete(r.FormValue("path"))
+		{path: "/delete", run: func(c *gin.Context) (string, error) {
+			return a.mutations.Delete(web.FormValue(c, "path"))
 		}},
 	}
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		for _, mutation := range mutations {
 			handle(method, mutation.path, a.formMutation(mutation.run))
 		}
-		handle(method, "/upload", a.serialized(a.upload))
+		handle(method, "/upload", a.upload)
 	}
 	return router
 }
@@ -191,24 +176,23 @@ const maxUploadSize = 32 << 20
 const maxEditorSize = 1 << 20
 const maxPreviewSize = 512 << 10
 
-func (e *application) serialized(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		next(w, r)
-	})
+func routeParam(c *gin.Context, key string) string {
+	return strings.TrimPrefix(c.Param(key), "/")
 }
 
-func (e *application) rootPage(w http.ResponseWriter, r *http.Request) {
+func (e *application) rootPage(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	e.renderDirectory(w, r, "", "", r.URL.Query().Get("error"))
 }
 
-func (e *application) directoryPage(w http.ResponseWriter, r *http.Request) {
-	e.renderDirectory(w, r, r.PathValue("path"), "", r.URL.Query().Get("error"))
+func (e *application) directoryPage(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	e.renderDirectory(w, r, routeParam(c, "path"), "", r.URL.Query().Get("error"))
 }
 
-func (e *application) filePage(w http.ResponseWriter, r *http.Request) {
-	target, err := e.filesystem.Resolve(r.PathValue("path"))
+func (e *application) filePage(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	target, err := e.filesystem.Resolve(routeParam(c, "path"))
 	if err != nil {
 		e.pathError(w, r, err)
 		return
@@ -222,7 +206,6 @@ func (e *application) filePage(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, r, http.StatusNotFound, "File not found")
 		return
 	}
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -281,8 +264,9 @@ func (e *application) renderDirectory(w http.ResponseWriter, r *http.Request, re
 // the route always matches what the page shows: the pane is visible exactly
 // when the path is /preview/{path}, and hiding it is a plain navigation back
 // to the directory. There is no client-side state or JavaScript.
-func (e *application) previewPage(w http.ResponseWriter, r *http.Request) {
-	rel := r.PathValue("path")
+func (e *application) previewPage(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	rel := routeParam(c, "path")
 	target, err := e.filesystem.Resolve(rel)
 	if err != nil {
 		e.pathError(w, r, err)
@@ -391,15 +375,16 @@ func isUTF16HighSurrogate(unit uint16) bool { return unit >= 0xD800 && unit <= 0
 
 func isUTF16LowSurrogate(unit uint16) bool { return unit >= 0xDC00 && unit <= 0xDFFF }
 
-func (e *application) formMutation(operation func(*http.Request) (string, error)) http.Handler {
-	return e.serialized(func(w http.ResponseWriter, r *http.Request) {
+func (e *application) formMutation(operation func(*gin.Context) (string, error)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		w, r := c.Writer, c.Request
 		if err := parseForm(w, r); err != nil {
 			e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 			return
 		}
-		current, err := operation(r)
+		current, err := operation(c)
 		e.finishMutation(w, r, current, err)
-	})
+	}
 }
 
 func (e *application) finishMutation(w http.ResponseWriter, r *http.Request, current string, err error) {
@@ -415,13 +400,14 @@ func (e *application) finishMutation(w http.ResponseWriter, r *http.Request, cur
 	e.redirectMutationPathError(w, r, err)
 }
 
-func (e *application) upload(w http.ResponseWriter, r *http.Request) {
+func (e *application) upload(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid upload")
 		return
 	}
-	_, parent, err := e.filesystem.ResolveParent(r.FormValue("parent"))
+	_, parent, err := e.filesystem.ResolveParent(web.FormValue(c, "parent"))
 	if err != nil {
 		e.redirectMutationPathError(w, r, err)
 		return
@@ -469,8 +455,9 @@ func preserveClipboard(target string, r *http.Request) string {
 	return u.String()
 }
 
-func (e *application) selectClipboard(w http.ResponseWriter, r *http.Request) {
-	mode, requested := r.PathValue("mode"), r.PathValue("path")
+func (e *application) selectClipboard(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	mode, requested := c.Param("mode"), routeParam(c, "path")
 	if mode != "copy" && mode != "cut" {
 		e.renderError(w, r, http.StatusBadRequest, "Choose copy or cut")
 		return
@@ -503,12 +490,13 @@ func (e *application) selectClipboard(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, e.renderer.withState(targetURL, requestedTheme(r), requestedWrap(r), requestedPreviewPane(r), requestedColumn(r)), http.StatusSeeOther)
 }
 
-func (e *application) pasteFile(w http.ResponseWriter, r *http.Request) {
+func (e *application) pasteFile(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	if err := parseForm(w, r); err != nil {
 		e.redirectMutationError(w, r, http.StatusBadRequest, "Invalid form")
 		return
 	}
-	mode, source, destination := r.FormValue("clipboard_mode"), r.FormValue("clipboard_path"), r.FormValue("destination")
+	mode, source, destination := web.FormValue(c, "clipboard_mode"), web.FormValue(c, "clipboard_path"), web.FormValue(c, "destination")
 	current, err := e.mutations.Paste(mode, source, destination)
 	if err != nil {
 		var interaction *interactionError
@@ -649,8 +637,9 @@ func (e *application) openEditableFile(w http.ResponseWriter, r *http.Request, r
 	return rel, file, info, true
 }
 
-func (e *application) editorPage(w http.ResponseWriter, r *http.Request) {
-	rel, file, _, ok := e.openEditableFile(w, r, r.PathValue("path"), "Unable to read file")
+func (e *application) editorPage(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	rel, file, _, ok := e.openEditableFile(w, r, routeParam(c, "path"), "Unable to read file")
 	if !ok {
 		return
 	}
@@ -671,8 +660,9 @@ func (e *application) editorPage(w http.ResponseWriter, r *http.Request) {
 	e.writePage(w, r, http.StatusOK, e.renderer.Editor(rel, string(content), r.URL.Query().Get("saved") == "1"))
 }
 
-func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
-	rel, file, info, ok := e.openEditableFile(w, r, r.PathValue("path"), "Unable to inspect file")
+func (e *application) saveFile(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	rel, file, info, ok := e.openEditableFile(w, r, routeParam(c, "path"), "Unable to inspect file")
 	if !ok {
 		return
 	}
@@ -684,7 +674,7 @@ func (e *application) saveFile(w http.ResponseWriter, r *http.Request) {
 		e.renderError(w, r, status, message)
 		return
 	}
-	content := r.FormValue("content")
+	content := web.FormValue(c, "content")
 	if err := e.mutations.SaveText(rel, content, info.Mode().Perm()); err != nil {
 		status, message := interactionDetails(err, "Unable to save file")
 		e.renderError(w, r, status, message)
@@ -716,8 +706,9 @@ func (e *application) confirmationTarget(w http.ResponseWriter, r *http.Request,
 	return rel, true
 }
 
-func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) {
-	rel, ok := e.confirmationTarget(w, r, r.PathValue("path"), "delete")
+func (e *application) confirmDeletePage(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	rel, ok := e.confirmationTarget(w, r, routeParam(c, "path"), "delete")
 	if ok {
 		e.writePage(w, r, http.StatusOK, e.renderer.DeleteConfirmation(rel))
 	}
@@ -728,8 +719,9 @@ func (e *application) confirmDeletePage(w http.ResponseWriter, r *http.Request) 
 // root directory cannot be renamed for the same reason it cannot be
 // deleted, and symbolic links stay read-only entries like on the delete
 // page.
-func (e *application) renamePage(w http.ResponseWriter, r *http.Request) {
-	rel, ok := e.confirmationTarget(w, r, r.PathValue("path"), "rename")
+func (e *application) renamePage(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	rel, ok := e.confirmationTarget(w, r, routeParam(c, "path"), "rename")
 	if ok {
 		e.writePage(w, r, http.StatusOK, e.renderer.RenameConfirmation(rel))
 	}
@@ -790,8 +782,9 @@ func requestedMoveMode(requested string) (string, bool) {
 	return requested, requested == "cut" || requested == "copy"
 }
 
-func (e *application) movePage(w http.ResponseWriter, r *http.Request) {
-	rel, ok := e.moveSource(w, r, r.PathValue("path"))
+func (e *application) movePage(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	rel, ok := e.moveSource(w, r, routeParam(c, "path"))
 	if !ok {
 		return
 	}
@@ -828,29 +821,30 @@ func (e *application) movePage(w http.ResponseWriter, r *http.Request) {
 	e.renderMoveForm(w, r, rel, mode, destination, returnPath, message, status)
 }
 
-func (e *application) submitMove(w http.ResponseWriter, r *http.Request) {
+func (e *application) submitMove(c *gin.Context) {
+	w, r := c.Writer, c.Request
 	if err := parseForm(w, r); err != nil {
-		if rel, ok := e.moveSource(w, r, r.FormValue("source")); ok {
-			mode, _ := requestedMoveMode(r.FormValue("mode"))
+		if rel, ok := e.moveSource(w, r, web.FormValue(c, "source")); ok {
+			mode, _ := requestedMoveMode(web.FormValue(c, "mode"))
 			if mode == "" {
 				mode = "cut"
 			}
-			returnPath := r.FormValue("return")
-			e.renderMoveForm(w, r, rel, mode, r.FormValue("destination"), returnPath, "Please choose a valid destination folder.", http.StatusBadRequest)
+			returnPath := web.FormValue(c, "return")
+			e.renderMoveForm(w, r, rel, mode, web.FormValue(c, "destination"), returnPath, "Please choose a valid destination folder.", http.StatusBadRequest)
 		}
 		return
 	}
-	rel, ok := e.moveSource(w, r, r.FormValue("source"))
+	rel, ok := e.moveSource(w, r, web.FormValue(c, "source"))
 	if !ok {
 		return
 	}
-	mode, valid := requestedMoveMode(r.FormValue("mode"))
+	mode, valid := requestedMoveMode(web.FormValue(c, "mode"))
 	if !valid {
-		e.renderMoveForm(w, r, rel, "cut", r.FormValue("destination"), r.FormValue("return"), "Choose copy or cut.", http.StatusBadRequest)
+		e.renderMoveForm(w, r, rel, "cut", web.FormValue(c, "destination"), web.FormValue(c, "return"), "Choose copy or cut.", http.StatusBadRequest)
 		return
 	}
-	destination := r.FormValue("destination")
-	returnPath := r.FormValue("return")
+	destination := web.FormValue(c, "destination")
+	returnPath := web.FormValue(c, "return")
 	if _, resolved, err := e.filesystem.ResolveParent(returnPath); err == nil {
 		returnPath = resolved
 	} else {

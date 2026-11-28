@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dev1-alexwei-net/guava/internal/version"
+	"github.com/gin-gonic/gin"
 )
 
 //go:embed templates/index.html static/bootstrap.min.css static/BOOTSTRAP-LICENSE.txt
@@ -409,17 +410,16 @@ func toggleURL(current *url.URL, key, value string, enabled bool) string {
 	return u.String()
 }
 
-func (r *renderer) Stylesheet(w http.ResponseWriter, _ *http.Request) {
+func (r *renderer) Stylesheet(c *gin.Context) {
 	css, err := r.assets.ReadFile("static/bootstrap.min.css")
 	if err != nil {
-		http.Error(w, "stylesheet unavailable", http.StatusInternalServerError)
+		http.Error(c.Writer, "stylesheet unavailable", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(css)
+	c.Header("Content-Type", "text/css; charset=utf-8")
+	c.Header("Cache-Control", "public, max-age=3600")
+	c.Status(http.StatusOK)
+	_, _ = c.Writer.Write(css)
 }
 
 func (r *renderer) Directory(current string, entries []Entry, pageError string) pageData {

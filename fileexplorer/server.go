@@ -17,6 +17,9 @@ import (
 	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/dev1-alexwei-net/guava/internal/web"
+	"github.com/gin-gonic/gin"
 )
 
 // application composes the filesystem, persistence, synchronization, mutation,
@@ -27,7 +30,7 @@ type application struct {
 	syncer     *synchronizer
 	mutations  *mutations
 	renderer   *renderer
-	routes     http.Handler
+	routes     *gin.Engine
 	mu         sync.Mutex
 }
 
@@ -86,35 +89,69 @@ func newHandler(root string, store *Store) (http.Handler, error) {
 	return app.Handler(), nil
 }
 
-// Handler returns the application's traversal guard and route tree.
+// Handler returns the application's Gin engine.
 func (a *application) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if requestHasTraversal(r.URL.Path) {
-			a.renderError(w, r, http.StatusBadRequest, "Invalid path")
-			return
-		}
-		a.routes.ServeHTTP(w, r)
-	})
+	return a.routes
 }
 
 // buildRoutes is the single route table for the file explorer.
-func (a *application) buildRoutes() http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("GET /{$}", a.serialized(a.rootPage))
-	mux.Handle("GET /d/{$}", a.serialized(a.rootPage))
-	mux.Handle("GET /d/{path...}", a.serialized(a.directoryPage))
-	mux.Handle("GET /f/{path...}", a.serialized(a.filePage))
-	mux.Handle("GET /edit/{path...}", a.serialized(a.editorPage))
-	mux.Handle("POST /edit/{path...}", a.serialized(a.saveFile))
-	mux.Handle("GET /confirm-delete/{path...}", a.serialized(a.confirmDeletePage))
-	mux.Handle("GET /rename/{path...}", a.serialized(a.renamePage))
-	mux.Handle("GET /move/{path...}", a.serialized(a.movePage))
-	mux.Handle("POST /move", a.serialized(a.submitMove))
-	mux.Handle("GET /preview/{path...}", a.serialized(a.previewPage))
-	mux.Handle("GET /clipboard/{mode}/{path...}", a.serialized(a.selectClipboard))
-	mux.Handle("POST /paste", a.serialized(a.pasteFile))
-	mux.Handle("PUT /paste", a.serialized(a.pasteFile))
-	mux.HandleFunc("GET /static/bootstrap.min.css", a.renderer.Stylesheet)
+func (a *application) buildRoutes() *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
+	router.RedirectTrailingSlash = false
+	router.RedirectFixedPath = false
+	router.HandleMethodNotAllowed = true
+	router.Use(web.SecurityHeaders(), func(c *gin.Context) {
+		if requestHasTraversal(c.Request.URL.Path) {
+			a.renderError(c.Writer, c.Request, http.StatusBadRequest, "Invalid path")
+			c.Abort()
+			return
+		}
+		c.Next()
+	})
+
+	adapt := func(handler http.Handler) gin.HandlerFunc {
+		return func(c *gin.Context) {
+			r := c.Request.Clone(c.Request.Context())
+			for _, param := range c.Params {
+				value := param.Value
+				if param.Key == "path" {
+					value = strings.TrimPrefix(value, "/")
+				}
+				r.SetPathValue(param.Key, value)
+			}
+			handler.ServeHTTP(c.Writer, r)
+		}
+	}
+	handle := func(method, route string, handler http.Handler) {
+		router.Handle(method, route, adapt(handler))
+	}
+	get := func(route string, handler http.Handler) {
+		handle(http.MethodGet, route, handler)
+		handle(http.MethodHead, route, handler)
+	}
+
+	get("/", a.serialized(a.rootPage))
+	get("/d/*path", a.serialized(func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("path") == "" {
+			a.rootPage(w, r)
+			return
+		}
+		a.directoryPage(w, r)
+	}))
+	get("/f/*path", a.serialized(a.filePage))
+	get("/edit/*path", a.serialized(a.editorPage))
+	handle(http.MethodPost, "/edit/*path", a.serialized(a.saveFile))
+	get("/confirm-delete/*path", a.serialized(a.confirmDeletePage))
+	get("/rename/*path", a.serialized(a.renamePage))
+	get("/move/*path", a.serialized(a.movePage))
+	handle(http.MethodPost, "/move", a.serialized(a.submitMove))
+	get("/preview/*path", a.serialized(a.previewPage))
+	get("/clipboard/:mode/*path", a.serialized(a.selectClipboard))
+	handle(http.MethodPost, "/paste", a.serialized(a.pasteFile))
+	handle(http.MethodPut, "/paste", a.serialized(a.pasteFile))
+	get("/static/bootstrap.min.css", http.HandlerFunc(a.renderer.Stylesheet))
+
 	mutations := []struct {
 		path string
 		run  func(*http.Request) (string, error)
@@ -134,11 +171,11 @@ func (a *application) buildRoutes() http.Handler {
 	}
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		for _, mutation := range mutations {
-			mux.Handle(method+" "+mutation.path, a.formMutation(mutation.run))
+			handle(method, mutation.path, a.formMutation(mutation.run))
 		}
-		mux.Handle(method+" /upload", a.serialized(a.upload))
+		handle(method, "/upload", a.serialized(a.upload))
 	}
-	return mux
+	return router
 }
 
 func requestHasTraversal(requestPath string) bool {
